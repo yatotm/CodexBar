@@ -12,7 +12,7 @@ Codex Hook
   -> Raw JSONL
   -> Incremental WorkflowService aggregation
   -> daily.jsonl
-  -> Activity UI and CloudKit sync
+  -> Local activity UI
 ```
 
 Raw events are the fact source; daily aggregation is a rebuildable cache. A change to the aggregation algorithm or field semantics requires a full rebuild from raw events within retention.
@@ -218,7 +218,7 @@ The recorder resolves origin before writing, and the JSONL origin field stores o
 
 When JSONL omits `origin` or contains an unrecognized enum value, the origin field first decodes as `unknown`. The `WorkflowHookEvent` decoder then applies the same exact model fallback, so an event with `model == "codex-auto-review"` has `origin` equal to `autoReview` in memory. Reading never backfills or rewrites raw JSONL.
 
-Origin classification changes only live-activity filtering, not historical aggregation input. Auto-review events still contribute to session, turn, model, tool, project, and event counts; neither the aggregation schema nor the CloudKit projection contains origin classification.
+Origin classification changes only live-activity filtering, not historical aggregation input. Auto-review events still contribute to session, turn, model, tool, project, and event counts; the aggregation schema does not contain origin classification.
 
 ### Input Normalization
 
@@ -267,7 +267,7 @@ HookEvents/
 | `daily.jsonl` | Store aggregations by date and source generation |
 | `maintenance.json` | Store pending maintenance and schema state |
 | `stats.lock` | Coordinate Hook subprocesses and app maintenance |
-| `Sync/*` | CloudKit sync cursor and cache |
+| `Sync/*` | Legacy cloud cache, retained but no longer read |
 
 Raw events and daily aggregations are retained for up to 210 days. Detailed session and turn ID lists remain only for 3 days; older dates compact them to counts to reduce file size and identity retention.
 
@@ -431,9 +431,7 @@ Aggregation-semantic changes rebuild from raw JSONL. Filling fields cannot recov
 
 A batch rebuild handles dates independently. Failure on one day does not block days that succeeded; failed dates become dirty for normal maintenance to retry.
 
-Both successful and failed dates register CloudKit replacement first. A failed date already entered a new generation, and its later successful automatic rebuild will use a new record identity. Without an early marker, the old generation might remain in the cloud and be added to the new value.
-
-The operation fails as a whole only if every date fails. Partial success returns a detailed summary of successful dates, damaged lines, and pending replacement state.
+The operation fails as a whole only if every date fails. Partial success reports successful date counts, corrupt lines, and failed dates for later retry.
 
 ## Maintenance Scheduling
 
@@ -449,15 +447,7 @@ Maintenance normally follows the 60-second refresh. An idle machine would otherw
 
 ### How the Scheduler Coalesces Requests
 
-`WorkflowSyncScheduler` serializes three request classes:
-
-1. User rebuild, highest priority
-2. Maintenance with sync
-3. Local-only maintenance
-
-After sync completes, an 8-second cooldown combines incoming requests and retains the earliest trigger as the real cause.
-
-Opening the UI reads the current local snapshot and does not bypass the scheduler to start an unconditional CloudKit request.
+`WorkflowMaintenanceScheduler` serializes user rebuilds and local maintenance, prioritizing rebuilds. Maintenance requests arriving during execution are coalesced with the earliest trigger retained. Opening the UI reads local snapshots without cloud operations.
 
 ## Suggested Failure-Scenario Tests
 

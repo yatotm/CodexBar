@@ -2,71 +2,30 @@
 
 [简体中文](../../UserGuide/sync-data-privacy.md) | English
 
-## Cross-Device Sync
+## Multi-machine statistics
 
-Enable `Cross-Device Sync` in `Settings > Advanced` to combine daily Hook statistics from Macs using the same iCloud account. CodexBar Hook must be enabled, iCloud must be signed in, and the build must have this fork’s CloudKit signing entitlement.
+This fork has removed iCloud/CloudKit, including settings, menu indicators, entitlements, and network services. Existing cloud data and old local caches are retained but no longer accessed. SSH/HTTPS usage aggregation remains available; see the [Usage Center guide](../../UserGuide/usage-center.md) and [collector guide](../../../Collector/README.md).
 
-The first sync uploads statistics within local retention; later changes sync automatically. Turning sync off keeps local data.
+## Transferred data
 
-| State | Meaning |
-| --- | --- |
-| Sync Off | Sync or CodexBar Hook is disabled |
-| Syncing | Data is being transferred |
-| Synced | The latest sync cycle succeeded |
-| Sync Failed | The network, iCloud account, or service is temporarily unavailable; CodexBar will retry |
+Logs are parsed on the machine that owns them. Only filtered metadata is exported: timestamps, models, tokens, event counts, quota observations, project display names, and hashed identities. Conversation bodies, tool arguments and output, full working directories, and login tokens are excluded.
 
-The main panel footer and Settings show sync status. Settings also shows the last successful upload time.
+Claude collection is passive. Official Codex analytics uses existing local OAuth only with the official host, without browser cookies or credential renewal.
 
-## Uploaded Data
+## Local storage
 
-Synced data is stored in your private iCloud database. It includes dates, daily event and session statistics, project display names, model names, and identifiers used to distinguish devices and avoid duplicate counts.
+Data lives under `~/Library/Application Support/CodexBar-yatotm`. Hook events and daily aggregates retain 210 days; daily session and turn identities retain three days. Usage Center uses SQLite; analytics caches are isolated by account. Activity protection stores hashed identities for at most 24 hours after last progress.
 
-The following are not synced:
+Preferences include proxy configuration and its plaintext password. HTTPS collector tokens use Keychain. The latest 500 app-server requests and responses remain only in process memory and may contain account details.
 
-- Raw Hook events, session and task identifiers, and full working-directory paths
-- Prompts, Codex replies, and tool parameters or output
-- Codex account data, quota, token usage, and banked resets
-- App settings, proxy configuration, and passwords
-- Logs, live task state, and Stalled Task Protection records
+## Rebuild data
 
-**Project display names are uploaded.** Disable cross-device sync if a project name contains information you do not want stored in iCloud.
+Settings > Advanced > Rebuild Data recalculates local Hook statistics from retained raw records. It does not change account quotas, Usage Center databases, or remote device data.
 
-## Local Data
+## Network access
 
-| Data | Contents and retention |
-| --- | --- |
-| Hook records and daily statistics | Times, events, models, tools, projects, and task identifiers, retained for 210 days; session and turn details in daily statistics are retained for only the latest 3 days |
-| Stalled Task Protection | Irreversible task identifiers and times, retained for up to 24 hours after the last progress |
-| App settings | Stored on the current Mac, including proxy configuration; proxy passwords are stored in plain text |
-| Interaction logs | The latest 500 Codex requests and responses, retained only during the current run |
-| Background-service state | Used to restore sleep settings and clean up Automatic Reset wake schedules |
+Connections are limited to the local Codex service, official account analytics, configured SSH/HTTPS sources, and this fork's GitHub update feed. Proxy settings affect the Codex service, not system networking or other applications. Review interaction logs before sharing them.
 
-CodexBar reads local Codex task state and activity records without saving prompts, replies, or tool content, or copying Codex sign-in credentials.
+Regular web Chat conversations are outside Codex log statistics, and dollar estimates are not bills.
 
-Turning the proxy off retains its configuration and password. Saving with authentication disabled or choosing `Delete Configuration` removes the password.
-
-## Rebuild Data
-
-If statistics look incorrect, choose a date range in `Settings > Advanced > Rebuild Data` and confirm. You can select from the last 210 days; dates with local records are marked.
-
-Rebuilding recalculates Hook statistics from retained local records and displays the result. With sync enabled, the result replaces this device’s cloud statistics for those dates while preserving other devices’ contributions. Account, quota, and token usage are unaffected.
-
-## Network and Logs
-
-| Network access | Purpose |
-| --- | --- |
-| Codex service | Read account, quota, and usage data; perform Automatic Reset |
-| Official account analytics | Read account statistics using local Codex OAuth |
-| Configured SSH / HTTPS sources | Read filtered usage metadata |
-| Update service | Check for and download CodexBar updates |
-| iCloud | Transfer daily Hook statistics when sync is enabled |
-
-The proxy applies only to CodexBar’s Codex service connection, not updates, iCloud, or other apps.
-
-Interaction logs may contain account data and request or response content and are cleared when the app quits. Check for private information before sharing them.
-
-Back to the [User Guide](README.md).
-
-## Fork behavior
-
-SSH/HTTPS usage aggregation is separate from iCloud Hook sync. Configured sources return filtered metadata, including project display names, but no message bodies, tool arguments, or login tokens. Official account analytics uses local Codex OAuth only with chatgpt.com, without browser cookies. Claude collection sends no additional Anthropic requests. The fork has its own app, storage, Keychain, and CloudKit identities.
+Return to the [User Guide](README.md).

@@ -148,7 +148,7 @@ python3 CodexBar/Resources/UsageCollector.py uninstall-claude
 | 各采集目录的 `quota-history-v1.sqlite` | 新的增量周限证据、可用的账号摘要与套餐元数据 |
 | `~/Library/Application Support/CodexBar-yatotm/UsageQuotaHistory/` | 按账号和来源配置隔离的额度历史缓存 |
 
-用量中心采用独立存储，不修改原 `HookEvents`、`ActivityProtection`、CloudKit schema 或既有设置键。关闭新版后，旧版仍使用原来的数据链路。新统计协议为 `1`，不支持的响应会被拒绝，已有缓存保留。
+用量中心采用独立存储，不修改原 `HookEvents`、`ActivityProtection` 或既有设置键。关闭新版后，旧版仍使用原来的数据链路。新统计协议为 `1`，不支持的响应会被拒绝，已有缓存保留。
 
 项目显示名和模型名会跨机器传输。如果它们包含不希望汇总的信息，请暂停对应来源。
 

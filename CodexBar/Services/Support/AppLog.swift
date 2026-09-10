@@ -10,8 +10,6 @@ nonisolated enum AppLog {
     static let keepAlive = Logger(subsystem: subsystem, category: "keepalive")
     /// 本地 Hook 事件聚合与维护
     static let workflow = Logger(subsystem: subsystem, category: "workflow")
-    /// CloudKit 同步
-    static let sync = Logger(subsystem: subsystem, category: "sync")
     /// 改写用户 ~/.codex 下的 Hook 配置与信任状态
     static let hooks = Logger(subsystem: subsystem, category: "hooks")
     /// 实时任务监控, 只记低频的生命周期节点, 逐事件与逐快照的路径一律不记
@@ -46,7 +44,7 @@ nonisolated enum LogTrigger: String {
     case wake
     case settings
     case retry
-    /// Hook 开关转为开启后补跑同步
+    /// Hook 开关转为开启后补跑本地维护
     case hookEnabled
     case hookChanged
     case taskChanged

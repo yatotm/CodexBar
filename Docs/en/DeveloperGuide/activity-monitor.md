@@ -194,7 +194,7 @@ When an exact Auto-review event arrives, the monitor:
 
 If an explicit `main` or `auxiliary` event later matches the same key, source truth wins and clears that ignored-key inference. An Auto-review event without a turn ID is ignored only for that event and never creates a session-wide blacklist.
 
-Other subagents, including Memories, are classified as `auxiliary` and participate in auxiliary-task association. Raw Hook events still enter historical aggregation; live Auto-review filtering does not change statistics or CloudKit data.
+Other subagents, including Memories, are classified as `auxiliary` and participate in auxiliary-task association. Raw Hook events still enter historical aggregation; live Auto-review filtering does not change statistics results.
 
 A missing or unrecognized JSONL `origin` first decodes as `unknown`. An exact `codex-auto-review` model match normalizes it to `.autoReview`; other records remain `.unknown`. This step uses existing record fields, performs no additional historical rollout scan for origin classification, and does not rewrite raw Hook records.
 

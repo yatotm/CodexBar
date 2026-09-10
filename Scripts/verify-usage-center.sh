@@ -49,3 +49,14 @@ fi
     CodexBar/Services/Support/RefreshTaskCoordinator.swift \
     Tests/RefreshSleepSmoke.swift -o "$usage_tmp/refresh-sleep-tests"
 "$usage_tmp/refresh-sleep-tests"
+
+"$usage_compiler" "${usage_flags[@]}" \
+    CodexBar/Models/CodexWorkflowModels.swift \
+    CodexBar/Models/CodexHookEvent.swift \
+    CodexBar/Models/DateFormatter.swift \
+    CodexBar/Services/Workflow/JSONLines.swift \
+    CodexBar/Services/Workflow/WorkflowService.swift \
+    CodexBar/Services/Support/AppLog.swift \
+    CodexBar/Services/Support/RefreshTaskCoordinator.swift \
+    Tests/WorkflowLocalSmoke.swift -o "$usage_tmp/workflow-local-tests"
+"$usage_tmp/workflow-local-tests"

@@ -62,7 +62,6 @@ CodexBar is a macOS 15+ menu bar app for Codex quotas and task status, plus Code
 - Supports a global keyboard shortcut, launch at login, and automatic updates
 - Provides Simplified Chinese and English interfaces
 - Configurable HTTP/HTTPS proxy for the Codex service
-- Optionally merges daily Hook metrics across Macs through iCloud
 
 ### Multi-machine usage and subscription estimates
 
@@ -80,7 +79,7 @@ The new Usage Center currently uses Chinese. See the [usage guide](Docs/UserGuid
 
 Download the app from [GitHub Releases](https://github.com/yatotm/CodexBar/releases/latest), extract it, and move it to Applications. Install `CodexBar Fork.app` manually once; follow the [migration guide](Docs/UserGuide/migration.md) to copy existing data. Subsequent versions use independent `fork-v*` tags and their own Sparkle feed.
 
-> Releases are universal, ad-hoc signed builds without Apple notarization. If macOS blocks the first launch, use Open Anyway in System Settings > Privacy & Security. Usage statistics and SSH/HTTPS sources work; Helper, sleep prevention, automatic resets, and iCloud sync are unavailable in this build.
+> Releases are universal, ad-hoc signed builds without Apple notarization. If macOS blocks the first launch, use Open Anyway in System Settings > Privacy & Security. Usage statistics and SSH/HTTPS sources work; Helper, sleep prevention, and automatic resets are unavailable in this build; iCloud has been removed.
 
 ### Build from source
 
@@ -98,7 +97,6 @@ bash Scripts/build-local.sh
 - Live tasks and other Hook features require the running Codex version to be `0.145.0` or later
 - Log collection requires Python 3.9 or later, with no extra packages
 - Claude quotas require matching records in local client caches
-- iCloud and system Helper features require matching signing and authorization
 
 ## Quick Start
 
@@ -119,7 +117,7 @@ The default global shortcut is `⌘⇧W`. You can record a different shortcut or
 
 ## Privacy
 
-Raw Hook events and live tasks are processed locally. Enabling cross-device sync uploads daily Hook aggregates to your private iCloud database. Account and usage data come through the local Codex app-server, which connects to the service; update checks use Sparkle.
+Raw Hook events and live tasks are processed locally. iCloud has been removed; configured SSH/HTTPS sources provide cross-device statistics. Account and usage data come through the local Codex app-server, which connects to the service; update checks use Sparkle.
 
 See [Data, Sync, and Privacy](Docs/en/UserGuide/sync-data-privacy.md) for complete details about data access, local storage, and network boundaries.
 

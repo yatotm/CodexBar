@@ -2,305 +2,80 @@
 
 简体中文 | [English](../en/DeveloperGuide/data-and-privacy.md)
 
-## 数据分类模型
+## 数据分类与信任边界
 
-数据按以下类别确定存储和传播范围：
+| 数据 | 处理方式 |
+| --- | --- |
+| 对话正文、工具参数和输出 | 不写入 Hook 文件或统计导出协议 |
+| 会话身份与完整路径 | 仅在必要的本机读取中使用，远端导出使用哈希身份并排除完整路径 |
+| 项目显示名、模型、时间、Token 和额度 | 允许进入用量中心协议，属于应告知用户的统计元数据 |
+| OAuth 与统计服务令牌 | 不写日志、测试 fixture 或 Git；不传给其他统计设备 |
 
-| 分类 | 示例 | 默认处理 |
-| --- | --- | --- |
-| 内容 | prompt, response, tool 参数和输出 | 不采集 |
-| 身份和上下文 | session ID、完整路径、project 名 | 仅在必要链路最小化使用，上传前脱敏或删除 |
-| 聚合指标 | 每日事件数、model 计数 | 可本地持久化，用户 opt-in 后上传规定字段 |
+外部输入包括 Hook stdin、rollout、app-server 响应和远端统计数据，均需限制读取量并校验结构。业务服务运行在普通用户权限下；root Helper 只接受固定电源操作，不读取账户或日志、不访问网络。
 
-## 信任边界
-
-```text
-Codex hook stdin / rollout / app-server
-                  |
-                  v
-          普通用户权限的 CodexBar
-           |                    |
-           v                    v
-   CloudKit private DB     受限 XPC 接口
-                                |
-                                v
-                       root CodexBarHelper
-```
-
-边界含义如下：
-
-- Codex 输入文件和协议数据都视为外部输入，解码失败不能扩大成任意文件访问或命令执行
-- CloudKit 是用户主动开启的远端边界，即使使用 private database 也只允许规定聚合字段
-- root helper 是权限提升边界，接口能力必须比 App 业务能力更窄
-- Debug 和 Release 是两个 App 身份，但部分本地文件有意共享，因此需要进程锁和兼容 schema
-
-## 最小化发生在采集入口
-
-CodexBar 的最小化顺序是：
-
-1. Hook recorder 从 stdin 只提取白名单结构字段
-2. rollout reader 使用最小 Codable 结构跳过正文
-3. 聚合器把较老 identity 明细压成计数
-4. sync model 再投影成 CloudKit 允许字段
-5. 日志层只记录阶段、分类和非敏感计数
-
-## 数据流总览
-
-| 来源 | CodexBar 使用方式 | 是否持久化 | 是否上传 CloudKit |
-| --- | --- | --- | --- |
-| app-server 账户、额度和 Reset Credits | 主面板、通知判断和用户启用的自动重置 | 内存快照；用量中心另存筛选后的额度观察 | 否 |
-| Hook 结构化事件 | 历史聚合和实时任务 | 是，最长 210 天 | 只上传日聚合 |
-| rollout 生命周期 | terminal 和进展对账 | 不单独持久化 | 否 |
-| 用量中心日志 | 按来源合并事件、Token、额度和模型统计 | 独立 SQLite | 否 |
-| 官网分析与周限历史 | 账号内的实际周期估算 | 按账号哈希隔离的缓存 | 否 |
-| App 设置 | 功能开关和阈值 | UserDefaults | 否 |
-| Activity Protection | 异常会话恢复 | 哈希身份，最长 24 小时 | 否 |
-| CodexBarHelper ownership | 系统睡眠恢复 | root 状态文件 | 否 |
-| 自动重置唤醒计划 | 固定 owner、`wake` 类型和下一次时间 | 系统电源管理 | 否 |
+本 fork 已删除 CloudKit 客户端和 entitlement。不存在上传原生 iCloud 私有数据库的路径。
 
 ## 本地读取
 
-### Codex app-server
+app-server 通过 stdio 提供本机账户、额度、Token 和重置券。请求日志保存规范化的完整请求和响应，最多 500 条，只存在当前进程内存。它可能包含账户、重置券 ID 和幂等键，不能当作脱敏摘要。
 
-App 通过本机 `codex app-server --listen stdio://` 获取账户、额度、token 用量、Reset Credits 明细和 Codex 配置。用户主动开启自动重置后，App 还会通过同一 stdio 会话调用 Reset Credit 消费方法。
+Hook recorder 只提取时间、事件、来源分类、模型、工具名和必要的身份上下文。原始 Hook JSONL 可以包含 `cwd`，属于本地敏感数据，受保留期和权限约束。rollout 元数据读取有总量预算，不能扩大为任意文件访问。
 
-CodexBar 不自行实现账户登录。app-server 是否访问 OpenAI 服务由 Codex CLI 的正常认证和协议行为决定。
+## 用量中心与官网分析
 
-app-server 链路只通过 stdio 与本机进程通信，不从响应中复制认证材料。官网分析是独立的 HTTPS 链路。request log 保存规范化后的完整请求与响应 JSON，只存在当前 App 进程内存，不持久化。内容可能包含账户响应、opaque credit ID 和幂等键，不能把它当作脱敏摘要。
+原始 JSONL 在日志所在设备解析，SQLite 保存筛选后的事件与游标。Codex OAuth/API 身份按记录的提供商和认证上下文判断，不能把当前登录方式套用到全部历史。Claude 只读取已有日志和缓存，不主动请求 Anthropic。
 
-### Hook 事件
+官网分析使用本机 Codex OAuth，只访问固定的官方主机，拒绝重定向并限制超时、响应大小。凭据仅在本机认证与请求中使用，不自行刷新或改写，也不发送给 VPS。账号切换通过 generation 丢弃迟到结果，缓存按账号哈希隔离。
 
-Hook 子进程从 stdin 提取：
-
-- 时间和事件类型
-- 工作目录
-- tool, model 和 effort
-- permission 和 reviewer
-- session, turn 和 agent 身份
-
-Hook 子进程优先从 `transcript_path` 指向的 rollout 第一条完整 `session_meta` 中提取并归一化来源。rollout 来源为 `unknown` 时，stdin 中已经提取的 model 只有精确匹配 `codex-auto-review` 才归类为 `autoReview`。JSONL 的来源字段只持久化 `main`, `autoReview`, `auxiliary` 或 `unknown`；rollout 读取按 32 KiB 分块且总计不超过 256 KiB。
-
-不把 prompt, response, tool 参数或 tool 输出写入 CodexBar Hook 文件。
-
-工作目录只用于派生 project display name 和实时归属。原始 Hook JSONL 仍可能包含 `cwd`，因此它属于本地敏感上下文，受保留期和文件权限约束。rollout 路径、原始 source 和任意 subagent `other` 值不会持久化。CloudKit 只上传派生后的 project 名计数，并明确依赖用户 opt-in。
-
-### Rollout 文件
-
-Hook recorder 通过 `transcript_path` 读取当前 rollout，实时活动 reader 还会访问 `$CODEX_HOME/sessions` 和 `$CODEX_HOME/archived_sessions`
-
-这些读取只解析来源分类、生命周期、时间、turn context, progress, effort 和 reviewer 等结构字段，不把对话正文复制到 CodexBar 存储或展示到 UI。
-
-rollout reader 从文件尾部按预算扫描，一方面减少 I/O，另一方面降低无关历史内容进入进程内存的范围。解析 DTO 只声明所需字段，JSONDecoder 自动忽略其余内容。
-
-### Reset Credits 明细
-
-`account/rateLimits/read` 在 app-server 响应中返回 Reset Credits 数量和可选明细。
-
-- `availableCount` 是可用总数的权威值
-- `credits == nil` 表示服务端只提供数量
-- 空明细数组表示服务端已读取明细，但没有返回可用凭证
-- 明细列表可能被截断，不能用数组长度覆盖总数
-- 菜单和临期通知只使用仍为 `available` 且尚未过期的 `expiresAt`
-- 自动重置只处理新鲜响应明确列出的 `available + codexRateLimits + expiresAt` 明细
-- opaque credit ID 和确定性幂等键只存在于当前进程内存，包括 app-server 响应与缓存、额度快照、自动重置状态机和内存请求日志，不持久化或上传
-- 自动重置通知写入 UserDefaults 的去重 key 只包含账户与 credit ID 的 SHA-256 组合，不保存原值
-
-额度响应来自旧缓存时可以继续展示，但不能触发新的临期通知或消费操作。自动重置设置和调度状态不进入 CloudKit，Mac 之间只通过服务端消费接口的确定性幂等键收敛。
+HTTPS 来源使用系统证书校验和专用令牌，钥匙串服务名为 `io.github.yatotm.codexbar.usage-center`。SSH 保留主机密钥校验，只执行固定的采集、导出命令。完整协议见 [用量中心实现与验证](usage-center.md)
 
 ## 本地持久化
 
-### App 用户目录
-
 ```text
 ~/Library/Application Support/CodexBar-yatotm/
-  HookEvents/
-    events/YYYY-MM-DD.jsonl
-    daily.jsonl
-    maintenance.json
-    stats.lock
-    Sync/
-  ActivityProtection/
-    state.json
-  UsageCenter/
-    center-v1.sqlite
+  HookEvents/events/YYYY-MM-DD.jsonl
+  HookEvents/daily.jsonl
+  HookEvents/maintenance.json
+  HookEvents/stats.lock
+  ActivityProtection/state.json
+  UsageCenter/center-v1.sqlite
   UsageAnalytics/
   UsageQuotaHistory/
 ```
 
-| 路径 | 内容 | 生命周期 |
-| --- | --- | --- |
-| `HookEvents/events` | 原始结构化 Hook 事件 | 210 天 |
-| `HookEvents/daily.jsonl` | 日级聚合 | 210 天 |
-| `HookEvents/maintenance.json` | 文件游标、generation 和维护状态 | 持续更新 |
-| `HookEvents/Sync` | CloudKit 缓存和游标 | 同步状态有效期间 |
-| `ActivityProtection/state.json` | 哈希任务身份和时间戳 | 最后进展后最长 24 小时 |
+Hook 原始事件和日聚合保留 210 天，日聚合身份明细保留 3 天。异常会话保护仅保存哈希身份和时间，最长保留到最后进展后的 24 小时，匿名任务不写入该状态。
 
-最近 3 天的日聚合可以保留 session 和 turn ID 明细用于准确去重。更早数据只保留计数。
+来源配置、菜单布局、代理和额度参考保存在 UserDefaults。代理密码仍以明文保存在 `CodexProxy.configuration` 中，关闭代理保留配置，删除配置或关闭认证后保存会清除密码。
 
-匿名任务不生成异常会话保护标识，因此不会写入 `ActivityProtection/state.json`
+Debug 与 Release 的偏好域分别为 `io.github.yatotm.codexbar.debug` 和 `io.github.yatotm.codexbar`，共享的本地数据通过进程锁和稳定 schema 协调。改变字段含义、身份计算或持久化结构前需要确定兼容策略。
 
-### UserDefaults
-
-UserDefaults 保存：
-
-- 功能开关和设置选项
-- 通知阈值和声音名称
-- 全局快捷键
-- 代理启用状态、协议、服务器、端口、认证用户名和密码
-- 菜单栏显示选择
-- 自动重置开关和提前量
-- 有界的通知去重 key
-- CodexBarHelper fingerprint 等运行配置
-
-持久化 key、数据结构、枚举 raw value 或缺失默认值的变化属于兼容性问题，修改前必须确定迁移和降级策略。
-
-代理使用 `CodexProxy.configuration` 保存一条包含 `configuration` 和 `password` 的 JSON 数据。密码明文保存在本机 UserDefaults，保存关闭身份验证的配置或删除配置时删除。Debug 与 Release 使用各自的偏好域，不共享代理配置：
-
-- Debug：`~/Library/Preferences/io.github.yatotm.codexbar.debug.plist`
-- Release：`~/Library/Preferences/io.github.yatotm.codexbar.plist`
-
-`CodexProxyStore` 区分记录不存在与解码失败；解码失败时保留记录，以便配置窗口提供清除入口。
-
-### CodexBarHelper 目录
-
-```text
-/Library/Application Support/CodexBar-yatotm/helper-state.json
-```
-
-文件只保存 CodexBarHelper 是否拥有 `SleepDisabled` 的恢复事务，不包含 Codex 任务、账户或 Hook 数据。
-
-自动重置唤醒计划由系统电源管理保存，只包含 CodexBar 固定 owner、`wake` 类型和下一次时间。helper 不接收或保存账户、`creditId`、幂等键或网络数据。
-
-目录和文件由 root 管理。详细权限和恢复策略见 [防睡眠系统](sleep-prevention.md)
-
-## 内存日志和系统日志
-
-App 内 [`RequestLog.swift`](../../CodexBar/Services/CodexStatus/RequestLog.swift) 是最多 500 条的内存 ring buffer，进程退出后消失。
-
-请求日志用于诊断 app-server 协议。即使只存在内存，也不应写入 OAuth token 或 Hook 内容。
-
-统一系统日志 subsystem 为 `io.github.yatotm.codexbar`，Debug 版本带 `.debug` 后缀。
-
-系统日志只应记录：
-
-- 操作阶段和结果
-- 状态分类
-- 不敏感计数
-- 可定位模块的错误信息
-
-系统日志不应记录：
-
-- OAuth token
-- prompt, response 或 tool 内容
-- session ID, turn ID 或 agent ID
-- 完整项目路径或敏感项目名
-- 账户额度和 token 用量明细
-
-`CodexProxyError` 的固定错误文案写入系统日志的 `settings` 分类，不包含配置值。app-server 响应写入 App 交互日志前会解析 JSON 转义，对字符串值中的 HTTP/HTTPS URL 认证信息脱敏；其他账户和协议字段仍按请求日志规则保留。
+旧 `HookEvents/Sync` 目录与 `WorkflowSync.*` 偏好不再读取，也不主动删除。首次迁移跳过这些缓存；本次移除云同步不更改 Hook 原始聚合 schema，不触发无必要的历史重建。
 
 ## 网络访问
 
-| 目标 | 用途 | 触发条件 |
-| --- | --- | --- |
-| 官方 `chatgpt.com` 分析 | 读取账号日统计和核对额度 | 用量中心刷新，复用本机 Codex OAuth |
-| 已配置的 SSH/HTTPS 来源 | 读取统计元数据和可用历史额度 | 用户添加来源后刷新 |
-| CloudKit private database | 同步日级 Hook 聚合 | 用户主动开启同步且签名支持 |
-| Codex 服务（app-server 子进程） | 认证、额度、用量和 Reset Credit 消费 | 正式刷新、代理测试或自动重置 |
-| Sparkle appcast 和更新资源 | 检查或安装更新 | 自动检查或用户手动检查 |
+| 目标 | 用途 |
+| --- | --- |
+| Codex app-server 子进程 | 官方认证、当前额度和重置操作 |
+| 官方 `chatgpt.com` | 日级账号分析和额度核对 |
+| 用户配置的 SSH/HTTPS 来源 | 经过筛选的统计元数据 |
+| 本 fork 的 GitHub 更新源 | Sparkle 更新 |
 
-账户、额度、token 用量、Reset Credits 明细和用户明确开启的 Reset Credit 消费通过本机 app-server stdio 完成。CodexBar 不为自动重置增加独立 HTTP 客户端。
+Helper 不联网。代理只交给本 App 启动的 Codex 服务，不修改系统网络或其他应用。
 
-CodexBarHelper 不进行任何网络访问。
+## 日志、文件与恢复
 
-启用代理后，地址及可选认证信息仅通过环境变量交给 CodexBar 启动的 app-server。配置不会修改系统网络设置、Sparkle、CloudKit 或其他 Codex 进程。连接测试另起临时 app-server，结束后关闭且不写入 App 交互日志。
+系统日志仅记录阶段、分类、非敏感计数和定位信息，不记录 OAuth、正文、完整项目路径、会话 ID 或账户额度明细。
 
-## CloudKit 边界
+Hook 文件通过锁协调，只追加完整 JSONL 行；聚合可从原始记录重建。异常保护文件为 `0600`，用量缓存目录为 `0700`。SQL 参数使用绑定，取消与过期结果不得覆盖当前状态。
 
-CloudKit 只上传日级聚合字段：
+Helper 的 root 恢复状态位于 `/Library/Application Support/CodexBar-yatotm/helper-state.json`，由 root 管理，先持久化恢复责任再修改系统睡眠状态。它不是用户偏好，迁移工具不复制该文件或接管旧 Helper 的唤醒 owner。
 
-- 设备 pseudonym
-- 日期和 source generation
-- Hook 事件计数
-- session 和 turn 计数
-- project 显示名计数
-- model 计数
-- 更新时间
+## 验证重点
 
-CloudKit 不上传：
+- 合成正文和工具参数不得进入 Hook 持久化或统计导出
+- 缺失计数字段保留缺失语义，不能解码成明确的零
+- 账号和来源切换不能串用缓存或接收迟到结果
+- 本地 JSONL、SQLite 和偏好迁移保留原数据
+- App 及依赖不得链接或请求 CloudKit，设置和菜单不再显示云同步入口
 
-- 原始 Hook JSONL
-- session, turn 或 agent ID
-- 完整工作目录
-- prompt, response, tool 参数或输出
-- Codex 账户、额度和 token 用量
-- Reset Credits 明细、自动重置设置和消费状态
-- access token
-- App 请求日志
-- Activity Protection 状态
-- 代理配置和代理密码
-
-project 显示名可能由目录名派生，仍可能包含用户敏感信息。同步开关必须保持用户主动选择。
-
-## root helper 的数据隔离
-
-CodexBarHelper 只需要知道 4 类状态：
-
-- 哪个已验证客户端持有哪一代 lease
-- `SleepDisabled` 当前实测值
-- CodexBar 是否拥有恢复责任
-- 自动重置唤醒计划的有限 Unix 时间戳和当前连接所有者
-
-它不需要 task ID、project 名、Hook 路径、账户状态、`creditId` 或用户设置全文。XPC 只传布尔请求、client session ID、generation、update identifier 和有限 Unix 时间戳。
-
-helper target 只包含受限电源操作和共享 XPC 协议，不链接 App 的业务 service。
-
-helper 的 ownership 文件不是用户偏好，而是 crash recovery 事务记录。它必须由 root 拥有，拒绝 group 或 world 可写目录，并通过 full sync 加原子 rename 确保重启后能判断是否需要恢复。
-
-## 文件安全
-
-- Hook 子进程和 App 聚合器通过 `flock` 协调写入
-- JSONL 只追加完整行
-- 聚合和状态文件使用可恢复写入流程
-- Activity Protection 文件权限为 `0600`
-- CodexBarHelper 状态通过 root owner、权限检查、full sync 和原子 rename 提交
-- Debug 和 Release 共享的数据必须使用锁和兼容 schema
-
-## 新增数据字段前的审查清单
-
-1. 写明产品目标以及没有该字段时无法完成的行为
-2. 确认字段属于凭据、内容、身份上下文还是聚合指标
-3. 定义采集入口和最早可以丢弃原文的层
-4. 明确内存、UserDefaults, Application Support, system log 和 CloudKit 中的存在范围
-5. 定义保留期、删除触发和失败后的清理行为
-6. 检查 Debug 与 Release 是否共享文件或 identity
-7. 检查字段缺失与明确空值的区别
-8. 检查日志和错误对象是否会间接复制原文
-9. 如涉及 CloudKit、网络或日志数据，先更新隐私说明并取得明确产品决策
-10. 如涉及 schema 或旧版本共存，先确认兼容方案再改代码
-
-## 建议的隐私故障验证
-
-- 用包含明显标记字符串的 prompt 和 tool 参数运行任务，确认 Hook JSONL、App 日志和 CloudKit cache 均没有该字符串
-- 让项目目录名包含敏感测试词，确认它只出现在允许的本地展示和 opt-in 聚合字段
-- 模拟 Reset Credits 请求失败，确认 access token 不出现在内存日志和 unified log
-- 检查 CloudKit record 不包含 session, turn, agent ID 或完整路径
-- 以非 root 用户验证 helper 状态目录不可写
-- 损坏各类缓存文件，确认系统降级或重建，而不是扩大到备用数据采集
-
-## 关键源码
-
-- [`WorkflowHookEventRecorder.swift`](../../CodexBar/Services/Workflow/WorkflowHookEventRecorder.swift)
-- [`WorkflowService.swift`](../../CodexBar/Services/Workflow/WorkflowService.swift)
-- [`CodexSessionLifecycleReader.swift`](../../CodexBar/Services/Workflow/CodexSessionLifecycleReader.swift)
-- [`WorkflowSyncService.swift`](../../CodexBar/Services/Workflow/WorkflowSyncService.swift)
-- [`ActivityProtectionStateStore.swift`](../../CodexBar/Services/Workflow/ActivityProtectionStateStore.swift)
-- [`RequestLog.swift`](../../CodexBar/Services/CodexStatus/RequestLog.swift)
-- [`CodexBarHelper/main.swift`](../../CodexBarHelper/main.swift)
-
-## 用量中心的额外边界
-
-原始 JSONL 在每台设备解析，导出只保留白名单统计字段和哈希身份，不包含正文、工具参数、完整工作目录或登录 Token；项目显示名仍属于可传输字段。HTTPS 服务令牌放在独立钥匙串服务 `io.github.yatotm.codexbar.usage-center` 中。
-
-官网分析读取本机 Codex OAuth，只向限定的官方主机发送，拒绝重定向，不写 Token 日志。Claude 链路完全被动。缓存单位、身份校验和响应上限见 [用量中心实现与验证](usage-center.md)。Linux 定时器和 Docker 服务的数据目录不随 Mac bundle ID 改名，既有来源身份和游标保持不变。
-
-本地迁移使用 SQLite backup 复制一致快照，不删除旧文件；跳过符号链接、锁文件和原 CloudKit 缓存。Helper 的 root 恢复状态不迁移，新旧 Helper 各自负责自己的唤醒 owner 和恢复文件。
+关键实现见 [WorkflowService](../../CodexBar/Services/Workflow/WorkflowService.swift)、[UsageCollectorClient](../../CodexBar/Services/UsageCenter/UsageCollectorClient.swift) 与 [UsageAnalyticsClient](../../CodexBar/Services/UsageCenter/UsageAnalyticsClient.swift)

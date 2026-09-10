@@ -36,9 +36,8 @@ struct CodexStatusMenuView: View {
     @ObservedObject var workflowViewModel: WorkflowViewModel
     @ObservedObject var codexHookSettings: CodexHookSettings
     @ObservedObject var mainPanelSettings: MainPanelSettings
-    // 活动状态与逐秒时间只被活动卡片消费, 由卡片自行观察, 避免 1Hz tick 让整个菜单树每秒重算
+    /// 活动状态与逐秒时间只被活动卡片消费, 由卡片自行观察, 避免 1Hz tick 让整个菜单树每秒重算
     let activityMonitor: CodexActivityMonitor
-    @ObservedObject var syncSettings: WorkflowSyncSettings
     // 同 activityMonitor, 交给活动卡片自行观察, 不让 helper 状态变化重算整个菜单树
     let keepAliveController: KeepAliveController
     @ObservedObject var menuSurfaceVisibility: MenuSurfaceVisibilityState
@@ -74,9 +73,6 @@ struct CodexStatusMenuView: View {
         .animation(Metrics.statusAnimation, value: viewModel.loadState)
         .animation(Metrics.statusAnimation, value: codexHookSettings.isEnabled)
         .animation(Metrics.statusAnimation, value: mainPanelSettings.layout)
-        .animation(Metrics.statusAnimation, value: syncSettings.isEnabled)
-        .animation(Metrics.statusAnimation, value: syncSettings.isSyncing)
-        .animation(Metrics.statusAnimation, value: syncSettings.hasSyncFailure)
         .onChange(of: usageCenterViewModel.menuScope) { _, _ in onScopeChange() }
         .transaction { transaction in
             // 已关闭的 NSPopover 仍可能绘制数字过渡, 让字体缓存逐轮增长
@@ -297,10 +293,6 @@ private extension CodexStatusMenuView {
             countdownStartedAt: viewModel.autoRefreshCountdownStartedAt ?? snapshot.generatedAt,
             countdownInterval: viewModel.autoRefreshInterval,
             isCountdownActive: menuSurfaceVisibility.isVisible,
-            syncDisplayState: WorkflowSyncDisplayState(
-                isHookEnabled: codexHookSettings.isEnabled,
-                settings: syncSettings
-            ),
             updateMessage: appUpdater.panelUpdateMessage,
             startUpdate: appUpdater.startUpdate
         )

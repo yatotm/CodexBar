@@ -11,7 +11,7 @@
 | [实时任务与 CodexBar Hook](activity-and-hook.md) | Hook 的作用、启用方式、任务状态和历史统计 |
 | [通知与提醒](notifications.md) | 每类通知的触发条件、默认值、音效和触觉反馈 |
 | [防止系统睡眠](sleep-prevention.md) | 生效条件、全部保护选项、CodexBarHelper 授权和外部来源共存 |
-| [数据、同步与隐私](sync-data-privacy.md) | 本机数据、iCloud 同步、重建数据和网络边界 |
+| [数据、同步与隐私](sync-data-privacy.md) | 本机数据、SSH/HTTPS 统计、重建数据和网络边界 |
 | [设置参考](settings.md) | 通用、高级和关于页面中每一个设置的作用，包括自动重置 |
 | [常见问题与排查](troubleshooting.md) | 登录、Hook、通知、自动重置、防睡眠、同步和日志问题 |
 

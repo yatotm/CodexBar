@@ -109,16 +109,6 @@ Check in this order:
 
 Temporary failures retry for up to 5 minutes per round; later refreshes may try again. Disabling Automatic Reset or quitting CodexBar cancels its wake schedule.
 
-## Cross-Device Sync Is Unavailable
-
-- Confirm that the Mac is signed in to iCloud
-- Confirm that iCloud Drive and CloudKit are available
-- Confirm that CodexBar Hook is enabled
-- Confirm that `Sync Across Devices` is enabled
-- Hover over the iCloud icon at the bottom of the main panel for the detailed status
-
-A sync failure does not delete local Hook data. A later maintenance run retries it.
-
 ## CodexBar Still Shows the Old Version After Updating Codex
 
 Click `Reconnect` in About to use the updated Codex.

@@ -56,4 +56,4 @@ Activity Protection and helper ownership records recover state changes that have
 
 Task identification, Automatic Reset policy, and networking run in the main app. The root helper accepts only fixed sleep-lease and wake operations, validates client signatures, and reads back system results.
 
-CloudKit syncs only daily aggregates. Raw events, session identifiers, account data, and proxy passwords remain local. Project display names are uploaded only after the user enables sync. See [Data and Privacy Boundaries](data-and-privacy.md) for fields and storage scope.
+CloudKit has been removed. SSH/HTTPS sources export only the defined statistical metadata. Raw events, session identifiers, account data, and proxy passwords remain local. Project display names are uploaded only after the user enables sync. See [Data and Privacy Boundaries](data-and-privacy.md) for fields and storage scope.

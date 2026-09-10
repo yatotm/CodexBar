@@ -32,7 +32,6 @@ CodexBar executable
        |-- stdio JSON-RPC <-> codex app-server (account, rate limits, Reset Credits)
        |-- local read-only <-> Hook JSONL / rollout JSONL
        |-- HTTPS <-> Sparkle
-       |-- CloudKit private database <-> daily aggregations
        `-- signed XPC lease / wake date <-> root CodexBarHelper
               |-- fixed pmset commands
               `-- fixed IOPM wake event
@@ -83,7 +82,7 @@ Process starts
   -> Start refresh, activity monitoring, Automatic Reset, notifications, and power coordination
 ```
 
-`--hook-event` is the short-lived subprocess mode invoked by Codex. It must finish before any UI, CloudKit, notification, or long-lived service is initialized. Capture failure must not block the main Codex workflow.
+`--hook-event` is the short-lived subprocess mode invoked by Codex. It must finish before any UI, notification, or long-lived service is initialized. Capture failure must not block the main Codex workflow.
 
 In normal mode, `CodexBarAppDelegate` creates and owns long-lived objects, including:
 
@@ -94,7 +93,6 @@ In normal mode, `CodexBarAppDelegate` creates and owns long-lived objects, inclu
 - `CodexActivityMonitor`
 - `KeepAliveController`
 - `AutoResetController`
-- `WorkflowSyncSettings` and the sync scheduler
 - `CodexNotificationService`
 - Menu bar, shortcut, Settings-window, and update services
 
@@ -102,7 +100,7 @@ Before quitting, the app must cancel the Automatic Reset wake schedule and relea
 
 ### Hook Startup Branch
 
-`@NSApplicationDelegateAdaptor` connects the AppKit lifecycle to the SwiftUI app. Once the normal lifecycle begins, it may create menu bar objects, register a notification delegate, or access CloudKit.
+`@NSApplicationDelegateAdaptor` connects the AppKit lifecycle to the SwiftUI app. Once the normal lifecycle begins, it may create menu bar objects, register a notification delegate, or start local maintenance.
 
 The Hook handler runs on Codex's critical path and must behave like a command-line tool. `WorkflowHookEventRecorder.handleIfRequested()` therefore runs at the very beginning of `CodexBarApp.init()` and calls `exit(EXIT_SUCCESS)` immediately when Hook mode matches.
 
@@ -123,7 +121,7 @@ CodexBar does not use a single aggregation service for all state. The three flow
 | Flow | Input | Output | Main consumers |
 | --- | --- | --- | --- |
 | app-server | `codex app-server` JSON-RPC | Account, rate limits, token usage, Reset Credit use, Hook configuration capabilities | Main panel, menu bar rate limit, Settings, Automatic Reset state machine |
-| Hook history | Hook JSONL | Daily event, session, turn, tool, and model aggregations | Activity heatmap, historical metrics, CloudKit |
+| Hook history | Hook JSONL | Daily event, session, turn, tool, and model aggregations | Activity heatmap, historical metrics, local history |
 | Live tasks | Incremental Hook events plus rollout lifecycle | Running, waiting for approval, completed, terminated | Menu bar status, Task Center, notifications, sleep prevention |
 
 ### Dependency Direction
@@ -154,7 +152,7 @@ When changing refresh timing, distinguish among these constraints:
 
 - The trigger source may change
 - Maintenance must still be able to run independently when app-server fails
-- A lightweight statistics refresh when the UI opens must not implicitly start CloudKit network activity
+- A lightweight statistics refresh when the UI opens does not perform cloud synchronization
 
 ## Concurrency Boundaries
 
@@ -178,7 +176,6 @@ These objects own observable state and UI coordination. They must not perform bl
 - `WorkflowService` manages historical aggregation
 - `HookEventTailReader` manages Hook-file cursors
 - `CodexSessionLifecycleReader` manages rollout-file cursors
-- `WorkflowSyncService` manages CloudKit state
 - `ActivityProtectionStateStore` manages cross-process protection records
 
 DTOs crossing actor boundaries must be immutable value types and declare `Sendable` or `nonisolated` where appropriate.
@@ -201,7 +198,7 @@ The project does not reuse one large object directly across app-server DTOs, per
 
 | Model type | Role | Design requirement |
 | --- | --- | --- |
-| External DTO | Decode app-server, Hook, rollout, or CloudKit data | Tolerate version differences and carry no UI side effects |
+| External DTO | Decode app-server, Hook, rollout data | Tolerate version differences and carry no UI side effects |
 | Persistence model | Store recoverable state and schema | Remain compatible with old values and express missing semantics |
 | Domain snapshot | Express current trusted state to consumers | Immutable, comparable, and safe across actors |
 | Transition | Represent one live state change | Never inferred from historical snapshots; deduplicated upstream |
@@ -239,7 +236,6 @@ Before changing one time window, check for paired invariants. For example, the t
 | Hook installation and validation | `CodexHookSettings` | Read `isOperable` |
 | Historical aggregation and maintenance cursor | `WorkflowService` | Request snapshots or rebuilds |
 | Live tasks | `CodexActivityMonitor` | Read snapshots or transitions |
-| Sync cursors and remote cache | `WorkflowSyncService` | Request merged snapshots |
 | Sleep-prevention policy and app assertion | `KeepAliveController` | Read derived state or invoke settings entry points |
 | Root sleep ownership | `CodexBarHelper` | Request and query through XPC |
 | Root Automatic Reset wake event | `CodexBarHelper` | Replace or cancel one `wake` event for the fixed owner through XPC |
@@ -281,7 +277,6 @@ When adding a consumer, subscribe to an existing snapshot first. If it lacks a f
 | CodexBarHelper installation and launch | `SMAppService` |
 | App-to-CodexBarHelper communication | XPC |
 | Notifications | `UNUserNotificationCenter` |
-| Cloud sync | CloudKit private database |
 | Automatic updates | Sparkle |
 
 ## Key Source Files
@@ -295,7 +290,6 @@ When adding a consumer, subscribe to an existing snapshot first. If it lacks a f
 - [`AutoResetController.swift`](../../../CodexBar/Services/CodexStatus/AutoResetController.swift) manages Automatic Reset targets and retries
 - [`AutoResetWakeScheduler.swift`](../../../CodexBar/Services/KeepAlive/AutoResetWakeScheduler.swift) synchronizes the next system wake time
 - [`KeepAliveController.swift`](../../../CodexBar/Services/KeepAlive/KeepAliveController.swift) manages helper registration, sleep-prevention policy, and wake-scheduler readiness
-- [`WorkflowSyncService.swift`](../../../CodexBar/Services/Workflow/WorkflowSyncService.swift) manages CloudKit sync
 - [`CodexBarHelperXPC.swift`](../../../Shared/CodexBarHelperXPC.swift) defines the constrained privileged interface
 - [`CodexBarHelper/main.swift`](../../../CodexBarHelper/main.swift) executes and validates system sleep and wake operations
 

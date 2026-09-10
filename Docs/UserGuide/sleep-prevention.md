@@ -64,6 +64,6 @@ CodexBarHelper 是随 App 安装的后台服务，负责系统睡眠控制。未
 
 ## 独立版本与功能依赖
 
-本 fork 使用独立应用和 Helper 标识。首次切换请按 [迁移说明](migration.md) 复制旧设置和统计；系统后台权限、开机启动、通知及 Hook 需要在新安装中重新确认。Helper 与 iCloud 还需要维护者正确配置 Apple 签名，单纯登录 iCloud 不能替代签名条件。
+本 fork 使用独立应用和 Helper 标识。首次切换请按 [迁移说明](migration.md) 复制旧设置和统计；系统后台权限、开机启动、通知及 Hook 需要在新安装中重新确认。原 Helper 仍需要匹配的 Apple 签名。iCloud 功能已从本 fork 移除。
 
 返回 [用户指南](README.md)

@@ -21,7 +21,7 @@
 - [Hook Collection and Historical Aggregation](DeveloperGuide/hook-and-aggregation.md)
 - [Live Task Monitoring](DeveloperGuide/activity-monitor.md)
 - [Sleep Prevention](DeveloperGuide/sleep-prevention.md)
-- [CloudKit Sync](DeveloperGuide/sync.md)
+- [Multi-device statistics](DeveloperGuide/sync.md)
 - [Notifications](DeveloperGuide/notifications.md)
 - [UI and Lifecycle](DeveloperGuide/ui-and-lifecycle.md)
 - [Data and Privacy Boundaries](DeveloperGuide/data-and-privacy.md)

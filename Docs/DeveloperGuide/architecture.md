@@ -32,7 +32,6 @@ CodexBar executable
        |-- stdio JSON-RPC <-> codex app-server（账户、额度、Reset Credits）
        |-- 本地只读 <-> Hook JSONL / rollout JSONL
        |-- HTTPS <-> Sparkle
-       |-- CloudKit private database <-> 日级聚合
        `-- signed XPC lease / wake date <-> root CodexBarHelper
               |-- fixed pmset commands
               `-- fixed IOPM wake event
@@ -83,7 +82,7 @@ Scripts/            构建, DMG, appcast 和 CodexBarHelper 清理脚本
   -> 启动刷新、活动监控、自动重置、通知和系统电源协调
 ```
 
-`--hook-event` 是 Codex 调用的短命子进程模式。它必须在任何 UI、CloudKit、通知或长期服务初始化之前完成。采集失败也不能阻断 Codex 主流程。
+`--hook-event` 是 Codex 调用的短命子进程模式。它必须在任何 UI、通知或长期服务初始化之前完成。采集失败也不能阻断 Codex 主流程。
 
 普通模式由 `CodexBarAppDelegate` 统一创建和持有长期对象，主要包括：
 
@@ -94,7 +93,6 @@ Scripts/            构建, DMG, appcast 和 CodexBarHelper 清理脚本
 - `CodexActivityMonitor`
 - `KeepAliveController`
 - `AutoResetController`
-- `WorkflowSyncSettings` 和同步调度器
 - `CodexNotificationService`
 - 菜单栏、快捷键、设置窗口和更新服务
 
@@ -102,7 +100,7 @@ App 退出时需要先取消自动重置唤醒计划并释放防睡眠状态。�
 
 ### Hook 启动分流
 
-`@NSApplicationDelegateAdaptor` 会把 AppKit 生命周期接入 SwiftUI App。一旦普通生命周期开始，可能创建菜单栏对象、注册通知 delegate 或访问 CloudKit。
+`@NSApplicationDelegateAdaptor` 会把 AppKit 生命周期接入 SwiftUI App。一旦普通生命周期开始，可能创建菜单栏对象、注册通知 delegate 或启动本地维护。
 
 Hook handler 在 Codex 的关键路径上，它需要的是接近命令行工具的行为。因此 `WorkflowHookEventRecorder.handleIfRequested()` 必须在 `CodexBarApp.init()` 的第一段执行，命中后直接 `exit(EXIT_SUCCESS)`
 
@@ -123,7 +121,7 @@ CodexBar 不使用一个聚合服务承载所有状态。3 条链路的输入、
 | 链路 | 输入 | 输出 | 主要消费者 |
 | --- | --- | --- | --- |
 | app-server | `codex app-server` JSON-RPC | 账户、额度、token 用量、Reset Credit 使用、Hook 配置能力 | 主面板、菜单栏额度、设置、自动重置状态机 |
-| Hook 历史 | Hook JSONL | 日级事件、session, turn, tool, model 聚合 | 活跃度热力图、历史统计、CloudKit |
+| Hook 历史 | Hook JSONL | 日级事件、session, turn, tool, model 聚合 | 活跃度热力图、历史统计 |
 | 实时任务 | Hook 增量事件加 rollout 生命周期 | 运行、等待批准、完成、中断 | 菜单栏状态、任务中心、通知、防睡眠 |
 
 ### 依赖方向
@@ -154,7 +152,7 @@ Hook + rollout --------> CodexActivityMonitor --------> UI
 
 - 触发来源可以调整
 - 维护任务仍必须在 app-server 失败时具备独立执行能力
-- UI 打开时的轻量统计刷新不能隐式发起 CloudKit 网络操作
+- UI 打开时的轻量统计刷新不发起任何云同步
 
 ## 并发边界
 
@@ -178,7 +176,6 @@ Hook + rollout --------> CodexActivityMonitor --------> UI
 - `WorkflowService` 管理历史聚合
 - `HookEventTailReader` 管理 Hook 文件游标
 - `CodexSessionLifecycleReader` 管理 rollout 文件游标
-- `WorkflowSyncService` 管理 CloudKit 状态
 - `ActivityProtectionStateStore` 管理跨进程保护记录
 
 跨 actor 传递的 DTO 必须是不可变值类型，并按需要声明 `Sendable` 或 `nonisolated`
@@ -201,7 +198,7 @@ Hook + rollout --------> CodexActivityMonitor --------> UI
 
 | 模型类型 | 作用 | 设计要求 |
 | --- | --- | --- |
-| 外部 DTO | 解码 app-server, Hook, rollout 或 CloudKit | 宽容版本差异，不承载 UI 副作用 |
+| 外部 DTO | 解码 app-server, Hook, rollout | 宽容版本差异，不承载 UI 副作用 |
 | 持久化模型 | 保存可恢复状态和 schema | 兼容旧值，明确 missing 语义 |
 | 领域快照 | 向消费者表达当前可信状态 | 不可变、可比较、跨 actor 安全 |
 | transition | 表达一次 live 状态变化 | 不从历史快照反推，需要上游去重 |
@@ -239,7 +236,6 @@ Hook + rollout --------> CodexActivityMonitor --------> UI
 | Hook 安装与验证 | `CodexHookSettings` | 读取 `isOperable` |
 | 历史聚合和维护游标 | `WorkflowService` | 请求快照或重建 |
 | 实时任务 | `CodexActivityMonitor` | 读取 snapshot 或 transition |
-| 同步游标与远端缓存 | `WorkflowSyncService` | 请求合并快照 |
 | 防睡眠策略与 App assertion | `KeepAliveController` | 读取派生状态或调用设置入口 |
 | root 睡眠所有权 | `CodexBarHelper` | 通过 XPC 请求和查询 |
 | root 自动重置唤醒事件 | `CodexBarHelper` | 通过 XPC 替换或取消固定 owner 的单个 `wake` 事件 |
@@ -281,7 +277,6 @@ Hook + rollout --------> CodexActivityMonitor --------> UI
 | CodexBarHelper 安装和启动 | `SMAppService` |
 | App 与 CodexBarHelper 通信 | XPC |
 | 通知 | `UNUserNotificationCenter` |
-| 云同步 | CloudKit private database |
 | 自动更新 | Sparkle |
 
 ## 关键源码
@@ -295,7 +290,6 @@ Hook + rollout --------> CodexActivityMonitor --------> UI
 - [`AutoResetController.swift`](../../CodexBar/Services/CodexStatus/AutoResetController.swift) 管理自动重置目标和重试
 - [`AutoResetWakeScheduler.swift`](../../CodexBar/Services/KeepAlive/AutoResetWakeScheduler.swift) 同步下一次系统唤醒时间
 - [`KeepAliveController.swift`](../../CodexBar/Services/KeepAlive/KeepAliveController.swift) 管理 helper 注册、防睡眠策略和唤醒调度就绪状态
-- [`WorkflowSyncService.swift`](../../CodexBar/Services/Workflow/WorkflowSyncService.swift) 管理 CloudKit 同步
 - [`CodexBarHelperXPC.swift`](../../Shared/CodexBarHelperXPC.swift) 定义受限特权接口
 - [`CodexBarHelper/main.swift`](../../CodexBarHelper/main.swift) 执行并验证系统睡眠与唤醒操作
 

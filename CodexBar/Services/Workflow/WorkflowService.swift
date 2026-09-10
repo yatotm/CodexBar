@@ -11,7 +11,7 @@ private nonisolated enum MaintenanceStage: String {
     case prune
 }
 
-/// 一轮汇总的计数, 成功路径压进 WorkflowSyncScheduler 的收尾那一条日志, 不为每天单独记一行
+/// 一轮汇总的计数, 成功路径压进 WorkflowMaintenanceScheduler 的收尾那一条日志, 不为每天单独记一行
 /// dates 由三个分支相加得出, 不额外存一份
 nonisolated struct WorkflowMaintenanceCounts {
     var events = 0
@@ -37,7 +37,6 @@ nonisolated struct WorkflowMaintenanceCounts {
 actor WorkflowService {
     private let eventsDirectoryURL: URL
     private let dailyLogURL: URL
-    private let syncService: WorkflowSyncService
     /// 上次归一化时 daily.jsonl 的 stat 与当天日期键
     private var lastNormalizedDailyLog: WorkflowDailyLogStamp?
     /// 上一条维护日志之后连续空转的轮数, 记出去就清零
@@ -46,64 +45,26 @@ actor WorkflowService {
 
     init(
         eventsDirectoryURL: URL = WorkflowStorage.eventsDirectoryURL(),
-        dailyLogURL: URL = WorkflowStorage.dailyURL(),
-        syncService: WorkflowSyncService = WorkflowSyncService()
+        dailyLogURL: URL = WorkflowStorage.dailyURL()
     ) {
         self.eventsDirectoryURL = eventsDirectoryURL
         self.dailyLogURL = dailyLogURL
-        self.syncService = syncService
     }
 
     // MARK: - 快照读取
 
-    func loadSnapshot(
-        synchronize: Bool = false,
-        trigger: LogTrigger = .auto
-    ) async -> WorkflowSnapshot {
-        await makeSnapshot(
-            localAggregates: loadDailyAggregates() ?? [],
-            synchronize: synchronize,
-            trigger: trigger
-        )
+    func loadSnapshot() -> WorkflowSnapshot {
+        WorkflowSnapshot(localAggregates: loadDailyAggregates() ?? [])
     }
 
-    /// 先跑一轮维护再取快照
-    /// counts 为 nil 表示这一轮空转, 由调用方决定记不记日志
-    func loadSnapshotWithMaintenance(
-        synchronize: Bool,
-        trigger: LogTrigger
-    ) async -> (snapshot: WorkflowSnapshot, counts: WorkflowMaintenanceCounts?) {
+    func loadSnapshotWithMaintenance() -> (snapshot: WorkflowSnapshot, counts: WorkflowMaintenanceCounts?) {
         let counts = performMaintenanceIfNeeded()
-        let snapshot = await loadSnapshot(synchronize: synchronize, trigger: trigger)
-        return (snapshot, counts)
+        return (loadSnapshot(), counts)
     }
 
-    private func makeSnapshot(
-        localAggregates: [WorkflowDailyAggregate],
-        synchronize: Bool,
-        trigger: LogTrigger
-    ) async -> WorkflowSnapshot {
-        let syncSnapshot: WorkflowSyncSnapshot = if synchronize {
-            await syncService.synchronizeIfEnabled(localAggregates: localAggregates, trigger: trigger)
-        } else {
-            await syncService.snapshotFromCacheIfEnabled()
-        }
-
-        guard !localAggregates.isEmpty || !syncSnapshot.records.isEmpty else {
-            return .empty
-        }
-
-        return WorkflowSnapshot(
-            localAggregates: localAggregates,
-            syncedRecords: syncSnapshot.records,
-            currentDeviceId: syncSnapshot.currentDeviceId
-        )
-    }
-
-    /// 以指定日期范围内的本机原始事件为权威来源重建, 并安排替换当前设备的同日云端贡献
+    /// 以指定日期范围内的本机原始事件为权威来源重建本地统计
     fileprivate func rebuildData(
-        for dateKeys: [String],
-        synchronize: Bool
+        for dateKeys: [String]
     ) async throws -> WorkflowDataRebuildOutcome {
         let duration = LogDuration()
         let normalizedDateKeys = Set(dateKeys).sorted()
@@ -134,40 +95,18 @@ actor WorkflowService {
             }
         }
 
-        // 成功与失败的日期都要登记: 失败的日期稍后会被自动重建并推进 sourceGeneration,
-        // 届时会上传到新的 record ID, 不清理旧记录会在云端留下同日重复的贡献
-        // 全部失败时同样要登记, 它们一样已被标脏
-        var didFailReplacementMarking = false
-        do {
-            try await syncService.markReplacementNeeded(for: normalizedDateKeys)
-        } catch {
-            let details = LogFields.joined(
-                "stage=replacementMarking",
-                "dates=\(normalizedDateKeys.count)",
-                "detail=\(error.localizedDescription)"
-            )
-            AppLog.workflow.error("数据重建失败: \(details, privacy: .public)")
-            didFailReplacementMarking = true
-        }
-
         // 一天都没成功才算整体失败, 并保留首个真实原因而非笼统报「数据发生变化」
         guard !rebuildResults.isEmpty else {
             throw firstFailure ?? WorkflowDataRebuildError.sourceUnavailable
         }
 
         // 重建只由设置页的用户操作发起
-        let snapshot = await makeSnapshot(
-            localAggregates: loadDailyAggregates() ?? [],
-            synchronize: synchronize,
-            trigger: .manual
-        )
-        let summary = await WorkflowDataRebuildSummary(
+        let snapshot = loadSnapshot()
+        let summary = WorkflowDataRebuildSummary(
             rebuiltDateCount: rebuildResults.count,
             eventCount: rebuildResults.reduce(0) { $0 + ($1.aggregate.eventCount ?? 0) },
             corruptLineCount: rebuildResults.reduce(0) { $0 + $1.corrupt },
-            isSyncReplacementPending: syncService.hasPendingReplacement(for: normalizedDateKeys),
-            failedDateKeys: failedDateKeys,
-            didFailSyncReplacementMarking: didFailReplacementMarking
+            failedDateKeys: failedDateKeys
         )
         let elapsed = duration.elapsed
         let details = LogFields.joined(
@@ -273,7 +212,7 @@ actor WorkflowService {
 
     /// 空转的一轮返回 nil
     /// 它跟着每 60 秒的额度刷新跑, 无条件记会让空闲机器每天多出上千条没有信息的日志
-    /// 收尾日志由 WorkflowSyncScheduler 统一记, 这里只负责判断有没有值得记的东西
+    /// 收尾日志由 WorkflowMaintenanceScheduler 统一记, 这里只负责判断有没有值得记的东西
     private func performMaintenanceIfNeeded() -> WorkflowMaintenanceCounts? {
         let duration = LogDuration()
         var counts = WorkflowMaintenanceCounts()
@@ -1002,11 +941,6 @@ nonisolated enum WorkflowStorage {
             .appendingPathComponent("maintenance.json", isDirectory: false)
     }
 
-    static func syncDirectoryURL() -> URL {
-        directoryURL()
-            .appendingPathComponent("Sync", isDirectory: true)
-    }
-
     static func directoryURL() -> URL {
         let applicationSupportURL = FileManager.default.urls(
             for: .applicationSupportDirectory,
@@ -1441,10 +1375,8 @@ nonisolated struct WorkflowDataRebuildSummary: Equatable, Sendable {
     let rebuiltDateCount: Int
     let eventCount: Int
     let corruptLineCount: Int
-    let isSyncReplacementPending: Bool
     /// 未完成的日期, 已标脏并会由常规维护自动重建
     let failedDateKeys: [String]
-    let didFailSyncReplacementMarking: Bool
 }
 
 private nonisolated struct WorkflowDataRebuildOutcome {
@@ -1509,22 +1441,16 @@ final class WorkflowViewModel: ObservableObject {
         )
     }
 
-    /// 由 WorkflowSyncScheduler 串行调度, 无需自行判断并发, 只执行一次明确的维护刷新
+    /// 由 WorkflowMaintenanceScheduler 串行调度, 无需自行判断并发, 只执行一次明确的维护刷新
     /// 返回这一轮的维护计数, 空转为 nil; 收尾日志由调用方按它决定记不记
-    func refreshMaintenance(
-        synchronize: Bool,
-        trigger: LogTrigger
-    ) async -> WorkflowMaintenanceCounts? {
+    func refreshMaintenance() async -> WorkflowMaintenanceCounts? {
         refreshCoordinator.cancel()
         isRefreshing = true
         defer {
             isRefreshing = false
         }
 
-        let result = await service.loadSnapshotWithMaintenance(
-            synchronize: synchronize,
-            trigger: trigger
-        )
+        let result = await service.loadSnapshotWithMaintenance()
 
         snapshot = result.snapshot
         lastRefreshedAt = Date()
@@ -1532,8 +1458,7 @@ final class WorkflowViewModel: ObservableObject {
     }
 
     func rebuildData(
-        for dateKeys: [String],
-        synchronize: Bool
+        for dateKeys: [String]
     ) async throws -> WorkflowDataRebuildSummary {
         refreshCoordinator.cancel()
         isRefreshing = true
@@ -1541,10 +1466,7 @@ final class WorkflowViewModel: ObservableObject {
             isRefreshing = false
         }
 
-        let outcome = try await service.rebuildData(
-            for: dateKeys,
-            synchronize: synchronize
-        )
+        let outcome = try await service.rebuildData(for: dateKeys)
         snapshot = outcome.snapshot
         lastRefreshedAt = Date()
         return outcome.summary

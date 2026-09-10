@@ -4663,22 +4663,6 @@
         }
       }
     },
-    "settings.sync.title" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sync Across Devices"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "跨设备同步"
-          }
-        }
-      }
-    },
     "settings.tab.about" : {
       "localizations" : {
         "en" : {
@@ -4755,166 +4739,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "等待 %1$lld • 运行 %2$lld"
-          }
-        }
-      }
-    },
-    "sync.error.account-unavailable" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Account unavailable"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "账号不可用"
-          }
-        }
-      }
-    },
-    "sync.error.network-unavailable" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Network unavailable"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "网络不可用"
-          }
-        }
-      }
-    },
-    "sync.error.retry-later" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sync failed; try again later"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步失败, 请稍后重试"
-          }
-        }
-      }
-    },
-    "sync.error.service-unavailable" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Service temporarily unavailable"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "服务暂时不可用"
-          }
-        }
-      }
-    },
-    "sync.status.disabled" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sync is off"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步未开启"
-          }
-        }
-      }
-    },
-    "sync.status.last-sync" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last Sync"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最近同步"
-          }
-        }
-      }
-    },
-    "sync.status.last-sync-time" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last sync: %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最近同步: %@"
-          }
-        }
-      }
-    },
-    "sync.status.no-history" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No sync history"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "暂无同步记录"
-          }
-        }
-      }
-    },
-    "sync.status.syncing" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Syncing"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在同步"
-          }
-        }
-      }
-    },
-    "sync.status.unavailable" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sync unavailable"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同步不可用"
           }
         }
       }
@@ -5431,22 +5255,6 @@
         }
       }
     },
-    "workflow.rebuild.summary.cloud-replacement-pending" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "; cloud data will be replaced when sync becomes available"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "; 云端替换将在同步可用后继续"
-          }
-        }
-      }
-    },
     "workflow.rebuild.summary.completed" : {
       "localizations" : {
         "en" : {
@@ -5523,22 +5331,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : ", 跳过 %lld 条无效数据"
-          }
-        }
-      }
-    },
-    "workflow.rebuild.summary.sync-replacement-marking-failed" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "; could not replace cloud data; try rebuilding this data later"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "; 云端替换未能完成, 请稍后重新重建这些数据"
           }
         }
       }

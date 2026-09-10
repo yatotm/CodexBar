@@ -8,7 +8,7 @@
 - [Codex CLI](https://github.com/openai/codex) installed and signed in, or ChatGPT App or Codex App with bundled Codex installed
 - The Codex currently in use must be `0.143.0` or later
 - Hook features require the Codex currently in use to be `0.145.0` or later
-- iCloud Hook sync requires an available iCloud account and matching fork signing entitlements
+- Cross-device statistics use configured SSH/HTTPS sources; iCloud is no longer provided
 
 By default, CodexBar automatically prefers a globally installed Codex CLI. If it cannot find one, it tries the Codex bundled with ChatGPT App and Codex App. You can select a source under Settings > About > Codex Versions > Source.
 
@@ -64,7 +64,6 @@ The global shortcut opens the main panel on the screen under the pointer when po
 - [System Notifications](notifications.md): task and quota alerts, requiring macOS notification permission
 - [Automatic Reset](settings.md#automatic-reset): use banked resets shortly before expiration; may briefly wake your Mac
 - [Prevent System Sleep](sleep-prevention.md): keep your Mac awake during long tasks, requiring background-service approval
-- [Cross-Device Sync](sync-data-privacy.md): combine Hook statistics across Macs, requiring iCloud sign-in
 
 ## Language and Region
 
@@ -76,4 +75,4 @@ Next, read [Main Panel and Menu Bar](main-panel.md) or the [Settings Reference](
 
 ## Fork behavior
 
-Log collection requires Python 3.9 or later. Install CodexBar Fork.app manually for the first switch. Ordinary polling pauses during system sleep and resumes on full wake; DarkWake does not clear that pause. VPS timers run independently. Helper and iCloud require matching signing and authorization; see the [migration guide](../../UserGuide/migration.md).
+Log collection requires Python 3.9 or later. Install CodexBar Fork.app manually for the first switch. Ordinary polling pauses during system sleep and resumes on full wake; DarkWake does not clear that pause. VPS timers run independently. The original Helper requires matching signing and authorization; iCloud has been removed; see the [migration guide](../../UserGuide/migration.md).

@@ -109,16 +109,6 @@
 
 暂时故障每轮最多连续重试 5 分钟，后续刷新仍可再次尝试。关闭自动重置或退出 CodexBar 会取消唤醒计划。
 
-## 跨设备同步不可用
-
-- 确认 Mac 已登录 iCloud
-- 确认 iCloud Drive 和 CloudKit 服务当前可用
-- 确认 CodexBar Hook 已开启
-- 确认 `跨设备同步` 开关已开启
-- 将鼠标悬停在主面板底部 iCloud 图标上查看具体状态
-
-同步失败不会删除本机 Hook 数据，后续维护会再次尝试。
-
 ## 更新 Codex 后仍显示旧版本
 
 在关于页面点击 `重新建立连接`，让 CodexBar 使用更新后的 Codex。
@@ -162,4 +152,4 @@ Debug 构建不走正式更新通道；从上游首次切换需要手动安装�
 
 当前 Release 提供通用 DMG，将 `CodexBar Fork.app` 拖入 Applications 后打开即可。若系统阻止首次启动，到 `系统设置 > 隐私与安全性` 选择 `仍要打开` 并确认。无需关闭系统的整体安全保护。操作位置见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)
 
-当前 ad-hoc 构建没有可供 Helper 验证的 Team ID，也没有 CloudKit 权限，因此防睡眠、自动重置及 iCloud 不可用；这些限制与是否手动允许启动 App 是两回事。统计、官网分析、SSH/HTTPS 与 Sparkle 更新不依赖这些权限。
+当前 ad-hoc 构建没有可供 Helper 验证的 Team ID，因此防睡眠和自动重置暂不可用。iCloud 功能已移除。这些限制与是否手动允许启动 App 是两回事。统计、官网分析、SSH/HTTPS 与 Sparkle 更新不依赖这些权限。

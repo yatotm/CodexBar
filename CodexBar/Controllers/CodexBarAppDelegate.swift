@@ -23,7 +23,6 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
         activityMonitor: activityMonitor,
         codexHookSettings: codexHookSettings
     )
-    let syncSettings = WorkflowSyncSettings()
     let globalHotKeySettings = GlobalHotKeySettings()
     let menuBarQuotaSettings = MenuBarQuotaSettings()
     let mainPanelSettings = MainPanelSettings()
@@ -58,7 +57,6 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
             codexHookSettings: codexHookSettings,
             codexCLINotificationSettings: codexCLINotificationSettings,
             activityMonitor: activityMonitor,
-            syncSettings: syncSettings,
             globalHotKeySettings: globalHotKeySettings,
             menuBarQuotaSettings: menuBarQuotaSettings,
             mainPanelSettings: mainPanelSettings,
@@ -182,7 +180,6 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
             "keepAliveWaiting=\(keepAliveController.keepsAwakeWhileWaiting ? 1 : 0)",
             "keepAliveDisplay=\(keepAliveController.keepsDisplayAwake ? 1 : 0)",
             "activityProtectionMinutes=\(activityProtectionSettings.inactivityDuration.loggedMinutes)",
-            "sync=\(syncSettings.isEnabled ? 1 : 0)",
             "notification=\(notificationSettings.isEnabled ? 1 : 0)",
             "autoReset=\(autoResetSettings.isEnabled ? 1 : 0)",
             "autoResetLeadTimeSeconds=\(autoResetSettings.leadTime.rawValue)",

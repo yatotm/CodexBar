@@ -10,7 +10,6 @@ final class SettingsWindowController: HostingWindowController {
     private let appUpdater: AppUpdater
     private let codexHookSettings: CodexHookSettings
     private let codexCLINotificationSettings: CodexCLINotificationSettings
-    private let syncSettings: WorkflowSyncSettings
     private let globalHotKeySettings: GlobalHotKeySettings
     private let menuBarQuotaSettings: MenuBarQuotaSettings
     private let mainPanelSettings: MainPanelSettings
@@ -18,8 +17,7 @@ final class SettingsWindowController: HostingWindowController {
     private let autoResetSettings: AutoResetSettings
     private let activityProtectionSettings: ActivityProtectionSettings
     private let keepAliveController: KeepAliveController
-    private let onSyncChanged: (Bool) -> Void
-    private let onRebuildWorkflowData: WorkflowSyncScheduler.RebuildHandler
+    private let onRebuildWorkflowData: WorkflowMaintenanceScheduler.RebuildHandler
     private let mainPanelUndoManager = UndoManager()
     private var windowFocusObserver: AnyCancellable?
     /// 只在真的要展开时构造: hosting controller 与动态面板订阅会常驻到 App 结束, 而用户可能一次子面板都没开过
@@ -37,7 +35,6 @@ final class SettingsWindowController: HostingWindowController {
         proxySettings: CodexProxySettings,
         codexHookSettings: CodexHookSettings,
         codexCLINotificationSettings: CodexCLINotificationSettings,
-        syncSettings: WorkflowSyncSettings,
         globalHotKeySettings: GlobalHotKeySettings,
         menuBarQuotaSettings: MenuBarQuotaSettings,
         mainPanelSettings: MainPanelSettings,
@@ -46,15 +43,13 @@ final class SettingsWindowController: HostingWindowController {
         activityProtectionSettings: ActivityProtectionSettings,
         keepAliveController: KeepAliveController,
         screenProvider: @escaping () -> NSScreen?,
-        onSyncChanged: @escaping (Bool) -> Void,
-        onRebuildWorkflowData: @escaping WorkflowSyncScheduler.RebuildHandler
+        onRebuildWorkflowData: @escaping WorkflowMaintenanceScheduler.RebuildHandler
     ) {
         self.viewModel = viewModel
         self.appUpdater = appUpdater
         self.proxySettings = proxySettings
         self.codexHookSettings = codexHookSettings
         self.codexCLINotificationSettings = codexCLINotificationSettings
-        self.syncSettings = syncSettings
         self.globalHotKeySettings = globalHotKeySettings
         self.menuBarQuotaSettings = menuBarQuotaSettings
         self.mainPanelSettings = mainPanelSettings
@@ -62,7 +57,6 @@ final class SettingsWindowController: HostingWindowController {
         self.autoResetSettings = autoResetSettings
         self.activityProtectionSettings = activityProtectionSettings
         self.keepAliveController = keepAliveController
-        self.onSyncChanged = onSyncChanged
         self.onRebuildWorkflowData = onRebuildWorkflowData
         super.init(screenProvider: screenProvider)
     }
@@ -79,14 +73,12 @@ final class SettingsWindowController: HostingWindowController {
             rootView: AppSettingsView(
                 proxySettings: proxySettings,
                 codexHookSettings: codexHookSettings,
-                syncSettings: syncSettings,
                 globalHotKeySettings: globalHotKeySettings,
                 menuBarQuotaSettings: menuBarQuotaSettings,
                 mainPanelSettings: mainPanelSettings,
                 notificationSettings: notificationSettings,
                 autoResetSettings: autoResetSettings,
                 keepAliveController: keepAliveController,
-                onSyncChanged: onSyncChanged,
                 onRebuildWorkflowData: onRebuildWorkflowData,
                 onOptionsAction: { [weak self] action in
                     self?.handleOptionsAction(action)
@@ -135,7 +127,6 @@ final class SettingsWindowController: HostingWindowController {
         notificationSettings.refreshAuthorizationStatus()
         codexHookSettings.reconcileInstalledHooks()
         codexCLINotificationSettings.refresh()
-        syncSettings.refresh()
         menuBarQuotaSettings.refresh()
         mainPanelSettings.refresh()
         autoResetSettings.refresh()

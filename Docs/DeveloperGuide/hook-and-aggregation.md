@@ -12,7 +12,7 @@ Codex Hook
   -> 原始 JSONL
   -> WorkflowService 增量聚合
   -> daily.jsonl
-  -> 活跃度 UI 和 CloudKit 同步
+  -> 本地活跃度 UI
 ```
 
 原始事件是事实来源，日级聚合是可重建缓存。聚合算法或字段语义变化时，必须从保留期内的原始事件完整重建。
@@ -218,7 +218,7 @@ recorder 在写入前完成来源解析，JSONL 的来源字段只保存上述�
 
 JSONL 中缺少 `origin`，或枚举值无法识别时，来源字段先解码为 `unknown`。`WorkflowHookEvent` 解码器随后应用相同的精确 model 后备判定，因此 `model == "codex-auto-review"` 的事件在内存中的 `origin` 为 `autoReview`。读取过程不会回填或重写原始 JSONL。
 
-来源分类只改变实时活动过滤，不改变历史统计输入。Auto-review 事件仍参与 session、turn、model、tool、project 和事件计数；聚合 schema 和 CloudKit 投影不包含来源分类。
+来源分类只改变实时活动过滤，不改变历史统计输入。Auto-review 事件仍参与 session、turn、model、tool、project 和事件计数；聚合 schema 不包含来源分类。
 
 ### 输入归一化
 
@@ -267,7 +267,7 @@ HookEvents/
 | `daily.jsonl` | 按日期和来源代际保存聚合结果 |
 | `maintenance.json` | 保存待处理维护和 schema 状态 |
 | `stats.lock` | 协调 Hook 子进程和 App 维护任务 |
-| `Sync/*` | CloudKit 同步游标和缓存 |
+| `Sync/*` | 不再读取的旧云同步缓存, 保留原文件 |
 
 原始事件和日聚合最长保留 210 天。session ID 和 turn ID 的明细列表只保留 3 天，更早日期压缩为计数，降低本地文件体积和身份信息留存。
 
@@ -431,9 +431,7 @@ schema 变化通常把保留期内所有事件日期标脏。source generation �
 
 批量重建按日期独立处理。单日失败不会阻断已经成功的日期，失败日期会标脏交给常规维护继续尝试。
 
-成功和失败日期都会先登记 CloudKit replacement。原因是失败日期已经进入新 generation，后续自动重建成功时会使用新 record identity。如果没有提前标记，旧 generation 可能留在云端与新值叠加。
-
-只有所有日期都失败时，操作整体返回失败。部分成功会返回详细 summary，包括成功日期、损坏行和 replacement pending 状态。
+只有所有日期都失败时，操作整体返回失败。部分成功会返回成功日期数、损坏行和失败日期，失败日期由后续维护继续重建。
 
 ## 维护调度
 
@@ -449,15 +447,7 @@ schema 变化通常把保留期内所有事件日期标脏。source generation �
 
 ### scheduler 如何合并请求
 
-`WorkflowSyncScheduler` 串行处理 3 类请求：
-
-1. 用户重建，优先级最高
-2. 带同步的维护
-3. 仅本地维护
-
-同步完成后有 8 秒冷却。冷却期间的多个请求合并成一次，并保留最先到达的 trigger 作为真正起因。
-
-UI 打开只读取当前本地快照，不自动越过 scheduler 发起无条件 CloudKit 请求。
+`WorkflowMaintenanceScheduler` 串行处理用户重建和本地维护，重建优先。执行期间的新维护请求合并为一次，并保留最先到达的 trigger。UI 打开只读取本地快照，不触发云端操作。
 
 ## 建议验证的故障场景
 

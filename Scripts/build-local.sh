@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix="codexbar-local-build.", dir="/tmp") as 
         print(f"完整构建日志: {log_path}")
         sys.exit(result.returncode)
 
-    # 本地签名不申请 iCloud 权限, 正式构建仍使用工程原有的授权配置
+    # 本地和自动构建使用 ad-hoc 签名, 不申请额外系统权限
     app = stage / app_name
     subprocess.run(["ditto", "--noextattr", str(output / "DerivedData/Build/Products" / configuration / app.name), str(app)], check=True)
     subprocess.run(["xattr", "-cr", str(app)], check=True)

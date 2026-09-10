@@ -10,15 +10,13 @@ struct AppSettingsView: View {
     @ObservedObject var proxySettings: CodexProxySettings
     @State private var isShowingProxySettings = false
     @ObservedObject var codexHookSettings: CodexHookSettings
-    @ObservedObject var syncSettings: WorkflowSyncSettings
     @ObservedObject var globalHotKeySettings: GlobalHotKeySettings
     @ObservedObject var menuBarQuotaSettings: MenuBarQuotaSettings
     @ObservedObject var mainPanelSettings: MainPanelSettings
     @ObservedObject var notificationSettings: NotificationSettings
     @ObservedObject var autoResetSettings: AutoResetSettings
     @ObservedObject var keepAliveController: KeepAliveController
-    let onSyncChanged: (Bool) -> Void
-    let onRebuildWorkflowData: WorkflowSyncScheduler.RebuildHandler
+    let onRebuildWorkflowData: WorkflowMaintenanceScheduler.RebuildHandler
     let onOptionsAction: (SettingsOptionsPanelAction) -> Void
     let onContentHeightChanged: (CGFloat) -> Void
     @State private var selectedTab = SettingsTab.general
@@ -80,7 +78,6 @@ struct AppSettingsView: View {
         }
         .onAppear {
             loginItemSettings.refresh()
-            syncSettings.refresh()
             menuBarQuotaSettings.refresh()
             mainPanelSettings.refresh()
             autoResetSettings.refresh()
@@ -89,7 +86,6 @@ struct AppSettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             codexHookSettings.reconcileInstalledHooks()
-            syncSettings.refresh()
             menuBarQuotaSettings.refresh()
             mainPanelSettings.refresh()
             autoResetSettings.refresh()
@@ -165,8 +161,6 @@ private extension AppSettingsView {
         static let tabContentSpacing = padding
         static let windowChromeHeight = padding * 2 + tabBarHeight + tabContentSpacing
         static let menuBarQuotaPickerWidth: CGFloat = 72
-        static let syncStatusRowHeight: CGFloat = 16
-        static let syncStatusValueWidth: CGFloat = 160
         static let tabContentInitialScale = 0.975
         static let tabContentInitialOffset: CGFloat = 8
         static let tabContentTransition = Animation.spring(
@@ -280,7 +274,6 @@ private extension AppSettingsView {
             LiquidGlassDivider()
             keepAliveRow
             LiquidGlassDivider()
-            syncRow
             LiquidGlassDivider()
             rebuildWorkflowDataRow
         }
@@ -633,80 +626,6 @@ private extension AppSettingsView {
         )
     }
 
-    var syncRow: some View {
-        let state = syncRowState
-        let lastSyncText = syncSettings.lastUploadAtText
-
-        return VStack(alignment: .leading, spacing: 4) {
-            SettingsToggleRow(
-                icon: "icloud",
-                title: "settings.sync.title",
-                isOn: Binding(
-                    get: { state.isActive },
-                    set: { enabled in
-                        guard syncSettings.setEnabled(enabled) else {
-                            return
-                        }
-                        onSyncChanged(enabled)
-                    }
-                ),
-                isEnabled: state.canToggle
-            )
-
-            if let message = syncSettings.unavailableMessage {
-                SettingsCaptionMessageRow(message: message)
-                    .frame(minHeight: Metrics.syncStatusRowHeight, alignment: .top)
-            } else if state.isActive {
-                let showsSyncStatus = state.shouldShowSyncStatus(lastSyncText: lastSyncText)
-
-                SettingsIndentedRow {
-                    Text("sync.status.last-sync")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Spacer(minLength: 8)
-
-                    ZStack(alignment: .trailing) {
-                        if syncSettings.isSyncing {
-                            ProgressView()
-                                .controlSize(.mini)
-                                .frame(
-                                    width: Metrics.syncStatusRowHeight,
-                                    height: Metrics.syncStatusRowHeight
-                                )
-                                .help("sync.status.syncing")
-                                .transition(.opacity)
-                        } else if let lastSyncText {
-                            Text(lastSyncText)
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .transition(.opacity)
-                        }
-                    }
-                    .frame(
-                        width: Metrics.syncStatusValueWidth,
-                        height: Metrics.syncStatusRowHeight,
-                        alignment: .trailing
-                    )
-                    .animation(Metrics.statusAnimation, value: syncSettings.isSyncing)
-                }
-                .frame(height: Metrics.syncStatusRowHeight)
-                .opacity(showsSyncStatus ? 1 : 0)
-            }
-        }
-    }
-
-    var syncRowState: SyncRowState {
-        SyncRowState(
-            isActive: syncSettings.isEffectivelyActive(isHookEnabled: codexHookSettings.isEnabled),
-            isHookEnabled: codexHookSettings.isEnabled,
-            isHookUpdating: codexHookSettings.isUpdating,
-            isSyncAvailable: syncSettings.isSyncAvailable,
-            isSyncing: syncSettings.isSyncing
-        )
-    }
-
     // MARK: - 数据重建
 
     var rebuildWorkflowDataRow: some View {
@@ -858,12 +777,6 @@ private extension AppSettingsView {
             message += autoRetryAvailable
                 ? String(localized: "workflow.rebuild.summary.retry-later")
                 : String(localized: "workflow.rebuild.summary.retry-after-hook-enabled")
-        }
-
-        if summary.didFailSyncReplacementMarking {
-            message += String(localized: "workflow.rebuild.summary.sync-replacement-marking-failed")
-        } else if summary.isSyncReplacementPending {
-            message += String(localized: "workflow.rebuild.summary.cloud-replacement-pending")
         }
 
         return message
@@ -1456,23 +1369,6 @@ private struct SettingsPageHeightPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
-    }
-}
-
-private struct SyncRowState {
-    /// 由 WorkflowSyncSettings.isEffectivelyActive 统一判定, 视图层不再拼接业务谓词
-    let isActive: Bool
-    let isHookEnabled: Bool
-    let isHookUpdating: Bool
-    let isSyncAvailable: Bool
-    let isSyncing: Bool
-
-    var canToggle: Bool {
-        isHookEnabled && !isHookUpdating && isSyncAvailable
-    }
-
-    func shouldShowSyncStatus(lastSyncText: String?) -> Bool {
-        isActive && (isSyncing || lastSyncText != nil)
     }
 }
 

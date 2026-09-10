@@ -21,7 +21,7 @@
 - [Hook 采集与历史聚合](DeveloperGuide/hook-and-aggregation.md)
 - [实时任务监控](DeveloperGuide/activity-monitor.md)
 - [防睡眠系统](DeveloperGuide/sleep-prevention.md)
-- [CloudKit 同步](DeveloperGuide/sync.md)
+- [多设备统计边界](DeveloperGuide/sync.md)
 - [通知系统](DeveloperGuide/notifications.md)
 - [UI 与应用生命周期](DeveloperGuide/ui-and-lifecycle.md)
 - [数据与隐私边界](DeveloperGuide/data-and-privacy.md)

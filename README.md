@@ -75,7 +75,6 @@ CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，集中展示 Codex
 - 支持全局快捷键、开机启动和自动更新
 - 原主面板支持中英文，新增用量中心以中文为主
 - 支持为 Codex 服务配置 HTTP/HTTPS 代理
-- 可选通过 iCloud 合并多台 Mac 的每日 Hook 统计，需要可用的签名与 CloudKit 配置
 - 系统睡眠时暂停 Mac 的周期刷新，正式唤醒后恢复；VPS 采集独立运行
 
 ## 安装
@@ -84,7 +83,7 @@ CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，集中展示 Codex
 
 从本仓库的 [GitHub Releases](https://github.com/yatotm/CodexBar/releases/latest) 下载应用，解压后拖入 Applications。安装包名为 `CodexBar Fork.app`。首次切换请手动安装并按 [迁移说明](Docs/UserGuide/migration.md) 复制旧数据，之后由本分支独立更新。
 
-> 当前 Release 是未公证的通用构建，无需自行编译。首次打开若被系统阻止，请在 `系统设置 > 隐私与安全性` 中选择 `仍要打开`。菜单栏、用量中心和 SSH/HTTPS 统计可用；Helper、防睡眠、自动重置及 iCloud 同步暂不可用。
+> 当前 Release 是未公证的通用构建，无需自行编译。首次打开若被系统阻止，请在 `系统设置 > 隐私与安全性` 中选择 `仍要打开`。菜单栏、用量中心和 SSH/HTTPS 统计可用；Helper、防睡眠和自动重置暂不可用；iCloud 功能已移除。
 
 ### 从源码构建
 
@@ -104,7 +103,6 @@ bash Scripts/build-local.sh
 - 使用实时任务等 Hook 功能时，当前运行的 Codex 版本需要为 `0.145.0` 或更高版本
 - 采集本机或远程日志需要 Python 3.9 或更高版本，无需额外 Python 包
 - Claude 统计需要可读取的会话日志；5h/7d 额度取决于客户端是否留下相应记录
-- iCloud 与系统 Helper 功能需要匹配的签名和授权
 
 ## 快速开始
 
@@ -130,7 +128,7 @@ bash Scripts/build-local.sh
 
 会话日志在各设备解析，只同步经过筛选的统计元数据，不传输对话正文、工具参数或登录 Token。Claude 采集器不主动请求 Anthropic；Codex 账户额度和官网分析使用本机登录访问官方服务。
 
-iCloud 仅用于原有日级 Hook 聚合，更新检查使用本 fork 的 Sparkle 更新源。Token、额度比例和美元估算是不同口径，普通网页 Chat 对话不计入这些统计。
+本 fork 已移除 iCloud，同步使用所配置的 SSH/HTTPS 来源，更新检查使用独立 Sparkle 更新源。Token、额度比例和美元估算是不同口径，普通网页 Chat 对话不计入这些统计。
 
 完整的数据访问、本机存储和网络边界见 [数据、同步与隐私](Docs/UserGuide/sync-data-privacy.md)
 

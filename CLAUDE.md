@@ -10,7 +10,7 @@ CodexBar 是一个 macOS 菜单栏应用，以 `LSUIElement` 方式运行，没�
 
 Xcode 工程有两个 target：主 App `CodexBar` 和随 App 嵌入的 root helper `CodexBarHelper`（command-line tool + LaunchDaemon）。**没有测试 target**，验证依靠构建通过和实际运行。
 
-App Sandbox 未开启，entitlements 只声明 iCloud/CloudKit，因为需要启动本机 `codex` 进程、读取用户 Codex 登录状态、写入用户级 Hook 配置。
+App Sandbox 未开启，需要启动本机 `codex` 进程、读取用户 Codex 登录状态、写入用户级 Hook 配置。本 fork 已移除 CloudKit 服务和 entitlement。
 
 ## 常用命令
 
@@ -86,14 +86,14 @@ Debug 与 Release 使用不同 bundle ID，分别是 `io.github.yatotm.codexbar.
 
 **链路二：Hook 统计（历史聚合）**
 
-Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEvents/events/YYYY-MM-DD.jsonl` 这类文件，主 App 的 `WorkflowService`（actor）增量聚合出 `daily.jsonl` 与 `WorkflowSnapshot`，供热力图详情面板展示。可选跨设备同步由 `WorkflowSyncScheduler`（唯一调度者）与 `WorkflowSyncService` 负责，使用 `iCloud.io.github.yatotm.codexbar` 容器的 CloudKit private database，只上传脱敏 daily 聚合。
+Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEvents/events/YYYY-MM-DD.jsonl` 这类文件，主 App 的 `WorkflowService`（actor）增量聚合出 `daily.jsonl` 与 `WorkflowSnapshot`，供热力图详情面板展示。本地维护与重建由 `WorkflowMaintenanceScheduler` 串行调度，不再初始化云服务。
 
 - `WorkflowStorage` 管理的存储目录含 `events/`、`daily.jsonl`、`stats.lock`、`maintenance.json`、`Sync/` 五项
 - 原始事件文件与 daily 聚合统一保留 210 天，聚合里的会话与轮次标识只保留 3 天，到期后只留下去重计数
 - `WorkflowDailyAccumulator` 的全量与增量路径始终在内存收集完整 ID，只有 `finalized(identifierStorage:)` 才决定保留或压缩；已压缩的日期收到新事件时不能安全去重，必须降级为从原始 JSONL 完整重建
 - `WorkflowMaintenanceState.currentAggregationSchema` 是原始事件到 daily 聚合的算法版本；缺少版本按 0 处理，版本不一致时把仍有原始事件的日期全部标脏并走通用完整重建，不写字段级历史迁移
 - 需要从原始事件重新计算的聚合算法、输出字段、字段含义或去重规则变化时，必须递增 `currentAggregationSchema`，统一走相同的完整重建入口
-- daily 与 CloudKit 中的 Hook 计数字段都是可选值；`nil` 表示来源版本没有提供或无法确认，明确的 `0` 才表示已知没有对应事件，解码和重建都不能把两者混为一谈
+- daily 中的 Hook 计数字段都是可选值；`nil` 表示来源版本没有提供或无法确认，明确的 `0` 才表示已知没有对应事件，解码和重建都不能把两者混为一谈
 
 **链路三：实时任务，由 `CodexActivityMonitor` 驱动**
 
@@ -209,7 +209,7 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 - 单轮结束只取消本地任务和系统唤醒，不把目标标记成永久失败；后续普通额度快照仍可为有效目标开启新一轮
 - `.auto`、`.retry` 和 `.wake` 评估期间建立独立的 `PreventUserIdleSystemSleep` assertion，读取与消费结束后立即释放；不建立显示断言，不修改 `SleepDisabled`
 - `reset` 与 `alreadyRedeemed` 都视为成功并通知；认证失败暂停当前目标，协议或参数错误停止当前目标，明确过期发送失败通知，目标从明细消失时静默停止
-- 原始 `creditId` 和确定性幂等键只在当前进程内存中存在；`UserDefaults` 只保存开关、提前量、通知选项和哈希去重 key，CloudKit 不同步自动重置状态
+- 原始 `creditId` 和确定性幂等键只在当前进程内存中存在；`UserDefaults` 只保存开关、提前量、通知选项和哈希去重 key，自动重置状态仅保存在本机
 
 ### 通知
 
@@ -229,7 +229,7 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 工程开启 `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` 设置，所有类型默认 `MainActor` 隔离。
 
 - UI、控制器、ViewModel、Settings、更新类直接依赖默认隔离，不需要额外标注
-- 服务共享状态用 actor 管理，包括 `CodexStatusService`、`WorkflowService`、`WorkflowSyncService`、`CodexCLIVersionService`、`HookEventTailReader`、`CodexSessionLifecycleReader`、`ActivityProtectionStateStore`
+- 服务共享状态用 actor 管理，包括 `CodexStatusService`、`WorkflowService`、`CodexCLIVersionService`、`HookEventTailReader`、`CodexSessionLifecycleReader`、`ActivityProtectionStateStore`
 - DTO、纯模型、静态工具、跨 actor 传递的类型必须显式标注 `nonisolated`
 - 跨进程写统计文件用 `stats.lock` 加 `flock` 保护，Hook 子进程有等待上限，主 App 无限等待；`RequestLogStorage` 用 `OSAllocatedUnfairLock`
 - 非 Sendable 的管道 IO 集中在 `PipeReadBuffer` 里，`JSONLineReader` 与 `PipeDrain` 复用它
@@ -306,7 +306,7 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 - 写入前通过 app-server `config/read` 确认全局未禁用 Hook，写入后用 `hooks/list` 验证；两处读取共用 `readGlobalHookDisabled`，开关流程与校验流程对“全局禁用”的判断不会分叉
 - 读取失败（I/O 或 JSON 格式错误）不提供 Hook 装没装的信息，必须保留上次已知值，不能当成用户关闭了 Hook
 - `isEnabled` 表示当前进程中的 Hook 开启状态，首次从已有 handler 恢复；开启后配置缺失会触发自愈。`isVerified` 保存最近一次校验的明确结论，`isOperable` 为两者的合取
-- 实时任务、防睡眠和任务类通知必须看 `isOperable`；历史聚合与同步仍可消费已落盘数据，其调度只看 `isEnabled`，不要把两类依赖混在一起
+- 实时任务、防睡眠和任务类通知必须看 `isOperable`；历史聚合与本地维护仍可消费已落盘数据，其调度只看 `isEnabled`，不要把两类依赖混在一起
 - `isVerified` 默认为 `true`，RPC 临时失败或取消时保留上次明确结论。启动、打开主面板、打开设置、App 激活和额度刷新完成时对账已开启 Hook
 - 全局禁用要排在 `hooks/list` 之前判：它一关列表里必然找不到我们的 handler，那时报“已不完整”会把用户引去翻本来就完好的 `hooks.json`
 - `refreshInstallationState()` 检查 handler 是否存在及事件是否完整；已开启配置缺少必要事件或信任项时，`reconcileInstalledHooks()` 自动补齐并重新校验。启动前已无可识别 handler 时保持关闭
@@ -316,12 +316,10 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 
 改动涉及网络、日志或同步时必须遵守：
 
-- 外部通信包括 Sparkle 更新、用户启用的 CloudKit 同步、已配置的 SSH/HTTPS 统计来源，以及使用本机 Codex OAuth 的官方账号分析；app-server stdio 本身不是网络。Claude 采集不主动访问 Anthropic，新增通信必须核对数据边界
+- 外部通信包括 Sparkle 更新、已配置的 SSH/HTTPS 统计来源，以及使用本机 Codex OAuth 的官方账号分析；app-server stdio 本身不是网络。Claude 采集不主动访问 Anthropic，新增通信必须核对数据边界
 - Codex 当前账户、额度和 Reset Credits 明细通过本机 app-server 获取；跨设备日志与官方账号分析由用量中心独立维护。Sparkle 更新走 `https://github.com/yatotm/CodexBar/releases/latest/download/appcast.xml` 这个 feed
 - 不展示 app-server stderr；不展示或记录 Codex OAuth token；不把原始敏感 RPC 响应写进文档
-- CloudKit 只同步去掉 `sessionIds` 与 `turnIds` 的 daily 聚合，不同步原始 Hook events、账号、额度或 Token 用量
-- 异常会话保护状态只保存在本机，不同步 CloudKit；记录不含原始 session ID、turn ID、项目名或任务内容
-- CloudKit 的 `sessionEndCount`、`userPromptSubmitCount` 与其他 Hook 计数字段保持可选，远端缺失表示历史来源没有提供，不能在读取时补成 `0`；改变远端格式时同时评估并更新 `syncSchemaVersion`
+- 异常会话保护状态只保存在本机；记录不含原始 session ID、turn ID、项目名或任务内容
 - 系统日志不写用户数据：额度与 Token 用量只记 `state=` 这类结果分类，任务内容、项目名、会话与轮次标识一律不记；可执行文件路径含用户名，用 `source=global|bundled` 之类的标识代替
 - 事件数、任务数、日期这类聚合数字可以记，它们是判断重建是否正确和定位哪天出问题的依据，不含任何内容
 

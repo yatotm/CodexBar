@@ -27,14 +27,14 @@ swiftlint
 | 实时任务与异常保护 | `CodexActivityMonitor` 和 readers | [实时任务监控](activity-monitor.md) |
 | 防睡眠与系统唤醒 | `KeepAliveController`、`AutoResetWakeScheduler`、helper | [防睡眠系统](sleep-prevention.md) |
 | 通知与音效 | `CodexNotificationService`、通知 Settings | [通知系统](notifications.md) |
-| 同步 | `WorkflowSyncService` 与 scheduler | [CloudKit 同步](sync.md) |
+| 同步 | `UsageCollectorClient` 与本地维护调度器 | [多设备统计边界](sync.md) |
 | 菜单、窗口、快捷键 | `Controllers` 与对应 View | [UI 与应用生命周期](ui-and-lifecycle.md) |
 
 长期对象由 `CodexBarAppDelegate` 装配。新增状态优先放入现有所有者，View 消费快照并发出操作意图。源码阅读入口见 [整体架构](architecture.md)
 
 ## 变更检查
 
-涉及持久化 key、schema、身份计算、最低系统版本或新旧版本共存时，先说明影响和可选兼容方案，等待用户选定。新增网络访问、日志字段或 CloudKit 字段时核对 [数据与隐私边界](data-and-privacy.md)
+涉及持久化 key、schema、身份计算、最低系统版本或新旧版本共存时，先说明影响和可选兼容方案，等待用户选定。新增网络访问、日志字段时核对 [数据与隐私边界](data-and-privacy.md)
 
 聚合算法、输出字段含义或去重规则变化时，递增 `WorkflowMaintenanceState.currentAggregationSchema`，从保留期内原始 JSONL 完整重建，不增加字段级历史迁移。
 
@@ -61,7 +61,7 @@ swiftlint
 | 实时任务 | bootstrap 不补通知、等待审批、迟到终态、匿名任务、唤醒读取屏障失败与恢复 |
 | 通知 | 授权拒绝与恢复、阈值跨越、同周期去重、任务恢复撤回、声音缺失 |
 | 代理 | 首次配置、启停、无效配置停用、损坏记录删除、测试取消、快速操作与失败回滚 |
-| 同步 | 首次上传、多设备合并、断网续传、部分上传失败、重建替换、iCloud 账户切换 |
+| 同步 | SSH/HTTPS 多设备合并、断网恢复、本机重建 |
 | 系统电源与 helper | 首次授权、任务运行/等待切换、低电量、时长上限、外部睡眠来源、异常退出与重启 |
 | 自动重置唤醒 | 计划替换、关闭与退出清理、连接中断、helper 重启、注销前清零、到点重新读取 |
 

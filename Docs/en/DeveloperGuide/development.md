@@ -27,14 +27,14 @@ Daily builds do not need Developer ID or notarization credentials. See [AGENTS.m
 | Live tasks and protection | `CodexActivityMonitor` and readers | [Live Task Monitoring](activity-monitor.md) |
 | Sleep prevention and system wakes | `KeepAliveController`, `AutoResetWakeScheduler`, helper | [Sleep Prevention](sleep-prevention.md) |
 | Notifications and sound | `CodexNotificationService`, notification Settings | [Notifications](notifications.md) |
-| Sync | `WorkflowSyncService` and scheduler | [CloudKit Sync](sync.md) |
+| Sync | `UsageCollectorClient` and local maintenance | [Multi-device statistics](sync.md) |
 | Menus, windows, hot keys | `Controllers` and corresponding views | [UI and Lifecycle](ui-and-lifecycle.md) |
 
 `CodexBarAppDelegate` assembles long-lived objects. Add state to its existing owner where possible; views consume snapshots and emit action intents. See [Architecture](architecture.md) for source entry points.
 
 ## Change Review
 
-Changes to persisted keys, schemas, identity computation, minimum OS versions, or version coexistence require explaining the impact and compatibility options, then waiting for the user’s choice. Review [Data and Privacy Boundaries](data-and-privacy.md) before adding networking, log fields, or CloudKit fields.
+Changes to persisted keys, schemas, identity computation, minimum OS versions, or version coexistence require explaining the impact and compatibility options, then waiting for the user’s choice. Review [Data and Privacy Boundaries](data-and-privacy.md) before adding networking, log fields.
 
 Changes to aggregation algorithms, output semantics, or deduplication increment `WorkflowMaintenanceState.currentAggregationSchema` and rebuild from retained raw JSONL instead of adding field-level historical migrations.
 
@@ -61,7 +61,7 @@ Documentation-only changes run format checks, lint, and build, plus relative-lin
 | Live tasks | Bootstrap without replayed alerts, approval waits, late terminals, anonymous tasks, wake read-barrier failure and recovery |
 | Notifications | Authorization denial/recovery, threshold crossing, cycle deduplication, withdrawal after progress, missing sounds |
 | Proxy | First configuration, enable/disable, disable invalid data, delete corrupt records, cancel tests, rapid actions and failure rollback |
-| Sync | First upload, multiple devices, offline recovery, partial upload failure, rebuild replacement, iCloud account changes |
+| Sync | SSH/HTTPS aggregation, offline recovery, and local rebuilds |
 | Power and helper | First approval, running/waiting transitions, low battery, duration limit, external sleep sources, abnormal exit and restart |
 | Automatic Reset wakes | Replace schedules, disable/exit cleanup, connection loss, helper restart, clear before unregistering, fresh reads when due |
 
@@ -123,4 +123,4 @@ Helper cleanup cancels and verifies an empty system wake schedule before unregis
 
 ## Fork integration
 
-Use bash Scripts/build-local.sh for the independent Debug build and bash Scripts/verify-usage-center.sh for regression checks. Release workflow configuration and migration instructions are in the [fork release guide](../../DeveloperGuide/releasing.md). Manually verify all provider transitions, close/reopen, expansion, and side-panel cleanup. Ad-hoc builds cannot validate signed Helper or CloudKit operation.
+Use bash Scripts/build-local.sh for the independent Debug build and bash Scripts/verify-usage-center.sh for regression checks. Release workflow configuration and migration instructions are in the [fork release guide](../../DeveloperGuide/releasing.md). Manually verify all provider transitions, close/reopen, expansion, and side-panel cleanup. Ad-hoc builds cannot validate signed Helper operation.

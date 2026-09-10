@@ -11,7 +11,7 @@
 | [Live Tasks and CodexBar Hook](activity-and-hook.md) | What the Hook does, how to enable it, task states, and historical metrics |
 | [Notifications and Alerts](notifications.md) | Triggers, defaults, sounds, and haptic feedback for each notification type |
 | [Preventing System Sleep](sleep-prevention.md) | Activation conditions, protection options, CodexBarHelper authorization, and coexistence with external sleep settings |
-| [Data, Sync, and Privacy](sync-data-privacy.md) | Local data, iCloud sync, rebuilding data, and network boundaries |
+| [Data, Sync, and Privacy](sync-data-privacy.md) | Local data, SSH/HTTPS statistics, rebuilding data, and network boundaries |
 | [Settings Reference](settings.md) | Every setting on the General, Advanced, and About pages, including Automatic Reset |
 | [Troubleshooting](troubleshooting.md) | Sign-in, Hook, notifications, Automatic Reset, sleep prevention, sync, and logging issues |
 

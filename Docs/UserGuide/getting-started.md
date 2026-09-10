@@ -8,7 +8,6 @@
 - 已安装并登录 [Codex CLI](https://github.com/openai/codex)，或安装了内置 Codex 的 ChatGPT App 或 Codex App
 - 当前使用的 Codex 版本需要为 `0.143.0` 或更高版本
 - 使用 Hook 相关功能时，当前使用的 Codex 版本需要为 `0.145.0` 或更高版本
-- 使用跨设备同步时，Mac 需要登录可用的 iCloud 账户
 
 CodexBar 默认自动选择来源，优先使用全局安装的 Codex CLI，找不到时再尝试 ChatGPT App 和 Codex App 内置的 Codex。可在“设置 > 关于 > Codex 版本 > 来源”中手动选择。
 
@@ -64,7 +63,6 @@ CodexBar 每 60 秒自动刷新一次账户、额度和 Token 用量，双击主
 - [系统通知](notifications.md)：任务和额度提醒，需允许 macOS 通知权限
 - [自动重置](settings.md#自动重置)：提前使用即将过期的留存重置，可能短暂唤醒 Mac
 - [防止系统睡眠](sleep-prevention.md)：长任务期间保持 Mac 唤醒，需批准后台服务
-- [跨设备同步](sync-data-privacy.md)：合并多台 Mac 的 Hook 统计，需登录 iCloud
 
 ## 语言与地区
 
@@ -76,7 +74,7 @@ CodexBar 提供简体中文和英文界面，默认跟随 macOS 的 App 语言�
 
 ## 独立版本与功能依赖
 
-本 fork 使用独立应用和 Helper 标识。首次切换请按 [迁移说明](migration.md) 复制旧设置和统计；系统后台权限、开机启动、通知及 Hook 需要在新安装中重新确认。Helper 与 iCloud 还需要维护者正确配置 Apple 签名，单纯登录 iCloud 不能替代签名条件。
+本 fork 使用独立应用和 Helper 标识。首次切换请按 [迁移说明](migration.md) 复制旧设置和统计；系统后台权限、开机启动、通知及 Hook 需要在新安装中重新确认。原 Helper 仍需要匹配的 Apple 签名。iCloud 功能已从本 fork 移除。
 
 ## 多机器与 Claude
 
@@ -88,4 +86,4 @@ CodexBar 提供简体中文和英文界面，默认跟随 macOS 的 App 语言�
 
 当前 Release 提供通用 DMG，将 `CodexBar Fork.app` 拖入 Applications 后打开即可。若系统阻止首次启动，到 `系统设置 > 隐私与安全性` 选择 `仍要打开` 并确认。无需关闭系统的整体安全保护。操作位置见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)
 
-当前 ad-hoc 构建没有可供 Helper 验证的 Team ID，也没有 CloudKit 权限，因此防睡眠、自动重置及 iCloud 不可用；这些限制与是否手动允许启动 App 是两回事。统计、官网分析、SSH/HTTPS 与 Sparkle 更新不依赖这些权限。
+当前 ad-hoc 构建没有可供 Helper 验证的 Team ID，因此防睡眠和自动重置暂不可用。iCloud 功能已移除。这些限制与是否手动允许启动 App 是两回事。统计、官网分析、SSH/HTTPS 与 Sparkle 更新不依赖这些权限。

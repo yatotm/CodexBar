@@ -194,7 +194,7 @@ subagent 事件更新父任务的 subagent 活动，不创建独立顶层任务�
 
 明确的 `main` 或 `auxiliary` 事件随后命中同一 key 时，来源事实优先并清除这条忽略记忆。Auto-review 事件缺少 turn ID 时只忽略当前事件，不建立 session 级黑名单。
 
-其他 subagent（包括 Memories）归类为 `auxiliary`，按辅助任务事件参与关联。原始 Hook 事件仍进入历史聚合，实时 Auto-review 过滤不改变统计或 CloudKit 数据。
+其他 subagent（包括 Memories）归类为 `auxiliary`，按辅助任务事件参与关联。原始 Hook 事件仍进入历史聚合，实时 Auto-review 过滤不改变统计结果。
 
 JSONL 中缺少 `origin` 或来源枚举无法识别时，来源字段先解码为 `unknown`。同一记录的 model 精确匹配 `codex-auto-review` 时，事件模型将来源归一化为 `.autoReview`；其他记录保持 `.unknown`。这一步只使用记录已有字段，不为来源分类额外扫描历史 rollout，也不回写原始 Hook 记录。
 

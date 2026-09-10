@@ -13,7 +13,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let codexHookSettings: CodexHookSettings
     private let codexCLINotificationSettings: CodexCLINotificationSettings
     private let activityMonitor: CodexActivityMonitor
-    private let syncSettings: WorkflowSyncSettings
     private let globalHotKeySettings: GlobalHotKeySettings
     private let menuBarQuotaSettings: MenuBarQuotaSettings
     private let mainPanelSettings: MainPanelSettings
@@ -49,7 +48,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         proxySettings: proxySettings,
         codexHookSettings: codexHookSettings,
         codexCLINotificationSettings: codexCLINotificationSettings,
-        syncSettings: syncSettings,
         globalHotKeySettings: globalHotKeySettings,
         menuBarQuotaSettings: menuBarQuotaSettings,
         mainPanelSettings: mainPanelSettings,
@@ -59,27 +57,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         keepAliveController: keepAliveController
     ) { [weak self] in
         self?.statusItem.button?.window?.screen
-    } onSyncChanged: { [weak self] _ in
-        // setEnabled 在回调之前已经写回属性, 现场求值就是新结论
-        self?.workflowSyncScheduler.requestSync(trigger: .settings)
     } onRebuildWorkflowData: { [weak self] dateKeys, completion in
         guard let self else {
             completion(.failure(CancellationError()))
             return
         }
-        workflowSyncScheduler.requestRebuild(for: dateKeys, completion: completion)
+        workflowMaintenanceScheduler.requestRebuild(for: dateKeys, completion: completion)
     }
 
     private lazy var logWindowController = LogWindowController { [weak self] in
         self?.statusItem.button?.window?.screen
     }
 
-    private lazy var workflowSyncScheduler = WorkflowSyncScheduler(
-        viewModel: workflowViewModel,
-        syncActivation: { [weak self] in
-            self?.workflowSyncActivation ?? .syncOff
-        }
-    )
+    private lazy var workflowMaintenanceScheduler = WorkflowMaintenanceScheduler(viewModel: workflowViewModel)
 
     private lazy var menuSurfaceFadeCoordinator = MenuSurfaceFadeCoordinator(
         contentViewProvider: { [weak self] in
@@ -121,7 +111,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         codexHookSettings: CodexHookSettings,
         codexCLINotificationSettings: CodexCLINotificationSettings,
         activityMonitor: CodexActivityMonitor,
-        syncSettings: WorkflowSyncSettings,
         globalHotKeySettings: GlobalHotKeySettings,
         menuBarQuotaSettings: MenuBarQuotaSettings,
         mainPanelSettings: MainPanelSettings,
@@ -138,7 +127,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         self.codexHookSettings = codexHookSettings
         self.codexCLINotificationSettings = codexCLINotificationSettings
         self.activityMonitor = activityMonitor
-        self.syncSettings = syncSettings
         self.globalHotKeySettings = globalHotKeySettings
         self.menuBarQuotaSettings = menuBarQuotaSettings
         self.mainPanelSettings = mainPanelSettings
@@ -454,7 +442,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         observeGlobalHotKeySettings()
         // 订阅时 CombineLatest 会同步发出当前值, 初始图标由订阅路径统一渲染
         observeViewModel()
-        observeWorkflowSyncState()
+        observeWorkflowMaintenanceState()
         codexHookSettings.reconcileInstalledHooks()
         observeMainPanelHookState()
         viewModel.startAutoRefresh()
@@ -466,7 +454,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         auxiliaryWindowFocusRestoreTask?.cancel()
         statusIconAnimationTask?.cancel()
         statusToolTipTask?.cancel()
-        workflowSyncScheduler.cancel()
+        workflowMaintenanceScheduler.cancel()
         setAuxiliaryWindowKeyFocus(true)
         globalHotKeyController.uninstall()
         cancellables.removeAll()
@@ -600,7 +588,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             .store(in: &cancellables)
     }
 
-    private func observeWorkflowSyncState() {
+    private func observeWorkflowMaintenanceState() {
         codexHookSettings.$isEnabled
             .removeDuplicates()
             .sink { [weak self] isEnabled in
@@ -610,21 +598,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
                 if isEnabled {
                     // 回调跑在 willSet, codexHookSettings.isEnabled 此刻还是旧值, 只能用参数
-                    workflowSyncScheduler.requestSync(
-                        trigger: .hookEnabled,
-                        activation: syncSettings.activation(isHookEnabled: true)
-                    )
+                    workflowMaintenanceScheduler.requestMaintenance(trigger: .hookEnabled)
                 } else {
-                    workflowSyncScheduler.clearPendingMaintenance()
+                    workflowMaintenanceScheduler.clearPendingMaintenance()
                     activityCenterPanelController.hide(immediate: true)
                 }
-            }
-            .store(in: &cancellables)
-
-        syncSettings.$syncAvailability
-            .removeDuplicates()
-            .sink { [weak self] availability in
-                self?.handleSyncChanged(isSyncAvailable: availability.isAvailable)
             }
             .store(in: &cancellables)
     }
@@ -1215,36 +1193,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // Hook 与额度使用同一刷新节奏, 配置和信任状态损坏后都能自动收敛
         codexHookSettings.reconcileInstalledHooks()
         guard codexHookSettings.isEnabled else {
-            workflowSyncScheduler.clearPendingMaintenance()
+            workflowMaintenanceScheduler.clearPendingMaintenance()
             return
         }
 
         if performMaintenance {
             // 统计维护挂在额度刷新完成事件上, 触发来源继承那一次刷新
-            workflowSyncScheduler.requestMaintenance(
-                allowsSync: true,
+            workflowMaintenanceScheduler.requestMaintenance(
                 trigger: viewModel.lastRefreshTrigger
             )
         } else {
             workflowViewModel.refreshIfNeeded()
         }
-    }
-
-    /// isSyncAvailable 由调用方传入
-    /// 从 $syncAvailability 的订阅进来时 syncSettings.isSyncAvailable 还是旧值, 只有回调参数是新的
-    /// 不在这里判断该不该跳过: requestSync 的 guard 已经统一处理并记下 reason=
-    private func handleSyncChanged(isSyncAvailable: Bool) {
-        workflowSyncScheduler.requestSync(
-            trigger: .settings,
-            activation: syncSettings.activation(
-                isHookEnabled: codexHookSettings.isEnabled,
-                isSyncAvailable: isSyncAvailable
-            )
-        )
-    }
-
-    private var workflowSyncActivation: WorkflowSyncActivation {
-        syncSettings.activation(isHookEnabled: codexHookSettings.isEnabled)
     }
 
     // MARK: - 侧边面板
@@ -1436,7 +1396,6 @@ private extension StatusItemController {
             codexHookSettings: codexHookSettings,
             mainPanelSettings: mainPanelSettings,
             activityMonitor: activityMonitor,
-            syncSettings: syncSettings,
             keepAliveController: keepAliveController,
             menuSurfaceVisibility: menuSurfaceVisibility,
             animationState: animationState,

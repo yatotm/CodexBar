@@ -125,7 +125,6 @@ The bottom of the main panel shows:
 
 - Data update time
 - Countdown to the next automatic refresh
-- iCloud sync status: off, syncing, synced, or failed
 - Available-update indicator
 
 When a new version is available, double-click the update indicator to start the update.
