@@ -17,7 +17,21 @@ SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 ET.register_namespace("sparkle", SPARKLE)
 
 
-def package(app, output, signer):
+def signing_team(path):
+    result = subprocess.run(["codesign", "-dv", str(path)], capture_output=True, text=True, check=True)
+    match = re.search(r"^TeamIdentifier=([A-Za-z0-9]+)$", result.stderr, re.M)
+    return match.group(1) if match else None
+
+
+def supports_power_service(app):
+    team = signing_team(app)
+    helper_team = signing_team(app / "Contents/Resources/CodexBarHelper")
+    if team and team != helper_team:
+        raise ValueError("App 与电源组件签名身份不一致")
+    return team is not None
+
+
+def package(app, output, signer, keychain_account=None):
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
     version = info["CFBundleShortVersionString"]
     build = info["CFBundleVersion"]
@@ -28,8 +42,8 @@ def package(app, output, signer):
     if info.get("SUFeedURL") != f"https://github.com/{REPOSITORY}/releases/latest/download/appcast.xml":
         raise ValueError("更新地址没有指向当前 fork")
     private_key = os.environ.get("SPARKLE_PRIVATE_KEY", "").strip()
-    if not private_key:
-        raise ValueError("未配置 SPARKLE_PRIVATE_KEY")
+    if not private_key and not keychain_account:
+        raise ValueError("未配置更新签名私钥或钥匙串账户")
     output.mkdir(parents=True, exist_ok=True)
     archive = output / f"CodexBar-fork-v{version}.zip"
     dmg = output / f"CodexBar-fork-v{version}.dmg"
@@ -39,21 +53,29 @@ def package(app, output, signer):
     architectures = subprocess.run(["lipo", "-archs", str(executable)], capture_output=True, text=True, check=True).stdout.split()
     if not {"arm64", "x86_64"}.issubset(architectures):
         raise ValueError("发布包必须同时支持 Apple 芯片和 Intel")
-    subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
+    subprocess.run(["codesign", "--verify", "--all-architectures", "--deep", "--strict", str(app)], check=True)
+    helper = app / "Contents/Resources/CodexBarHelper"
+    helper_architectures = subprocess.run(["lipo", "-archs", str(helper)], capture_output=True, text=True, check=True).stdout.split()
+    if not {"arm64", "x86_64"}.issubset(helper_architectures):
+        raise ValueError("电源组件必须同时支持 Apple 芯片和 Intel")
+    power_available = supports_power_service(app)
     subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app), str(archive)], check=True)
     with tempfile.TemporaryDirectory(prefix="codexbar-dmg-") as directory:
         stage = pathlib.Path(directory)
         subprocess.run(["ditto", str(app), str(stage / app.name)], check=True)
         (stage / "Applications").symlink_to("/Applications")
+        power_note = ("防睡眠与自动重置需在首次开启时确认, 并按提示允许 CodexBar 后台运行\n" if power_available
+                      else "此包使用临时签名, 防睡眠及自动重置不可用\n")
         (stage / "安装说明.txt").write_text(
             "将 CodexBar.app 拖入 Applications, 然后从应用程序打开\n"
             "本版未经过 Apple 公证, 首次打开若被阻止, 在系统设置 > 隐私与安全性中选择仍要打开\n"
-            "统计与 SSH/HTTPS 可用; Helper, 防睡眠及自动重置暂不可用; iCloud 已移除\n"
+            + power_note +
             "安装帮助: https://support.apple.com/zh-cn/102445\n"
         )
         subprocess.run(["hdiutil", "create", "-volname", "CodexBar", "-srcfolder", str(stage), "-format", "UDZO", str(dmg)], check=True)
-    result = subprocess.run([str(signer), "--ed-key-file", "-", "-p", str(archive)],
-                            input=private_key, capture_output=True, text=True, check=True)
+    signing_arguments = ["--account", keychain_account] if keychain_account else ["--ed-key-file", "-"]
+    result = subprocess.run([str(signer), *signing_arguments, "-p", str(archive)],
+                            input=None if keychain_account else private_key, capture_output=True, text=True, check=True)
     signature = result.stdout.strip()
     if not re.fullmatch(r"[A-Za-z0-9+/]{86}==", signature):
         raise ValueError("Sparkle 返回了无效签名")
@@ -89,5 +111,6 @@ if __name__ == "__main__":
     parser.add_argument("--app", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--signer", type=pathlib.Path, required=True)
+    parser.add_argument("--keychain-account", help="本机 Sparkle 钥匙串账户, 无需导出私钥")
     args = parser.parse_args()
-    package(args.app.resolve(), args.output.resolve(), args.signer.resolve())
+    package(args.app.resolve(), args.output.resolve(), args.signer.resolve(), args.keychain_account)

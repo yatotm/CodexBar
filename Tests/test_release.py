@@ -11,7 +11,25 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("publish_release", Path(__file__).resolve().parents[1] / "Scripts/publish-release.py")
 publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
+package_spec = importlib.util.spec_from_file_location("package_release", Path(__file__).resolve().parents[1] / "Scripts/package-release.py")
+packager = importlib.util.module_from_spec(package_spec)
+package_spec.loader.exec_module(packager)
 COMMIT = "a" * 40
+
+
+class PackageSigningTests(unittest.TestCase):
+    def test_matching_team_enables_power_in_install_notes(self):
+        with patch.object(packager, "signing_team", side_effect=["TEAM", "TEAM"]):
+            self.assertTrue(packager.supports_power_service(Path("CodexBar.app")))
+
+    def test_ad_hoc_package_keeps_power_unavailable(self):
+        with patch.object(packager, "signing_team", side_effect=[None, None]):
+            self.assertFalse(packager.supports_power_service(Path("CodexBar.app")))
+
+    def test_mismatched_helper_signer_is_rejected(self):
+        with patch.object(packager, "signing_team", side_effect=["TEAM", "OTHER"]):
+            with self.assertRaisesRegex(ValueError, "签名身份不一致"):
+                packager.supports_power_service(Path("CodexBar.app"))
 
 
 class ReleaseTests(unittest.TestCase):

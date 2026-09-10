@@ -47,7 +47,7 @@ ad-hoc 构建可用于本地验证，缺少匹配签名时原 Helper 不可用�
 
 当前 Release 提供通用 DMG，将 `CodexBar.app` 拖入 Applications 后打开即可。若系统阻止首次启动，到 `系统设置 > 隐私与安全性` 选择 `仍要打开` 并确认。无需关闭系统的整体安全保护。操作位置见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)
 
-当前 ad-hoc 构建没有可供 Helper 验证的 Team ID，因此防睡眠和自动重置暂不可用。iCloud 功能已移除。这些限制与是否手动允许启动 App 是两回事。统计、官网分析、SSH/HTTPS 与 Sparkle 更新不依赖这些权限。
+本版使用开发签名，防睡眠和自动重置需在首次开启时确认，并按提示允许 CodexBar 后台运行。自行构建的临时签名包没有可验证的 Team ID，这两项功能仍不可用。iCloud 已移除，统计、官网分析、SSH/HTTPS 与 Sparkle 更新不依赖电源权限。
 
 ## 从旧名称升级
 

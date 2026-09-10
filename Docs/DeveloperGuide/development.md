@@ -147,3 +147,9 @@ defaults write io.github.yatotm.codexbar.build signingIdentity -string "证书 S
 ```
 
 `CODEXBAR_SIGNING_IDENTITY=-` 可显式构建临时签名包。证书不可用时构建失败，不静默降级。异常退出恢复已实测，本次强制结束 App 后约 16 秒恢复系统睡眠设置。
+
+## 本机打包并发布
+
+需要保留电源功能时，使用已配置开发签名的 Mac 构建，再运行 `Scripts/package-release.py --keychain-account yatotm.CodexBar`。打包器验证主 App 与电源组件的签名身份及双架构，直接通过钥匙串签署 Sparkle 更新，不导出私钥。
+
+确认发布后，推送对应提交，并用 `Scripts/publish-release.py` 创建附注 tag、上传附件和公开 Release。普通推送只运行验证。GitHub 托管构建未配置开发签名时仍生成临时签名包，其电源功能不可用，不能替代本机的开发签名产物。

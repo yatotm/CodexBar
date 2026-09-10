@@ -15,7 +15,7 @@ bash Scripts/build-local.sh
 
 `build-local.sh` 默认生成 Debug 应用，产物放在 `~/Library/Caches/CodexBar/LocalBuild`。Xcode 26.3 无法直接读取上游工程的格式标记，脚本只调整临时副本，保留仓库工程。使用 `CODEXBAR_BUILD_CONFIGURATION=Release` 构建正式配置，`CODEXBAR_LOCAL_OUTPUT` 可指定产物目录。
 
-本地脚本使用 ad-hoc 签名，工程不再包含 CloudKit 权限。它适合验证和无需 Apple 凭据的构建，不等同于 Developer ID 签名或公证。Debug 应用不接入正式更新通道。
+本地脚本沿用已配置的开发签名；没有签名身份时回退到临时签名。工程不包含 CloudKit 权限，Debug 应用不接入正式更新通道。开发签名不等同于 Developer ID 公证。
 
 ## 发布流程
 
@@ -23,9 +23,9 @@ bash Scripts/build-local.sh
 
 1. 准备 `Config/Version.xcconfig` 和对应的 `ReleaseNotes/fork-vX.Y.Z.md`，完成本地验证
 2. 向用户说明本次内容，取得针对本次创建 tag 和 Release 的明确同意
-3. 在 Actions 手动运行 `Release`，选择 `main` 并勾选本次发布确认
+3. 保留电源功能时，在已配置开发签名的 Mac 构建，使用下方本机流程；只需要临时签名包时，可在 Actions 手动运行 `Release`
 
-确认后，工作流自动检查格式、运行回归检查、构建、打包和验签，然后创建附注 tag 与 GitHub Release，上传 DMG、ZIP、`appcast.xml` 和 `SHA256SUMS.txt`。本地候选包不代表已发布，历史授权不能用于下一次发布。
+发布脚本创建附注 tag 与 GitHub Release，上传 DMG、ZIP、`appcast.xml` 和 `SHA256SUMS.txt`。本地候选包不代表已发布，历史授权不能用于下一次发布。
 
 云端使用 macOS 26 和 Xcode 26.3，应用最低要求仍为 macOS 15。同一 tag 不移动，已公开附件不覆盖；失败后重试也必须核对本次授权范围。
 
@@ -49,6 +49,23 @@ CloudKit 及其容器配置已从工程移除。仓库不再包含原作者的�
 
 旧安装迁移步骤见 [切换到独立 fork](../UserGuide/migration.md)。迁移不更改 schema，也不修改原安装的数据。
 
-当前发布工作流使用 ad-hoc 签名并生成未公证 DMG，安装步骤和功能限制写入对应 ReleaseNotes。不能把 Sparkle 验签通过表述为 Apple 公证通过。未来改用正式 Apple 签名时保留现有 fork 标识与 Sparkle 公钥。
+本次公开产物由维护者本机开发签名并打包，签名私钥不上传 GitHub。云端工作流未配置 Apple 签名时仍生成临时签名包，不能替代带电源功能的产物。安装说明按实际签名生成；Sparkle 验签不代表 Apple 公证。
 
 发布包同时包含 `arm64` 与 `x86_64`。M 芯片运行原生 ARM 代码，Release 保持 Swift `-O` 优化；打包时检查架构，防止误发单架构产物。
+
+## 本机发布命令
+
+先完成对应提交的构建与验证，再推送该提交。打包输出目录必须为空：
+
+```bash
+CODEXBAR_BUILD_CONFIGURATION=Release bash Scripts/build-local.sh
+python3 Scripts/package-release.py \
+  --app "$HOME/Library/Caches/CodexBar/LocalBuild/CodexBar.app" \
+  --output /tmp/codexbar-release \
+  --signer "$HOME/Library/Caches/CodexBar/LocalBuild/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update" \
+  --keychain-account yatotm.CodexBar
+python3 Scripts/publish-release.py --directory /tmp/codexbar-release \
+  --tag fork-vX.Y.Z --commit "$(git rev-parse HEAD)"
+```
+
+最后一条命令需要已登录的 GitHub CLI 和本次发布授权。完成后获取远端 tag，并检查 Release 附件、校验和与更新源。
