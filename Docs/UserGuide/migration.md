@@ -42,3 +42,9 @@ ad-hoc 构建可用于本地验证，缺少正式签名时 Helper 和 iCloud 不
 首次从上游或旧 Debug 切换必须手动安装。新正式版只检查本仓库的更新，Debug 不接入正式更新通道。
 
 返回 [用户指南](README.md)
+
+## 未公证安装包首次打开
+
+当前 Release 提供通用 DMG，将 `CodexBar Fork.app` 拖入 Applications 后打开即可。若系统阻止首次启动，到 `系统设置 > 隐私与安全性` 选择 `仍要打开` 并确认。无需关闭系统的整体安全保护。操作位置见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)
+
+当前 ad-hoc 构建没有可供 Helper 验证的 Team ID，也没有 CloudKit 权限，因此防睡眠、自动重置及 iCloud 不可用；这些限制与是否手动允许启动 App 是两回事。统计、官网分析、SSH/HTTPS 与 Sparkle 更新不依赖这些权限。

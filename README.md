@@ -84,6 +84,8 @@ CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，集中展示 Codex
 
 从本仓库的 [GitHub Releases](https://github.com/yatotm/CodexBar/releases/latest) 下载应用，解压后拖入 Applications。安装包名为 `CodexBar Fork.app`。首次切换请手动安装并按 [迁移说明](Docs/UserGuide/migration.md) 复制旧数据，之后由本分支独立更新。
 
+> 当前 Release 是未公证的通用构建，无需自行编译。首次打开若被系统阻止，请在 `系统设置 > 隐私与安全性` 中选择 `仍要打开`。菜单栏、用量中心和 SSH/HTTPS 统计可用；Helper、防睡眠、自动重置及 iCloud 同步暂不可用。
+
 ### 从源码构建
 
 ```bash

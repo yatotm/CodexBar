@@ -83,3 +83,9 @@ CodexBar 提供简体中文和英文界面，默认跟随 macOS 的 App 语言�
 日志采集需要 Python 3.9 或更新版本，无需额外 Python 包。点击 `用量详情` 添加来源；先按 SSH 连接和缓存目录确认设备，再查看合并统计。Claude 使用已有日志和额度缓存，不另外登录或请求 Anthropic。
 
 普通周期刷新在系统睡眠时暂停，正式唤醒后恢复；不亮屏的后台唤醒不会自行解除暂停。VPS 定时采集独立运行。
+
+## 未公证安装包首次打开
+
+当前 Release 提供通用 DMG，将 `CodexBar Fork.app` 拖入 Applications 后打开即可。若系统阻止首次启动，到 `系统设置 > 隐私与安全性` 选择 `仍要打开` 并确认。无需关闭系统的整体安全保护。操作位置见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)
+
+当前 ad-hoc 构建没有可供 Helper 验证的 Team ID，也没有 CloudKit 权限，因此防睡眠、自动重置及 iCloud 不可用；这些限制与是否手动允许启动 App 是两回事。统计、官网分析、SSH/HTTPS 与 Sparkle 更新不依赖这些权限。

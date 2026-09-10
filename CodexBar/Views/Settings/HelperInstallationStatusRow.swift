@@ -22,7 +22,10 @@ struct HelperInstallationStatusRow: View {
     }
 
     private var statusPresentation: (text: LocalizedStringKey, color: Color) {
-        switch status {
+        if !KeepAliveHelperConfiguration.supportsHelper {
+            return ("helper.status.signing-unavailable", .gray)
+        }
+        return switch status {
         case .notRegistered:
             ("settings.about.helper.not-installed", .gray)
         case .enabled:

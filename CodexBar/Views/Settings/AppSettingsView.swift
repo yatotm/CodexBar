@@ -457,7 +457,8 @@ private extension AppSettingsView {
                             autoResetSettings.setEnabled(enabled)
                         }
                     }
-                )
+                ),
+                isEnabled: KeepAliveHelperConfiguration.supportsHelper
             ) {
                 SettingsOptionsButton(isAvailable: canShowOptions) {
                     onOptionsAction(
@@ -500,9 +501,7 @@ private extension AppSettingsView {
                 showsSystemSettingsButton: true
             )
         case .notRegistered, .notFound:
-            return SettingsStatusCaption(
-                message: String(localized: "helper.status.not-registered")
-            )
+            return SettingsStatusCaption(message: String(localized: "helper.status.not-registered"))
         case .enabled:
             guard let errorMessage = keepAliveController
                 .autoResetWakeScheduleErrorMessage else {
@@ -531,7 +530,7 @@ private extension AppSettingsView {
                         }
                     }
                 ),
-                isEnabled: codexHookSettings.isOperable && !codexHookSettings.isUpdating
+                isEnabled: KeepAliveHelperConfiguration.supportsHelper && codexHookSettings.isOperable && !codexHookSettings.isUpdating
             ) {
                 SettingsOptionsButton(isAvailable: canShowKeepAliveOptions) {
                     onOptionsAction(

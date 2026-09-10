@@ -9,3 +9,15 @@
 - 下载、反馈和 Sparkle 更新均指向本仓库，tag 使用独立的 fork-v 前缀
 
 统计仅覆盖可获取的数据，美元结果为估算。首次从上游或开发构建切换时，请手动安装此版本。
+
+## 安装
+
+本版提供 Intel / Apple 芯片通用 DMG，无需自行编译。
+
+1. 下载 `CodexBar-fork-v1.0.0.dmg`，打开后将 `CodexBar Fork.app` 拖入 Applications
+2. 从 Applications 打开 App
+3. 本版未经过 Apple 公证，如系统阻止打开，进入 `系统设置 > 隐私与安全性`，按提示选择 `仍要打开`
+
+本版采用 ad-hoc 应用签名，更新包另有独立 Sparkle 签名。菜单栏、Codex/Claude 统计、多机器同步和用量中心可用；Helper、防睡眠、自动重置及 iCloud 同步不可用，相关入口不会要求重复授权。SSH/HTTPS 统计不受此限制。
+
+从之前的开发构建切换，请先参考 [迁移说明](https://github.com/yatotm/CodexBar/blob/main/Docs/UserGuide/migration.md)。首次打开的系统操作见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)

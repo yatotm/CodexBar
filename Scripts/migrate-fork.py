@@ -33,6 +33,9 @@ def migrated_preferences(values):
     # 新 Helper 和 CloudKit 需要重新启用, 不继承旧安装的授权与运行状态
     result = {key: value for key, value in values.items()
               if not key.startswith(("SU", "NSWindow", "NSStatusItem", "Helper", "AppProcessDiagnostics", "WorkflowSync.", "KeepAlive.helper"))}
+    for key in ("SUEnableAutomaticChecks", "SUAutomaticallyUpdate"):
+        if key in values:
+            result[key] = values[key]
     for key in ("AutoReset.enabled", "KeepAlive.isEnabled", "WorkflowSync.isEnabled"):
         result[key] = False
     return result

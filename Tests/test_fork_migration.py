@@ -18,7 +18,7 @@ class MigrationTests(unittest.TestCase):
     def test_preserves_preferences_but_requires_new_authorization(self):
         source = {"AutoReset.enabled": True, "KeepAlive.isEnabled": True,
                   "WorkflowSync.isEnabled": True, "WorkflowSync.cursor": "old",
-                  "SUFeedURL": "old", "UsageAnalytics.quotaReference.hash": "pro5x",
+                  "SUFeedURL": "old", "SUEnableAutomaticChecks": False, "UsageAnalytics.quotaReference.hash": "pro5x",
                   "CodexProxy.configuration": b"fixture"}
         result = migration.migrated_preferences(source)
         self.assertTrue(source["AutoReset.enabled"])
@@ -27,6 +27,7 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse(result["WorkflowSync.isEnabled"])
         self.assertNotIn("WorkflowSync.cursor", result)
         self.assertNotIn("SUFeedURL", result)
+        self.assertIs(result["SUEnableAutomaticChecks"], False)
         self.assertEqual(result["CodexProxy.configuration"], b"fixture")
         self.assertEqual(result["UsageAnalytics.quotaReference.hash"], "pro5x")
 

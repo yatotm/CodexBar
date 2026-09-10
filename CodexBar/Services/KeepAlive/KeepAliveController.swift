@@ -141,7 +141,7 @@ final class KeepAliveController: ObservableObject {
         self.defaults = defaults
         durationLimiter = KeepAliveDurationLimiter(defaults: defaults)
         isHookEnabled = codexHookSettings.isOperable
-        isEnabled = defaults.bool(forKey: Self.enabledKey)
+        isEnabled = KeepAliveHelperConfiguration.supportsHelper && defaults.bool(forKey: Self.enabledKey)
         // 默认关闭: 老版本升上来的用户不该多出一条中断任务的路径
         lowBatteryThreshold = (defaults.object(forKey: Self.lowBatteryThresholdKey) as? Int)
             .flatMap(LowBatteryThreshold.init(rawValue:)) ?? .off
@@ -284,7 +284,7 @@ final class KeepAliveController: ObservableObject {
 
     func setEnabled(_ enabled: Bool) {
         // 与 sleepBlockReason 读同一份镜像, 类内只保留一个 Hook 状态的真相来源
-        guard !enabled || isHookEnabled else {
+        guard !enabled || (KeepAliveHelperConfiguration.supportsHelper && isHookEnabled) else {
             return
         }
         guard enabled != isEnabled else {
@@ -530,6 +530,7 @@ final class KeepAliveController: ObservableObject {
     }
 
     private func ensureHelperRegistration() {
+        guard KeepAliveHelperConfiguration.supportsHelper else { return }
         guard helperRegistrationTask == nil else {
             return
         }
@@ -693,7 +694,7 @@ final class KeepAliveController: ObservableObject {
 
     private func refreshHelperStatus() {
         let previousStatus = helperStatus
-        assign(HelperStatus(KeepAliveHelperConfiguration.service.status), to: \.helperStatus)
+        assign(KeepAliveHelperConfiguration.supportsHelper ? HelperStatus(KeepAliveHelperConfiguration.service.status) : .notFound, to: \.helperStatus)
         // 每次 App 激活都会跑, 只记真正的迁移, 否则日志会被无变化的求值淹没
         // 取局部量再插值: Logger 的插值是 autoclosure, 直接写属性会被要求显式 self, 与 --self remove 冲突
         let currentStatus = helperStatus

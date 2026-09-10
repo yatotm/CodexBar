@@ -48,3 +48,5 @@ fork 从 `1.0.0` 独立计版本，tag 使用 `fork-vX.Y.Z`，不跟随上游版
 CloudKit 容器为 `iCloud.io.github.yatotm.codexbar`，须在维护者自己的 Apple Developer 团队中配置。仓库不再包含原作者的团队、证书或 provisioning profile。正式签名需提供自己的 Team ID、Developer ID Application 证书和公证凭据；具体费用与申请条件见 [Apple Developer Program](https://developer.apple.com/cn/programs/enroll/)
 
 旧安装迁移步骤见 [切换到独立 fork](../UserGuide/migration.md)。迁移不更改 schema，也不修改原安装的数据。
+
+当前发布工作流使用 ad-hoc 签名并生成未公证 DMG，安装步骤和功能限制写入对应 ReleaseNotes。不能把 Sparkle 验签通过表述为 Apple 公证通过。未来改用正式 Apple 签名时保留现有 fork 标识与 Sparkle 公钥。

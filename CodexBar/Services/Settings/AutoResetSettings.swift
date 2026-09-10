@@ -42,12 +42,12 @@ final class AutoResetSettings: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        isEnabled = defaults.bool(forKey: Self.enabledKey)
+        isEnabled = KeepAliveHelperConfiguration.supportsHelper && defaults.bool(forKey: Self.enabledKey)
         leadTime = Self.loadLeadTime(from: defaults)
     }
 
     func refresh() {
-        let isEnabled = defaults.bool(forKey: Self.enabledKey)
+        let isEnabled = KeepAliveHelperConfiguration.supportsHelper && defaults.bool(forKey: Self.enabledKey)
         if isEnabled != self.isEnabled {
             self.isEnabled = isEnabled
         }
@@ -59,6 +59,7 @@ final class AutoResetSettings: ObservableObject {
     }
 
     func setEnabled(_ enabled: Bool) {
+        guard !enabled || KeepAliveHelperConfiguration.supportsHelper else { return }
         guard enabled != isEnabled else {
             return
         }

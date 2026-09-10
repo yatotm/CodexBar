@@ -1,9 +1,25 @@
 import CryptoKit
 import Foundation
+import Security
 import ServiceManagement
 
 @MainActor
 enum KeepAliveHelperConfiguration {
+    /// ad-hoc 签名没有 Team ID, 不能满足 Helper 的客户端验证条件
+    static let supportsHelper: Bool = {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var information: CFDictionary?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let information = information as? [String: Any],
+              let teamID = information[kSecCodeInfoTeamIdentifier as String] as? String else {
+            return false
+        }
+        return !teamID.isEmpty
+    }()
+
     static let registrationRetryDelays: [Duration] = [
         .milliseconds(500),
         .seconds(1),

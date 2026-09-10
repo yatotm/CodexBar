@@ -1745,6 +1745,12 @@
         }
       }
     },
+    "helper.status.signing-unavailable" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unavailable in this build" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "当前构建不支持" } }
+      }
+    },
     "helper.status.authorization-required" : {
       "localizations" : {
         "en" : {
