@@ -212,7 +212,7 @@ private final class KeepAliveCleanupCommand {
         let bundleIdentifier = configuration.bundleIdentifier
         var candidates: [URL] = []
         if configuration == .release {
-            candidates.append(URL(fileURLWithPath: "/Applications/CodexBar Fork.app"))
+            candidates.append(URL(fileURLWithPath: "/Applications/CodexBar.app"))
         }
         if let registeredURL = NSWorkspace.shared.urlForApplication(
             withBundleIdentifier: bundleIdentifier
@@ -220,7 +220,7 @@ private final class KeepAliveCleanupCommand {
             candidates.append(registeredURL)
         }
         if configuration == .release {
-            candidates.append(projectURL.appending(path: "Build/CodexBar Fork.app"))
+            candidates.append(projectURL.appending(path: "Build/CodexBar.app"))
         }
 
         for candidate in candidates {

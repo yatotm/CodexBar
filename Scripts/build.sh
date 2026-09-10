@@ -49,7 +49,7 @@ Options:
   --notary-password PASSWORD     App-specific password fallback. Prefer profile.
   --skip-notarization            Build/export without notarytool and stapling.
   --skip-spctl-assess            Skip final Gatekeeper spctl assessment.
-  --output-app PATH              Final app path. Defaults to Build/CodexBar Fork.app.
+  --output-app PATH              Final app path. Defaults to Build/CodexBar.app.
   -h, --help                     Show this help.
 
 Recommended credential setup:

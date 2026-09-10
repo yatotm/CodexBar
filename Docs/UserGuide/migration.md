@@ -1,6 +1,6 @@
 # 切换到独立 fork
 
-本分支使用 `CodexBar Fork.app`，与上游的 `CodexBar.app` 分开安装。正式标识为 `io.github.yatotm.codexbar`，Debug 追加 `.debug`。tag 从 `fork-v1.0.0` 开始独立递增，不跟随上游版本。
+本分支使用 `CodexBar.app`，推荐安装到 `/Applications`。显示名称与上游相同，内部标识独立；需要同时保留两版时，请放在不同目录。正式标识为 `io.github.yatotm.codexbar`，Debug 追加 `.debug`。tag 从 `fork-v1.0.0` 开始独立递增，不跟随上游版本。
 
 ## 首次迁移
 
@@ -45,6 +45,10 @@ ad-hoc 构建可用于本地验证，缺少匹配签名时原 Helper 不可用�
 
 ## 未公证安装包首次打开
 
-当前 Release 提供通用 DMG，将 `CodexBar Fork.app` 拖入 Applications 后打开即可。若系统阻止首次启动，到 `系统设置 > 隐私与安全性` 选择 `仍要打开` 并确认。无需关闭系统的整体安全保护。操作位置见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)
+当前 Release 提供通用 DMG，将 `CodexBar.app` 拖入 Applications 后打开即可。若系统阻止首次启动，到 `系统设置 > 隐私与安全性` 选择 `仍要打开` 并确认。无需关闭系统的整体安全保护。操作位置见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)
 
 当前 ad-hoc 构建没有可供 Helper 验证的 Team ID，因此防睡眠和自动重置暂不可用。iCloud 功能已移除。这些限制与是否手动允许启动 App 是两回事。统计、官网分析、SSH/HTTPS 与 Sparkle 更新不依赖这些权限。
+
+## 从旧名称升级
+
+旧安装名为 `CodexBar Fork.app` 时，可通过应用内更新升级，但文件名可能仍保留旧名称；需要改名时，请先退出应用再将文件名改为 `CodexBar.app`。移动到 `/Applications` 前先退出应用，确认目标目录没有需要保留的同名 App；安装完成并核对数据后，删除旧位置的 App。内部标识和数据目录不变，无需重新运行数据迁移工具。已启用的 Hook 和登录项需要核对新路径。

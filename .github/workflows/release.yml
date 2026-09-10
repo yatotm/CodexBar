@@ -1,11 +1,13 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
-    paths: [Config/Version.xcconfig]
-    tags: ['fork-v*']
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 已确认创建 tag 并公开发布本次版本
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -16,7 +18,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.repository == 'yatotm/CodexBar' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/fork-v'))
+    if: github.repository == 'yatotm/CodexBar' && github.ref == 'refs/heads/main' && inputs.publish_release
     runs-on: macos-26
     timeout-minutes: 40
     permissions:
@@ -63,7 +65,7 @@ jobs:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           python3 Scripts/package-release.py \
-            --app "$CODEXBAR_LOCAL_OUTPUT/CodexBar Fork.app" \
+            --app "$CODEXBAR_LOCAL_OUTPUT/CodexBar.app" \
             --output "$RUNNER_TEMP/release" \
             --signer "$CODEXBAR_LOCAL_OUTPUT/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update"
       - name: Publish annotated tag and release

@@ -35,6 +35,10 @@ def package(app, output, signer):
     dmg = output / f"CodexBar-fork-v{version}.dmg"
     if archive.exists() or dmg.exists():
         raise ValueError("发布附件已存在, 请使用空输出目录")
+    executable = app / "Contents/MacOS" / info["CFBundleExecutable"]
+    architectures = subprocess.run(["lipo", "-archs", str(executable)], capture_output=True, text=True, check=True).stdout.split()
+    if not {"arm64", "x86_64"}.issubset(architectures):
+        raise ValueError("发布包必须同时支持 Apple 芯片和 Intel")
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
     subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app), str(archive)], check=True)
     with tempfile.TemporaryDirectory(prefix="codexbar-dmg-") as directory:
@@ -42,7 +46,7 @@ def package(app, output, signer):
         subprocess.run(["ditto", str(app), str(stage / app.name)], check=True)
         (stage / "Applications").symlink_to("/Applications")
         (stage / "安装说明.txt").write_text(
-            "将 CodexBar Fork.app 拖入 Applications, 然后从应用程序打开\n"
+            "将 CodexBar.app 拖入 Applications, 然后从应用程序打开\n"
             "本版未经过 Apple 公证, 首次打开若被阻止, 在系统设置 > 隐私与安全性中选择仍要打开\n"
             "统计与 SSH/HTTPS 可用; Helper, 防睡眠及自动重置暂不可用; iCloud 已移除\n"
             "安装帮助: https://support.apple.com/zh-cn/102445\n"

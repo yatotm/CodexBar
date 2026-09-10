@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "C4A0FD942FD9302E000263A7"
-               BuildableName = "CodexBar Fork.app"
+               BuildableName = "CodexBar.app"
                BlueprintName = "CodexBar"
                ReferencedContainer = "container:CodexBar.xcodeproj">
             </BuildableReference>
@@ -46,7 +46,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "C4A0FD942FD9302E000263A7"
-            BuildableName = "CodexBar Fork.app"
+            BuildableName = "CodexBar.app"
             BlueprintName = "CodexBar"
             ReferencedContainer = "container:CodexBar.xcodeproj">
          </BuildableReference>
@@ -63,7 +63,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "C4A0FD942FD9302E000263A7"
-            BuildableName = "CodexBar Fork.app"
+            BuildableName = "CodexBar.app"
             BlueprintName = "CodexBar"
             ReferencedContainer = "container:CodexBar.xcodeproj">
          </BuildableReference>

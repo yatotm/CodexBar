@@ -51,6 +51,9 @@ Debug 与 Release 使用不同 bundle ID，分别是 `io.github.yatotm.codexbar.
 
 ## Git 补充规则
 
+- 普通提交和本地构建不触发发布，创建 tag 或 Release 必须先获得用户针对本次的明确同意
+- 分发工作流仅保留手动触发和显式确认入口
+
 - 功能、修复和发布类提交必须写 body；简单文档或杂项可以只写标题
 - commit message 使用半角标点，行末不加标点，行内标点后留一个英文空格
 - 多条 body bullet 连续排列，使用同一个 `-m` 参数或通过 `git commit -F` 传入文件

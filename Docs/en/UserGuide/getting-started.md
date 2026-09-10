@@ -75,4 +75,4 @@ Next, read [Main Panel and Menu Bar](main-panel.md) or the [Settings Reference](
 
 ## Fork behavior
 
-Log collection requires Python 3.9 or later. Install CodexBar Fork.app manually for the first switch. Ordinary polling pauses during system sleep and resumes on full wake; DarkWake does not clear that pause. VPS timers run independently. The original Helper requires matching signing and authorization; iCloud has been removed; see the [migration guide](../../UserGuide/migration.md).
+Log collection requires Python 3.9 or later. Install CodexBar.app manually for the first switch. Ordinary polling pauses during system sleep and resumes on full wake; DarkWake does not clear that pause. VPS timers run independently. The original Helper requires matching signing and authorization; iCloud has been removed; see the [migration guide](../../UserGuide/migration.md).

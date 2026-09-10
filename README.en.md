@@ -77,7 +77,7 @@ The new Usage Center currently uses Chinese. See the [usage guide](Docs/UserGuid
 
 ### Download
 
-Download the app from [GitHub Releases](https://github.com/yatotm/CodexBar/releases/latest), extract it, and move it to Applications. Install `CodexBar Fork.app` manually once; follow the [migration guide](Docs/UserGuide/migration.md) to copy existing data. Subsequent versions use independent `fork-v*` tags and their own Sparkle feed.
+Download the app from [GitHub Releases](https://github.com/yatotm/CodexBar/releases/latest), extract it, and move it to Applications. Install `CodexBar.app` manually once; follow the [migration guide](Docs/UserGuide/migration.md) to copy existing data. Subsequent versions use independent `fork-v*` tags and their own Sparkle feed.
 
 > Releases are universal, ad-hoc signed builds without Apple notarization. If macOS blocks the first launch, use Open Anyway in System Settings > Privacy & Security. Usage statistics and SSH/HTTPS sources work; Helper, sleep prevention, and automatic resets are unavailable in this build; iCloud has been removed.
 

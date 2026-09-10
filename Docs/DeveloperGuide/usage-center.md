@@ -116,7 +116,7 @@ xcodebuild -project CodexBar.xcodeproj -scheme CodexBar -destination 'generic/pl
 
 需要指定独立 Swift 编译器时，将 `CODEXBAR_SWIFTC` 设为它的路径。测试脚本对支持该选项的编译器启用 `MainActor` 默认隔离。
 
-本机 Xcode `26.3` 无法读取仓库现有的工程格式 `100` 时，可运行 `bash Scripts/build-local.sh`。脚本仅在临时副本中将两个格式标记改为 `77`，完整编译两个 target，使用本地签名，产物位于 `~/Library/Caches/CodexBar/LocalBuild/CodexBar Fork Debug.app`
+本机 Xcode `26.3` 无法读取仓库现有的工程格式 `100` 时，可运行 `bash Scripts/build-local.sh`。脚本仅在临时副本中将两个格式标记改为 `77`，完整编译两个 target，使用本地签名，产物位于 `~/Library/Caches/CodexBar/LocalBuild/CodexBar Debug.app`
 
 CloudKit 及其 entitlement 已移除，本地和正式构建均不再创建云端容器。原 root helper 的授权验证仍需匹配的签名。
 

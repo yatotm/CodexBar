@@ -4247,6 +4247,12 @@
         }
       }
     },
+    "settings.main-panel.activity.requires-hook" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enable CodexBar Hook in Advanced settings to show live tasks" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "在高级设置中启用 CodexBar Hook 后, 可显示实时任务" } }
+      }
+    },
     "settings.main-panel.entrance-animations" : {
       "localizations" : {
         "en" : {

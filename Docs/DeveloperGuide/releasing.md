@@ -19,15 +19,15 @@ bash Scripts/build-local.sh
 
 ## 发布流程
 
-1. 修改 `Config/Version.xcconfig`，同时递增用户版本和构建号
-2. 添加对应的 `ReleaseNotes/fork-vX.Y.Z.md`
-3. 将通过验证的提交推送到本仓库 `main`
+普通修改照常提交、构建和测试，同一待发版本可以积累多个修复。推送代码、修改版本号或推送 tag 都不会自动发布。
 
-云端使用 macOS 26 和 Xcode 26.3，避开旧 CI 系统上的图标编译器异常；应用最低要求仍为 macOS 15。
+1. 准备 `Config/Version.xcconfig` 和对应的 `ReleaseNotes/fork-vX.Y.Z.md`，完成本地验证
+2. 向用户说明本次内容，取得针对本次创建 tag 和 Release 的明确同意
+3. 在 Actions 手动运行 `Release`，选择 `main` 并勾选本次发布确认
 
-`Release` 工作流会检查格式、运行回归检查、构建 Release、打包 ZIP 和 DMG，并用独立 Sparkle 密钥签名及验签。全部成功后，在同一任务中创建附注 tag 和 GitHub Release，上传安装包、`appcast.xml` 与 `SHA256SUMS.txt`。GitHub 默认令牌创建的 tag 不会触发另一条发布工作流，因此不依赖 tag 的二次触发。
+确认后，工作流自动检查格式、运行回归检查、构建、打包和验签，然后创建附注 tag 与 GitHub Release，上传 DMG、ZIP、`appcast.xml` 和 `SHA256SUMS.txt`。本地候选包不代表已发布，历史授权不能用于下一次发布。
 
-也可在 Actions 手动运行 `Release`。同一 tag 不移动，已公开附件不覆盖；构建失败可修复后重试，已公开版本的修复必须递增版本。不要手工发布同名空 Release。
+云端使用 macOS 26 和 Xcode 26.3，应用最低要求仍为 macOS 15。同一 tag 不移动，已公开附件不覆盖；失败后重试也必须核对本次授权范围。
 
 ## 更新信任
 
@@ -41,7 +41,7 @@ bash Scripts/build-local.sh
 
 ## 应用身份与版本
 
-正式 App 标识为 `io.github.yatotm.codexbar`，Debug 追加 `.debug`，Helper 再追加 `.helper`。安装包分别为 `CodexBar Fork.app` 和 `CodexBar Fork Debug.app`，可与上游安装并存。
+正式 App 标识为 `io.github.yatotm.codexbar`，Debug 追加 `.debug`，Helper 再追加 `.helper`。安装包分别为 `CodexBar.app` 和 `CodexBar Debug.app`，内部身份与上游分离；显示名称相同，需要共存时使用不同安装目录。
 
 fork 从 `1.0.0` 独立计版本，tag 使用 `fork-vX.Y.Z`，不跟随上游版本或标签。同步上游使用 `git fetch --no-tags`，审核后合并代码；不要导入上游 appcast 或发布附件。
 
@@ -50,3 +50,5 @@ CloudKit 及其容器配置已从工程移除。仓库不再包含原作者的�
 旧安装迁移步骤见 [切换到独立 fork](../UserGuide/migration.md)。迁移不更改 schema，也不修改原安装的数据。
 
 当前发布工作流使用 ad-hoc 签名并生成未公证 DMG，安装步骤和功能限制写入对应 ReleaseNotes。不能把 Sparkle 验签通过表述为 Apple 公证通过。未来改用正式 Apple 签名时保留现有 fork 标识与 Sparkle 公钥。
+
+发布包同时包含 `arm64` 与 `x86_64`。M 芯片运行原生 ARM 代码，Release 保持 Swift `-O` 优化；打包时检查架构，防止误发单架构产物。

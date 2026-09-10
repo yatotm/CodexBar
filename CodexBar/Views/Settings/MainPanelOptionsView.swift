@@ -133,6 +133,7 @@ struct MainPanelOptionsView: View {
         }
         .frame(height: Metrics.rowHeight)
         .padding(.horizontal, Metrics.rowHorizontalPadding)
+        .help(isAvailable ? "" : String(localized: "settings.main-panel.activity.requires-hook"))
     }
 
     private var displayedSections: [MainPanelSection] {

@@ -294,7 +294,7 @@ def compare(data, path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--app", type=Path, default=Path("/Applications/CodexBar Fork.app"))
+    parser.add_argument("--app", type=Path, default=Path("/Applications/CodexBar.app"))
     parser.add_argument("--pid", type=int)
     parser.add_argument("--preset", choices=PRESETS, default="standard")
     parser.add_argument("--output", type=Path)

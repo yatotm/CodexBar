@@ -1,6 +1,6 @@
 # App 性能测试与报告
 
-通过 Instruments 采集运行中 macOS App 主进程的 CPU、调用栈、内存、线程、唤醒、磁盘活动和热状态，自动生成单文件 HTML 报告。默认测试 `/Applications/CodexBar Fork.app`，通过 `--app` 可指定其他 App。
+通过 Instruments 采集运行中 macOS App 主进程的 CPU、调用栈、内存、线程、唤醒、磁盘活动和热状态，自动生成单文件 HTML 报告。默认测试 `/Applications/CodexBar.app`，通过 `--app` 可指定其他 App。
 
 ## 快速开始
 
@@ -61,7 +61,7 @@ python3 -B Scripts/performance/run.py \
 
 | 参数 | 用途 |
 |---|---|
-| `--app` | 被测 App 路径，默认 `/Applications/CodexBar Fork.app` |
+| `--app` | 被测 App 路径，默认 `/Applications/CodexBar.app` |
 | `--pid` | 指定进程；存在多个匹配实例时使用 |
 | `--preset` | `quick`、`standard` 或 `extended`，默认 `standard` |
 | `--output` | 采集模式指定新目录；`--render` 模式指定 HTML 文件路径 |
