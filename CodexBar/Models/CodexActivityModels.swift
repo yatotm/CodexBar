@@ -11,6 +11,7 @@ nonisolated enum CodexActivityEvent: Equatable {
     case promptSubmitted
     case toolStarted
     case toolFinished
+    case toolFailed
     case compactionStarted
     case compactionFinished
     case subagentStarted
@@ -30,7 +31,7 @@ nonisolated struct CodexActivityTaskSnapshot: Equatable, Identifiable {
     let isAnonymous: Bool
     let latestEvent: CodexActivityEvent
     let projectName: String?
-    var modelName: String?
+    let modelName: String?
     let effort: String?
     let toolName: String?
     let startedAt: Date?
@@ -38,6 +39,7 @@ nonisolated struct CodexActivityTaskSnapshot: Equatable, Identifiable {
     let showsPreciseDuration: Bool
     /// nil 表示 Hook 字段不足, 无法可靠统计; 0 表示已确认当前没有活跃子 Agent
     let activeSubagentCount: Int?
+    var machineName: String?
 }
 
 /// 最近确认结束的任务; 完成只表示一轮任务结束, 不代表执行成功
@@ -45,10 +47,11 @@ nonisolated struct CodexActivityCompletion: Equatable, Identifiable {
     let id: UUID
     let isAnonymous: Bool
     let projectName: String?
-    var modelName: String?
+    let modelName: String?
     let effort: String?
     let completedAt: Date
     let duration: TimeInterval?
+    var machineName: String?
 }
 
 /// 最近确认终止的任务; 终止不会被视为完成, 也不会触发完成提醒
@@ -56,10 +59,11 @@ nonisolated struct CodexActivityTermination: Equatable, Identifiable {
     let id: UUID
     let isAnonymous: Bool
     let projectName: String?
-    var modelName: String?
+    let modelName: String?
     let effort: String?
     let terminatedAt: Date
     let duration: TimeInterval?
+    var machineName: String?
 }
 
 /// 实时越过静默阈值时交给通知服务的最小信息, 不包含原始 session 或 turn ID
@@ -195,8 +199,8 @@ nonisolated enum CodexDurationFormat {
 }
 
 nonisolated enum CodexActivityDisplayFormat {
-    static func modelMetadata(modelName: String?, effort: String?) -> String? {
-        let components = [modelName, effort].compactMap(normalizedText)
+    static func modelMetadata(modelName: String?, effort: String?, machineName: String? = nil) -> String? {
+        let components = [modelName, effort, machineName].compactMap(normalizedText)
         return components.isEmpty ? nil : components.joined(separator: " • ")
     }
 
@@ -210,6 +214,8 @@ nonisolated enum CodexActivityDisplayFormat {
         case .toolFinished:
             task.toolName.map { String(localized: "activity.event.finished-using-tool", defaultValue: "\($0)") }
                 ?? String(localized: "activity.event.tool-completed")
+        case .toolFailed:
+            task.toolName.map { "调用工具 \($0) 失败" } ?? "工具调用失败"
         case .compactionStarted:
             String(localized: "activity.event.compacting-context")
         case .compactionFinished:

@@ -334,4 +334,6 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 
 `RemoteActivityController` 独立消费 `ActivityCollector.py` 的当前快照，覆盖 SSH Codex、SSH Claude 和本机 Claude。它通过 `ActivityPresentationModel` 复用原任务卡片和任务中心，并驱动等待、完成通知，不注入本机任务监控或电源控制。`SystemConnectionGate` 在合盖或睡眠时关闭这些连接，正式唤醒且开盖后才能恢复；SSH 还要求网络可用。详见 [用量中心实现与验证](Docs/DeveloperGuide/usage-center.md)
 
-防睡眠新增 `KeepAlive.mode`，旧安装保留按任务模式，新安装默认手动模式，主开关仍默认关闭。手动模式不依赖 Hook 或任务，时长计时也不随任务重置。Helper 身份校验、首次授权、系统设置入口及恢复流程保持原样；免费构建的合盖防睡眠仍待签名授权验证。
+防睡眠新增 `KeepAlive.mode`，旧安装保留按任务模式，新安装默认手动模式，主开关仍默认关闭。手动模式不依赖 Hook 或任务，时长计时也不随任务重置。Helper 身份校验、首次授权、系统设置入口及恢复流程保持原样；Apple Development 构建已验证后台授权、模式切换与同身份更新；物理合盖仍需实测，公开临时签名构建继续保持禁用。
+
+本机日常打包使用 `bash Scripts/build-local.sh`，它会沿用 `io.github.yatotm.codexbar.build` 域的 `signingIdentity` 偏好。不要在已有开发签名的安装上无意覆盖临时签名包，临时签名无法使用电源组件。私钥只留在钥匙串，不能写入仓库。

@@ -50,7 +50,12 @@ with tempfile.TemporaryDirectory(prefix="codexbar-local-build.", dir="/tmp") as 
     app = stage / app_name
     subprocess.run(["ditto", "--noextattr", str(output / "DerivedData/Build/Products" / configuration / app.name), str(app)], check=True)
     subprocess.run(["xattr", "-cr", str(app)], check=True)
-    identity = os.environ.get("CODEXBAR_SIGNING_IDENTITY", "-")
+    identity = os.environ.get("CODEXBAR_SIGNING_IDENTITY")
+    if identity is None and not os.environ.get("CI"):
+        preference = subprocess.run(["defaults", "read", "io.github.yatotm.codexbar.build", "signingIdentity"], capture_output=True, text=True)
+        if preference.returncode == 0:
+            identity = preference.stdout.strip()
+    identity = identity or "-"
     signing = ["codesign", "--force", "--sign", identity]
     if identity != "-":
         signing += ["--options", "runtime", "--timestamp=none"]

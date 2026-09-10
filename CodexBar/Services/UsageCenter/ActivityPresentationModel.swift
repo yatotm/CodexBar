@@ -32,19 +32,19 @@ final class ActivityPresentationModel: ObservableObject {
         var completions = [CodexActivityCompletion](), terminations = [CodexActivityTermination]()
         if scope != .claude {
             waiting = local.waitingTasks.map { var task = $0
-                task.modelName = displayModel(task.modelName ?? "未知模型", machine: "本机")
+                task.machineName = "本机"
                 return task
             }
             running = local.runningTasks.map { var task = $0
-                task.modelName = displayModel(task.modelName ?? "未知模型", machine: "本机")
+                task.machineName = "本机"
                 return task
             }
             completions = local.recentCompletions.map { var task = $0
-                task.modelName = displayModel(task.modelName ?? "未知模型", machine: "本机")
+                task.machineName = "本机"
                 return task
             }
             terminations = local.recentTerminations.map { var task = $0
-                task.modelName = displayModel(task.modelName ?? "未知模型", machine: "本机")
+                task.machineName = "本机"
                 return task
             }
         }
@@ -53,13 +53,14 @@ final class ActivityPresentationModel: ObservableObject {
                 guard task.provider == "codex" ? source.includesCodex : source.includesClaude else { continue }
                 guard task.provider != "codex" || source.transport != .local else { continue }
                 let id = taskID(source: source.id, task: task.id)
-                let model = displayModel(task.modelName ?? "未知模型", machine: source.transport == .local ? "本机" : source.name)
+                let model = task.modelName ?? "未知模型"
+                let machine = source.transport == .local ? "本机" : source.name
                 let updated = Date(timeIntervalSince1970: task.updatedAt)
                 let row = CodexActivityTaskSnapshot(
-                    id: id, isAnonymous: false, latestEvent: task.state == "waiting" ? .approvalRequested : .promptSubmitted,
-                    projectName: task.project.isEmpty ? nil : task.project, modelName: model, effort: nil, toolName: nil,
+                    id: id, isAnonymous: false, latestEvent: latestEvent(task),
+                    projectName: task.project.isEmpty ? nil : task.project, modelName: model, effort: nil, toolName: task.toolName,
                     startedAt: Date(timeIntervalSince1970: task.startedAt), stateChangedAt: updated,
-                    showsPreciseDuration: true, activeSubagentCount: nil
+                    showsPreciseDuration: true, activeSubagentCount: task.activeSubagentCount, machineName: machine
                 )
                 if (task.isActive && states[source.id] != "实时连接") || task.state == "unknown" {
                     unknown.append(row)
@@ -75,7 +76,7 @@ final class ActivityPresentationModel: ObservableObject {
                             modelName: model,
                             effort: nil,
                             completedAt: updated,
-                            duration: task.updatedAt - task.startedAt
+                            duration: task.updatedAt - task.startedAt, machineName: machine
                         ))
                     case "ended":
                         terminations.append(.init(
@@ -85,7 +86,7 @@ final class ActivityPresentationModel: ObservableObject {
                             modelName: model,
                             effort: nil,
                             terminatedAt: updated,
-                            duration: task.updatedAt - task.startedAt
+                            duration: task.updatedAt - task.startedAt, machineName: machine
                         ))
                     default: break
                     }
@@ -103,8 +104,20 @@ final class ActivityPresentationModel: ObservableObject {
         return result
     }
 
-    private static func displayModel(_ model: String, machine: String) -> String {
-        "\(model) · \(machine)"
+    private static func latestEvent(_ task: RemoteActivityTask) -> CodexActivityEvent {
+        if task.state == "waiting" {
+            return .approvalRequested
+        }
+        switch task.eventName {
+        case "PreToolUse": return .toolStarted
+        case "PostToolUse": return .toolFinished
+        case "PostToolUseFailure": return .toolFailed
+        case "PreCompact": return .compactionStarted
+        case "PostCompact": return .compactionFinished
+        case "SubagentStart": return .subagentStarted
+        case "SubagentStop": return .subagentFinished
+        default: return .promptSubmitted
+        }
     }
 
     private static func taskID(source: String, task: String) -> UUID {

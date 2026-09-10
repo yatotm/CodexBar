@@ -19,8 +19,12 @@ import uuid
 
 SCHEMA = 1
 EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
-          "PostToolUse", "PermissionRequest", "Stop", "SubagentStart", "SubagentStop")
+          "PostToolUse", "PermissionRequest", "Stop", "SubagentStart", "SubagentStop", "PreCompact", "PostCompact")
 LIMIT = 512 * 1024
+
+
+def events_for(provider):
+    return EVENTS + (("PostToolUseFailure",) if provider == "claude" else ())
 
 
 def directory():
@@ -38,6 +42,8 @@ def connect(root):
     db.execute("CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, provider TEXT, state TEXT, "
                "project TEXT, updated REAL, started REAL, pid INTEGER, birth TEXT)")
     db.execute("CREATE TABLE IF NOT EXISTS models(id TEXT PRIMARY KEY, model TEXT, updated REAL)")
+    db.execute("CREATE TABLE IF NOT EXISTS details(id TEXT PRIMARY KEY, payload TEXT)")
+    db.execute("CREATE TABLE IF NOT EXISTS agents(parent TEXT, agent TEXT, PRIMARY KEY(parent,agent))")
     db.commit()
     return db
 
@@ -88,7 +94,7 @@ def parent_identity(provider):
 def record(db, payload, provider, now=None):
     event = payload.get("hook_event_name")
     session = payload.get("session_id")
-    if event not in EVENTS or not isinstance(session, str) or not 0 < len(session) <= 512:
+    if event not in events_for(provider) or not isinstance(session, str) or not 0 < len(session) <= 512:
         return
     task_id = hashlib.sha256((provider + "\0" + session).encode()).hexdigest()
     now = time.time() if now is None else now
@@ -97,8 +103,8 @@ def record(db, payload, provider, now=None):
         with db:
             db.execute("INSERT OR REPLACE INTO models VALUES(?,?,?)", (task_id, model, now))
             db.execute("DELETE FROM models WHERE updated<?", (now - 86400,))
-    # 子智能体的开始结束不改变父任务生命周期
-    if event in ("SubagentStart", "SubagentStop", "SessionStart"):
+    # 会话启动只记录模型, 不代表已有任务运行
+    if event == "SessionStart":
         return
     state = {"PermissionRequest": "waiting", "Stop": "completed", "SessionEnd": "ended"}.get(event, "running")
     cwd = payload.get("cwd", "")
@@ -107,14 +113,21 @@ def record(db, payload, provider, now=None):
     pid, birth = parent_identity(provider)
     with db:
         previous = db.execute("SELECT state,started,pid,birth FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if event in ("SubagentStart", "SubagentStop"):
+            if not previous or previous[0] not in ("running", "waiting", "unknown"):
+                return
+            state = previous[0]
         started = previous[1] if previous and previous[0] in ("running", "waiting") and event != "UserPromptSubmit" else now
         if previous and not pid:
             pid, birth = previous[2:]
         db.execute("INSERT OR REPLACE INTO tasks VALUES(?,?,?,?,?,?,?,?)",
                    (task_id, provider, state, project, now, started, pid, birth))
+        record_details(db, task_id, payload, event, now)
         db.execute("UPDATE meta SET revision=revision+1")
         db.execute("DELETE FROM tasks WHERE updated<?", (now - 86400,))
         db.execute("DELETE FROM tasks WHERE id NOT IN (SELECT id FROM tasks ORDER BY updated DESC LIMIT 500)")
+        db.execute("DELETE FROM details WHERE id NOT IN (SELECT id FROM tasks)")
+        db.execute("DELETE FROM agents WHERE parent NOT IN (SELECT id FROM tasks)")
     # WAL 写事件可能早于事务提交, 提交后单独发信号才不会读到旧快照后永久漏更
     root = Path(db.execute("PRAGMA database_list").fetchone()[2]).parent
     descriptor = os.open(root / "activity.notify", os.O_WRONLY)
@@ -122,6 +135,33 @@ def record(db, payload, provider, now=None):
         os.write(descriptor, b"1")
     finally:
         os.close(descriptor)
+
+
+def record_details(db, task_id, payload, event, now):
+    previous = db.execute("SELECT payload FROM details WHERE id=?", (task_id,)).fetchone()
+    details = json.loads(previous[0]) if previous else {}
+    tool = payload.get("tool_name")
+    if not (event in ("SubagentStart", "SubagentStop") and details.get("eventName") == "PermissionRequest"):
+        details["eventName"] = event
+        details["toolName"] = tool if isinstance(tool, str) and 0 < len(tool) <= 120 and tool.isprintable() else None
+    details["observedAt"] = now
+    if event == "UserPromptSubmit":
+        db.execute("DELETE FROM agents WHERE parent=?", (task_id,))
+        details["activeSubagentCount"] = 0
+    agent = payload.get("agent_id")
+    if isinstance(agent, str) and 0 < len(agent) <= 512:
+        agent_key = hashlib.sha256(agent.encode()).hexdigest()
+        if event == "SubagentStart":
+            count = db.execute("SELECT COUNT(*) FROM agents WHERE parent=?", (task_id,)).fetchone()[0]
+            if count < 1000:
+                db.execute("INSERT OR IGNORE INTO agents VALUES(?,?)", (task_id, agent_key))
+        elif event == "SubagentStop":
+            db.execute("DELETE FROM agents WHERE parent=? AND agent=?", (task_id, agent_key))
+    if event in ("Stop", "SessionEnd"):
+        db.execute("DELETE FROM agents WHERE parent=?", (task_id,))
+    if details.get("activeSubagentCount") is not None:
+        details["activeSubagentCount"] = db.execute("SELECT COUNT(*) FROM agents WHERE parent=?", (task_id,)).fetchone()[0]
+    db.execute("INSERT OR REPLACE INTO details VALUES(?,?)", (task_id, json.dumps(details)))
 
 
 def reconcile(db):
@@ -140,10 +180,21 @@ def snapshot(db):
     with db:
         db.execute("BEGIN")
         epoch, revision = db.execute("SELECT epoch,revision FROM meta").fetchone()
-        rows = db.execute("SELECT t.id,t.provider,t.state,t.project,t.updated,t.started,m.model "
-                          "FROM tasks t LEFT JOIN models m ON m.id=t.id ORDER BY t.updated DESC LIMIT 500").fetchall()
+        rows = db.execute("SELECT t.id,t.provider,t.state,t.project,t.updated,t.started,m.model,d.payload "
+                          "FROM tasks t LEFT JOIN models m ON m.id=t.id LEFT JOIN details d ON d.id=t.id ORDER BY t.updated DESC LIMIT 500").fetchall()
     return dict(schema=SCHEMA, epoch=epoch, revision=revision, sentAt=time.time(),
-                tasks=[dict(zip(("id", "provider", "state", "project", "updatedAt", "startedAt", "modelName"), row)) for row in rows])
+                tasks=[{**dict(zip(("id", "provider", "state", "project", "updatedAt", "startedAt", "modelName"), row[:7])),
+                        **current_details(row[7], row[4])} for row in rows])
+
+
+def current_details(payload, updated):
+    if not payload:
+        return {}
+    details = json.loads(payload)
+    # 旧采集器仍能写原任务表, 附加字段只在同一笔更新时有效
+    if details.get("observedAt") != updated:
+        return {}
+    return {key: details[key] for key in ("eventName", "toolName", "activeSubagentCount") if key in details}
 
 
 def model_name(payload, provider):
@@ -318,11 +369,11 @@ class CodexRPC:
             self.process.wait()
 
 
-def rewrite_hooks(document, command, install):
+def rewrite_hooks(document, command, install, provider="codex"):
     hooks = document.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         raise RuntimeError("已有 Hook 配置格式无效, 未修改")
-    for event in EVENTS:
+    for event in events_for(provider):
         groups = hooks.get(event, [])
         if not isinstance(groups, list):
             raise RuntimeError("已有 Hook 配置格式无效, 未修改")
@@ -378,7 +429,7 @@ def configure(args):
                     raise RuntimeError("Codex 全局 Hook 已关闭, 请先在 Codex 中开启")
             original = config.read_bytes() if config.exists() else None
             document = json.loads(original) if original is not None else {}
-            rewrite_hooks(document, command, args.action == "install")
+            rewrite_hooks(document, command, args.action == "install", provider)
             updated = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode()
             # 写入前检查并发编辑, 备份仅属于本次配置
             if (config.read_bytes() if config.exists() else None) != original:

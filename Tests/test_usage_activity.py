@@ -101,6 +101,43 @@ class ActivityTests(unittest.TestCase):
         self.event("UnrelatedEvent")
         self.assertEqual(activity.snapshot(self.db)["revision"], 0)
 
+    def test_claude_tool_and_compaction_phases(self):
+        for event in ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "PreCompact", "PostCompact"):
+            activity.record(self.db, dict(hook_event_name=event, session_id="session", tool_name="Bash",
+                                         tool_input={"command": "private-command"}, error="private-error"), "claude", 1000)
+            task = activity.snapshot(self.db)["tasks"][0]
+            self.assertEqual(task["eventName"], event)
+            self.assertEqual(task["toolName"], "Bash")
+            self.assertNotIn("private-command", json.dumps(task))
+            self.assertNotIn("private-error", json.dumps(task))
+
+    def test_subagent_deduplication_does_not_complete_parent(self):
+        self.event("UserPromptSubmit", provider="claude")
+        for event, agent in (("SubagentStart", "one"), ("SubagentStart", "one"), ("SubagentStart", "two"), ("SubagentStop", "one")):
+            activity.record(self.db, dict(hook_event_name=event, session_id="session", agent_id=agent), "claude", 1001)
+        task = activity.snapshot(self.db)["tasks"][0]
+        self.assertEqual(task["state"], "running")
+        self.assertEqual(task["activeSubagentCount"], 1)
+        self.assertEqual(task["eventName"], "SubagentStop")
+        self.event("Stop", provider="claude", now=1002)
+        self.assertEqual(activity.snapshot(self.db)["tasks"][0]["activeSubagentCount"], 0)
+
+    def test_old_protocol_without_details_remains_readable(self):
+        self.event("UserPromptSubmit")
+        with self.db:
+            self.db.execute("DELETE FROM details")
+        task = activity.snapshot(self.db)["tasks"][0]
+        self.assertNotIn("eventName", task)
+        self.assertNotIn("activeSubagentCount", task)
+
+    def test_old_writer_does_not_reuse_stale_detail(self):
+        self.event("PreToolUse", provider="claude")
+        with self.db:
+            self.db.execute("UPDATE tasks SET state='waiting',updated=1001")
+        task = activity.snapshot(self.db)["tasks"][0]
+        self.assertEqual(task["state"], "waiting")
+        self.assertNotIn("eventName", task)
+
     def test_reconnection_snapshot_has_stable_identity(self):
         self.event("UserPromptSubmit")
         first = activity.snapshot(self.db)

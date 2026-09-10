@@ -273,8 +273,8 @@ struct CodexActivityCenterView: View {
             symbolName: symbolName,
             tint: tint,
             projectName: task.projectName,
-            modelName: task.modelName,
-            effort: task.effort,
+            modelName: CodexActivityDisplayFormat.modelMetadata(modelName: task.modelName, effort: task.effort, machineName: task.machineName),
+            effort: nil,
             isAnonymous: task.isAnonymous,
             detail: taskDetail(task, now: now, isWaiting: isWaiting)
         )
@@ -285,8 +285,8 @@ struct CodexActivityCenterView: View {
             symbolName: "checkmark.circle.fill",
             tint: .green,
             projectName: completion.projectName,
-            modelName: completion.modelName,
-            effort: completion.effort,
+            modelName: CodexActivityDisplayFormat.modelMetadata(modelName: completion.modelName, effort: completion.effort, machineName: completion.machineName),
+            effort: nil,
             isAnonymous: completion.isAnonymous,
             detail: historyDetail(
                 duration: completion.duration,
@@ -303,8 +303,8 @@ struct CodexActivityCenterView: View {
             symbolName: "xmark.circle.fill",
             tint: .secondary,
             projectName: termination.projectName,
-            modelName: termination.modelName,
-            effort: termination.effort,
+            modelName: CodexActivityDisplayFormat.modelMetadata(modelName: termination.modelName, effort: termination.effort, machineName: termination.machineName),
+            effort: nil,
             isAnonymous: termination.isAnonymous,
             detail: historyDetail(
                 duration: termination.duration,

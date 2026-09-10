@@ -167,6 +167,7 @@ struct CodexActivityCard: View {
                 title: activityTitle(
                     modelName: completion.modelName,
                     effort: completion.effort,
+                    machineName: completion.machineName,
                     projectName: completion.projectName,
                     fallback: "activity.status.codex-completed"
                 ),
@@ -185,6 +186,7 @@ struct CodexActivityCard: View {
                 title: activityTitle(
                     modelName: termination.modelName,
                     effort: termination.effort,
+                    machineName: termination.machineName,
                     projectName: termination.projectName,
                     fallback: "activity.status.codex-stopped"
                 ),
@@ -220,6 +222,7 @@ struct CodexActivityCard: View {
             title: activityTitle(
                 modelName: task.modelName,
                 effort: task.effort,
+                machineName: task.machineName,
                 projectName: task.projectName,
                 fallback: fallback
             ),
@@ -232,13 +235,14 @@ struct CodexActivityCard: View {
     private func activityTitle(
         modelName: String?,
         effort: String?,
+        machineName: String?,
         projectName: String?,
         fallback: LocalizedStringResource
     ) -> String {
         [
             CodexActivityDisplayFormat.modelMetadata(
                 modelName: modelName,
-                effort: effort
+                effort: effort, machineName: machineName
             ),
             projectName ?? String(localized: fallback)
         ]

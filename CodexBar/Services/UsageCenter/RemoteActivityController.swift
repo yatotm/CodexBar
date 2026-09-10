@@ -9,6 +9,9 @@ nonisolated struct RemoteActivityTask: Decodable, Identifiable, Equatable, Senda
     let updatedAt: TimeInterval
     let startedAt: TimeInterval
     let modelName: String?
+    var eventName: String?
+    var toolName: String?
+    var activeSubagentCount: Int?
 
     var isActive: Bool {
         state == "running" || state == "waiting"
@@ -39,7 +42,8 @@ nonisolated struct RemoteActivityFrame: Decodable, Sendable {
                 $0.id.count == 64 && ["codex", "claude"].contains($0.provider)
                     && ["running", "waiting", "completed", "ended", "unknown"].contains($0.state)
                     && $0.project.count <= 100 && $0.startedAt.isFinite && $0.updatedAt.isFinite
-                    && ($0.modelName?.count ?? 0) <= 100
+                    && ($0.modelName?.count ?? 0) <= 100 && ($0.eventName?.count ?? 0) <= 50
+                    && ($0.toolName?.count ?? 0) <= 120 && (0 ... 1000).contains($0.activeSubagentCount ?? 0)
                     && $0.startedAt > 0 && $0.updatedAt >= $0.startedAt
             }
     }

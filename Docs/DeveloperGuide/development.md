@@ -129,7 +129,7 @@ helper 清理先取消并确认系统唤醒计划清零，再注销服务；失�
 
 ## 本地开发签名
 
-默认 `Scripts/build-local.sh` 使用临时签名。有可用 Apple Development 证书时，可显式使用同一身份签署主 App、框架与电源组件，并开启 hardened runtime：
+`Scripts/build-local.sh` 优先读取环境变量，其次读取本机保存的签名身份；都未配置时使用临时签名。CI 不读取本机偏好。有可用 Apple Development 证书时，可显式使用同一身份签署主 App、框架与电源组件，并开启 hardened runtime：
 
 ```bash
 CODEXBAR_SIGNING_IDENTITY="Apple Development: 你的证书名称" \
@@ -138,4 +138,12 @@ CODEXBAR_BUILD_CONFIGURATION=Release bash Scripts/build-local.sh
 
 证书从 Xcode 的 Apple Accounts 页面管理。签名失败不会回退成看似具备权限的包；主 App 仍按实际签名和后台授权状态决定防睡眠是否可用。本地开发签名不等同于 Developer ID 公证，也不自动证明公开分发场景已通过验证。
 
-本轮实时任务回归覆盖短帧读取、合并身份、标签筛选、断线状态隔离、Hook 配置保留和文件事件推送。还需在真机覆盖合盖、DarkWake、重新开盖，以及获授权构建的开启、关闭和异常退出后睡眠恢复。
+本轮实时任务回归覆盖短帧读取、合并身份、标题顺序、标签筛选、断线状态隔离、Hook 配置保留及工具、压缩、子智能体事件。Apple Development 构建已在本机验证首次后台授权、手动与随任务模式、关闭和退出恢复，以及同身份更新后的授权保留。物理合盖、DarkWake 和重新开盖仍需单独实测。
+
+本机可以保存证书指纹，后续构建自动沿用，不保存或导出私钥：
+
+```bash
+defaults write io.github.yatotm.codexbar.build signingIdentity -string "证书 SHA-1 指纹"
+```
+
+`CODEXBAR_SIGNING_IDENTITY=-` 可显式构建临时签名包。证书不可用时构建失败，不静默降级。异常退出恢复已实测，本次强制结束 App 后约 16 秒恢复系统睡眠设置。

@@ -63,7 +63,7 @@ struct UsageCommandSmoke {
             latestEvent: .promptSubmitted,
             projectName: "local",
             modelName: "test-model",
-            effort: nil,
+            effort: "high",
             toolName: nil,
             startedAt: Date(),
             stateChangedAt: Date(),
@@ -78,14 +78,15 @@ struct UsageCommandSmoke {
             project: "remote",
             updatedAt: 1001,
             startedAt: 1000,
-            modelName: "remote-model"
+            modelName: "remote-model", eventName: "PreToolUse", toolName: "Bash", activeSubagentCount: 1
         )
         let sources = [UsageSource(id: "a", name: "machine-a", address: "a"), UsageSource(id: "b", name: "machine-b", address: "b")]
         let tasks = ["a": [remoteTask], "b": [remoteTask]]
         let online = ["a": "实时连接", "b": "实时连接"]
         let all = ActivityPresentationModel.merge(local: local, tasks: tasks, states: online, enabled: ["a", "b"], sources: sources, scope: .all)
         precondition(all.activeCount == 3 && Set(all.runningTasks.map(\.id)).count == 3, "同一会话标识在不同机器上不得覆盖")
-        precondition(all.runningTasks.contains { $0.modelName == "remote-model · machine-a" })
+        precondition(all.runningTasks.contains { $0.modelName == "remote-model" && $0.machineName == "machine-a" && $0.latestEvent == .toolStarted && $0.toolName == "Bash" })
+        precondition(CodexActivityDisplayFormat.modelMetadata(modelName: "test-model", effort: "high", machineName: "本机") == "test-model • high • 本机")
         precondition(local.runningTasks[0].modelName == "test-model", "合并展示不得改写本机任务与防睡眠输入")
         let disconnected = ActivityPresentationModel.merge(local: local, tasks: tasks, states: [:], enabled: ["a", "b"], sources: sources, scope: .all)
         precondition(disconnected.activeCount == 1 && disconnected.unconfirmedTasks.count == 2 && disconnected.recentCompletions.isEmpty)
