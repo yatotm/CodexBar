@@ -10,7 +10,7 @@ python3 -B -m unittest discover -s Tests -p 'test_usage_*.py' -v
 usage_compiler="${CODEXBAR_SWIFTC:-swiftc}"
 usage_sdk="$(xcrun --show-sdk-path)"
 usage_flags=(-sdk "$usage_sdk" -swift-version 6 -parse-as-library)
-if "$usage_compiler" -help | rg -- '-default-isolation' > /dev/null; then
+if "$usage_compiler" -help | /usr/bin/grep -- '-default-isolation' > /dev/null; then
     usage_flags+=(-default-isolation MainActor)
 fi
 
