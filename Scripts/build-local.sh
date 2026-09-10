@@ -37,7 +37,12 @@ with tempfile.TemporaryDirectory(prefix="codexbar-local-build.", dir="/tmp") as 
             "CODE_SIGN_ENTITLEMENTS=", "ENABLE_DEBUG_DYLIB=NO", "SWIFT_OPTIMIZATION_LEVEL=-O", "build"
         ], stdout=log, stderr=subprocess.STDOUT)
     if result.returncode:
-        print("\n".join(log_path.read_text().splitlines()[-80:]))
+        lines = log_path.read_text().splitlines()
+        for index, line in enumerate(lines):
+            if "error:" in line.lower() or "exception" in line.lower():
+                print("\n".join(lines[max(0, index - 2):index + 5]))
+        print("\n".join(lines[-20:]))
+        print(f"完整构建日志: {log_path}")
         sys.exit(result.returncode)
 
     # 本地签名不申请 iCloud 权限, 正式构建仍使用工程原有的授权配置

@@ -22,6 +22,8 @@ bash Scripts/build-local.sh
 2. 添加对应的 `ReleaseNotes/vX.Y.Z.md`
 3. 将通过验证的提交推送到本仓库 `main`
 
+云端使用 macOS 26 和 Xcode 26.3，避开旧 CI 系统上的图标编译器异常；应用最低要求仍为 macOS 15。
+
 `Release` 工作流会检查格式、运行回归检查、构建 Release、打包 ZIP 和 DMG，并用独立 Sparkle 密钥签名及验签。全部成功后，在同一任务中创建附注 tag 和 GitHub Release，上传安装包、`appcast.xml` 与 `SHA256SUMS.txt`。GitHub 默认令牌创建的 tag 不会触发另一条发布工作流，因此不依赖 tag 的二次触发。
 
 也可在 Actions 手动运行 `Release`。同一 tag 不移动，已公开附件不覆盖；构建失败可修复后重试，已公开版本的修复必须递增版本。不要手工发布同名空 Release。
