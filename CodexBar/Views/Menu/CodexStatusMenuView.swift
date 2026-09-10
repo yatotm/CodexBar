@@ -26,6 +26,7 @@ struct CodexStatusMenuView: View {
     static let menuWidth: CGFloat = Metrics.padding * 2 + MenuMetrics.panelPadding * 2 + UsageHeatmap.Metrics.totalWidth
 
     @ObservedObject var viewModel: CodexStatusViewModel
+    @ObservedObject var usageCenterViewModel: UsageCenterViewModel
     @ObservedObject var workflowViewModel: WorkflowViewModel
     @ObservedObject var codexHookSettings: CodexHookSettings
     @ObservedObject var mainPanelSettings: MainPanelSettings
@@ -39,11 +40,23 @@ struct CodexStatusMenuView: View {
     let onUsageHeatmapHoverChange: (UsageHeatmapHoverContext?) -> Void
     let onResetCreditsTap: (ResetCreditsPanelContext) -> Void
     let onActivityCenterTap: (CodexActivityCenterPanelContext) -> Void
+    let onScopeChange: () -> Void
+    let onOpenUsageDetails: () -> Void
     @EnvironmentObject private var appUpdater: AppUpdater
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.verticalSpacing) {
+            Picker("统计范围", selection: $usageCenterViewModel.menuScope) {
+                ForEach(UsageMenuScope.allCases) { scope in
+                    Text(scope.title).tag(scope)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
             content
+            UsageMenuFooter(viewModel: usageCenterViewModel, onOpenDetails: onOpenUsageDetails)
+                .id(usageCenterViewModel.menuScope)
+                .id(menuSurfaceVisibility.presentationGeneration)
         }
         .environment(
             \.mainPanelEntranceAnimationsEnabled,
@@ -57,6 +70,7 @@ struct CodexStatusMenuView: View {
         .animation(Metrics.statusAnimation, value: syncSettings.isEnabled)
         .animation(Metrics.statusAnimation, value: syncSettings.isSyncing)
         .animation(Metrics.statusAnimation, value: syncSettings.hasSyncFailure)
+        .onChange(of: usageCenterViewModel.menuScope) { _, _ in onScopeChange() }
     }
 }
 
@@ -92,15 +106,42 @@ private extension CodexStatusMenuView {
     ) -> some View {
         switch section {
         case .account:
-            accountSection
+            if usageCenterViewModel.menuScope == .claude {
+                AccountCard(title: "Claude Code", isEmail: false, plan: "OAuth", isRefreshing: usageCenterViewModel.isRefreshing) {
+                    usageCenterViewModel.refresh()
+                }
+            } else {
+                accountSection
+            }
         case .activity:
-            activitySection
+            if usageCenterViewModel.menuScope != .claude {
+                activitySection
+            }
         case .quota:
-            quotaSection(dataPlaceholderSection: dataPlaceholderSection)
+            if usageCenterViewModel.menuScope != .claude {
+                quotaSection(dataPlaceholderSection: dataPlaceholderSection)
+            }
+            if usageCenterViewModel.menuScope != .codex {
+                ClaudeMenuQuotaView(observation: usageCenterViewModel.latestClaudeQuota)
+                    .id(usageCenterViewModel.menuScope)
+                    .id(menuSurfaceVisibility.presentationGeneration)
+            }
         case .usage:
-            usageSection(dataPlaceholderSection: dataPlaceholderSection)
+            if usageCenterViewModel.menuScope == .codex {
+                usageSection(dataPlaceholderSection: dataPlaceholderSection)
+            }
+            if usageCenterViewModel.menuScope != .codex, let dashboard = usageCenterViewModel.menuDashboard {
+                UsageMenuSummaryView(
+                    dashboard: dashboard,
+                    onHoverContextChange: onUsageHeatmapHoverChange
+                )
+                .id(usageCenterViewModel.menuScope)
+                .id(menuSurfaceVisibility.presentationGeneration)
+            }
         case .status:
-            statusSection
+            if usageCenterViewModel.menuScope == .codex {
+                statusSection
+            }
         }
     }
 
@@ -155,6 +196,7 @@ private extension CodexStatusMenuView {
                 isStale: snapshot.isRateLimitsStale,
                 onResetCreditsTap: onResetCreditsTap
             )
+            .id(usageCenterViewModel.menuScope)
             .id(menuSurfaceVisibility.presentationGeneration)
         } else if dataPlaceholderSection == .quota {
             EmptyDataPanel()
@@ -170,9 +212,13 @@ private extension CodexStatusMenuView {
                 workflow: workflowViewModel.snapshot,
                 showsWorkflow: codexHookSettings.isEnabled,
                 isStale: snapshot.isUsageStale,
+                recordedDays: usageCenterViewModel.menuDashboards[.codex]?.days ?? [],
                 onHoverContextChange: onUsageHeatmapHoverChange
             )
             .id(menuSurfaceVisibility.presentationGeneration)
+        } else if let dashboard = usageCenterViewModel.menuDashboards[.codex] {
+            UsageMenuSummaryView(dashboard: dashboard, onHoverContextChange: onUsageHeatmapHoverChange)
+                .id(menuSurfaceVisibility.presentationGeneration)
         } else if dataPlaceholderSection == .usage {
             EmptyDataPanel()
         }

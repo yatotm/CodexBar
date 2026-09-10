@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import os
 
 /// 应用级对象装配点, 持有共享服务和 ViewModel 生命周期
@@ -8,6 +9,7 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
     lazy var proxySettings = CodexProxySettings(service: codexStatusService)
     lazy var viewModel = CodexStatusViewModel(service: codexStatusService)
     let workflowViewModel = WorkflowViewModel()
+    let usageCenterViewModel = UsageCenterViewModel()
     lazy var codexHookSettings = CodexHookSettings(codexStatusService: codexStatusService)
     lazy var codexCLINotificationSettings = CodexCLINotificationSettings(
         codexStatusService: codexStatusService
@@ -29,6 +31,8 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
     let autoResetSettings = AutoResetSettings()
     let appUpdater = AppUpdater()
 
+    private var analyticsObservation: AnyCancellable?
+    private var refreshSleepObservations = Set<AnyCancellable>()
     private var statusItemController: StatusItemController?
     private var notificationService: CodexNotificationService?
     private var autoResetController: AutoResetController?
@@ -37,11 +41,19 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - App 生命周期
 
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
+        // 菜单栏被其他图标挤满时, 从访达重新打开仍能进入同一个主面板
+        statusItemController?.openMenuSurfaceFromNotification()
+        return false
+    }
+
     func applicationDidFinishLaunching(_: Notification) {
         // Hook 子进程模式绝不会走到这里, 干净退出标志因此不会被它改写
         AppProcessDiagnostics.install()
+        observeRefreshSleepState()
         let controller = StatusItemController(
             viewModel: viewModel,
+            usageCenterViewModel: usageCenterViewModel,
             workflowViewModel: workflowViewModel,
             codexHookSettings: codexHookSettings,
             codexCLINotificationSettings: codexCLINotificationSettings,
@@ -57,13 +69,18 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
             proxySettings: proxySettings
         )
         controller.install()
+        usageCenterViewModel.start()
+        analyticsObservation = viewModel.$snapshot.compactMap(\.self).sink { [weak self] snapshot in
+            self?.usageCenterViewModel.analytics.observe(snapshot)
+        }
         statusItemController = controller
 
         let notificationService = CodexNotificationService(
             settings: notificationSettings,
             statusViewModel: viewModel,
             activityMonitor: activityMonitor
-        ) { [weak controller] in
+        ) { [weak self, weak controller] in
+            self?.usageCenterViewModel.menuScope = .codex
             controller?.openMenuSurfaceFromNotification()
         }
         notificationService.start()
@@ -97,14 +114,34 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
+        refreshSleepObservations.removeAll()
         AppLog.app.notice("App 即将退出: reason=userQuit")
         terminationPreparationTask?.cancel()
         terminationPreparationTask = nil
         AppProcessDiagnostics.recordCleanExit()
         statusItemController?.uninstall()
+        usageCenterViewModel.stop()
         autoResetController?.stop()
         keepAliveController.stop()
         activityMonitor.stop()
+    }
+
+    private func observeRefreshSleepState() {
+        let center = NSWorkspace.shared.notificationCenter
+        center.publisher(for: NSWorkspace.willSleepNotification).sink { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.viewModel.pauseForSleep()
+                self?.usageCenterViewModel.pauseForSleep()
+                AppLog.app.notice("周期刷新已暂停: reason=systemSleep")
+            }
+        }.store(in: &refreshSleepObservations)
+        center.publisher(for: NSWorkspace.didWakeNotification).sink { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.viewModel.resumeAfterWake()
+                self?.usageCenterViewModel.resumeAfterWake()
+                AppLog.app.notice("周期刷新已恢复: reason=workspaceWake")
+            }
+        }.store(in: &refreshSleepObservations)
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {

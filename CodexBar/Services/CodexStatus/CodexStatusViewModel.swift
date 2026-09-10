@@ -46,6 +46,7 @@ final class CodexStatusViewModel: ObservableObject {
 
     private let service: CodexStatusService
     private var autoRefreshTask: Task<Void, Never>?
+    private var wantsAutoRefresh = false
     private var pendingRefreshTask: Task<Void, Never>?
     private var pendingForcedRefreshTrigger: LogTrigger?
     private let refreshCoordinator = RefreshTaskCoordinator()
@@ -69,13 +70,16 @@ final class CodexStatusViewModel: ObservableObject {
         refresh(trigger: trigger)
     }
 
-    func startAutoRefresh() {
-        guard autoRefreshTask == nil else {
+    func startAutoRefresh(initialTrigger: LogTrigger = .launch) {
+        wantsAutoRefresh = true
+        guard autoRefreshTask == nil, !refreshCoordinator.isSuspended else {
             return
         }
 
         autoRefreshTask = Task { [weak self] in
-            self?.refreshIfNeeded(trigger: .launch)
+            let trigger = self?.pendingForcedRefreshTrigger ?? initialTrigger
+            self?.pendingForcedRefreshTrigger = nil
+            self?.refreshIfNeeded(trigger: trigger)
 
             // 每轮按剩余时间等待, 手动刷新后倒计时会自然重新对齐
             while !Task.isCancelled {
@@ -89,8 +93,37 @@ final class CodexStatusViewModel: ObservableObject {
         }
     }
 
+    func stopAutoRefresh() {
+        wantsAutoRefresh = false
+        autoRefreshTask?.cancel()
+        autoRefreshTask = nil
+        pendingRefreshTask?.cancel()
+        pendingRefreshTask = nil
+        refreshCoordinator.cancel()
+        isRefreshing = false
+    }
+
+    func pauseForSleep() {
+        guard !refreshCoordinator.isSuspended else { return }
+        refreshCoordinator.suspend()
+        autoRefreshTask?.cancel()
+        autoRefreshTask = nil
+        pendingRefreshTask?.cancel()
+        pendingRefreshTask = nil
+        isRefreshing = false
+    }
+
+    func resumeAfterWake() {
+        guard refreshCoordinator.isSuspended else { return }
+        refreshCoordinator.resume()
+        autoRefreshCountdownStartedAt = nil
+        if wantsAutoRefresh {
+            startAutoRefresh(initialTrigger: .wake)
+        }
+    }
+
     func refresh(trigger: LogTrigger) {
-        guard !isRefreshing, !isReconnecting else {
+        guard !refreshCoordinator.isSuspended, !isRefreshing, !isReconnecting else {
             return
         }
 
@@ -145,6 +178,10 @@ final class CodexStatusViewModel: ObservableObject {
 
     /// 自动消费完成后不能因为普通刷新正在运行而丢掉最终对账
     func refreshAfterCurrent(trigger: LogTrigger) {
+        guard !refreshCoordinator.isSuspended else {
+            pendingForcedRefreshTrigger = trigger
+            return
+        }
         guard isRefreshing || isReconnecting else {
             refresh(trigger: trigger)
             return

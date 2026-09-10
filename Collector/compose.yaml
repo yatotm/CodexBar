@@ -1,0 +1,63 @@
+services:
+  collector:
+    build:
+      context: ..
+      dockerfile: Collector/Dockerfile
+    user: "${COLLECTOR_UID:-1000}:${COLLECTOR_GID:-1000}"
+    command: ["--listen", "0.0.0.0", "--token-file", "/run/secrets/collector_token", "--providers", "${PROVIDERS:-codex}"]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 32
+    tmpfs: [/tmp:size=16m,mode=1777]
+    ports: ["127.0.0.1:${COLLECTOR_PORT:-8765}:8765"]
+    volumes:
+      - type: bind
+        source: ${COLLECTOR_DATA:?Set COLLECTOR_DATA}
+        target: /data
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${CODEX_SESSIONS:?Set CODEX_SESSIONS}
+        target: /logs/codex/sessions
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${CODEX_ARCHIVED:?Set CODEX_ARCHIVED}
+        target: /logs/codex/archived_sessions
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${CLAUDE_PROJECTS:?Set CLAUDE_PROJECTS}
+        target: /logs/claude/projects
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${CLAUDE_SIGNALS:?Set CLAUDE_SIGNALS}
+        target: /logs/claude/codexbar-usage/signals
+        read_only: true
+        bind: {create_host_path: false}
+    secrets: [collector_token]
+
+  https:
+    image: caddy:2-alpine
+    profiles: [https]
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      USAGE_DOMAIN: ${USAGE_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [collector]
+
+secrets:
+  collector_token:
+    file: ${COLLECTOR_TOKEN_FILE:?Set COLLECTOR_TOKEN_FILE}
+
+volumes:
+  caddy_data:
+  caddy_config:

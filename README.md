@@ -25,6 +25,8 @@ CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，用于集中展示
 
 它可以在任务完成、等待批准或额度变化时提醒你，也能只在 Codex 任务运行期间自动防止系统睡眠。
 
+本 fork 增加了独立的 [多机器用量中心](Docs/UserGuide/usage-center.md)，支持本机和 SSH 开发机的 Codex、Claude Code 日志统计，以及可选的 Docker/HTTPS 统计端。入口位于菜单栏右键菜单，新增功能需要从本 fork 构建，下面的上游发行版安装链接不包含这些改动。
+
 ## 功能
 
 ### 账户与额度一目了然

@@ -8,8 +8,23 @@ import Security
 nonisolated enum WorkflowSyncCloudKit {
     private static let containerIdentifier = "iCloud.app.zabrian.codexbar"
 
-    static func makeContainer() -> CKContainer {
-        CKContainer(identifier: containerIdentifier)
+    static func makeContainer() -> CKContainer? {
+        // 本地自签名构建没有 CloudKit 权限, 此时创建容器会直接终止进程
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var information: CFDictionary?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let information = information as? [String: Any],
+              let entitlements = information[kSecCodeInfoEntitlementsDict as String] as? [String: Any],
+              let containers = entitlements["com.apple.developer.icloud-container-identifiers"] as? [String],
+              containers.contains(containerIdentifier),
+              let services = entitlements["com.apple.developer.icloud-services"] as? [String],
+              services.contains("CloudKit") else {
+            return nil
+        }
+        return CKContainer(identifier: containerIdentifier)
     }
 }
 
@@ -24,7 +39,14 @@ private nonisolated enum WorkflowSyncStage: String {
 
 /// 将本机 daily.jsonl 的脱敏聚合行同步到 CloudKit private database
 actor WorkflowSyncService {
-    private let database: CKDatabase
+    private let cloudDatabase: CKDatabase?
+    private var database: CKDatabase {
+        get throws {
+            guard let cloudDatabase else { throw CKError(.permissionFailure) }
+            return cloudDatabase
+        }
+    }
+
     private let fileManager: FileManager
     private let directoryURL: URL
 
@@ -34,11 +56,11 @@ actor WorkflowSyncService {
     private var cachedAccountSalt: Data?
 
     init(
-        container: CKContainer = WorkflowSyncCloudKit.makeContainer(),
+        container: CKContainer? = WorkflowSyncCloudKit.makeContainer(),
         fileManager: FileManager = .default,
         directoryURL: URL = WorkflowStorage.syncDirectoryURL()
     ) {
-        database = container.privateCloudDatabase
+        cloudDatabase = container?.privateCloudDatabase
         self.fileManager = fileManager
         self.directoryURL = directoryURL
     }

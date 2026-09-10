@@ -213,6 +213,8 @@ final nonisolated class AppServerSession {
         params: [String: Any]? = nil,
         as type: Response.Type
     ) throws -> Response {
+        // 睡眠取消后允许既有请求收尾, 但不能继续发送下一步查询或重试
+        try Task.checkCancellation()
         let id = nextId
         nextId += 1
         let encoded = try encodeMessage(method: method, id: id, params: params)

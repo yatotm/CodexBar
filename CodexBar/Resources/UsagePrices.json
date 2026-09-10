@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "asOf": "2026-09-09",
+  "apiSource": "https://developers.openai.com/api/docs/pricing",
+  "creditSource": "https://learn.chatgpt.com/docs/pricing",
+  "rates": [
+    {
+      "model": "gpt-6-astra",
+      "input": 10,
+      "cachedInput": 1,
+      "cacheWrite": 12.5,
+      "output": 50,
+      "longThreshold": 272000,
+      "creditInput": 250,
+      "creditCachedInput": 25,
+      "creditOutput": 1250
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "input": 4,
+      "cachedInput": 0.4,
+      "cacheWrite": 5,
+      "output": 20,
+      "longThreshold": 272000,
+      "creditInput": 100,
+      "creditCachedInput": 10,
+      "creditOutput": 500
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "input": 2,
+      "cachedInput": 0.2,
+      "cacheWrite": 2.5,
+      "output": 12,
+      "longThreshold": 272000,
+      "creditInput": 50,
+      "creditCachedInput": 5,
+      "creditOutput": 300
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "input": 0.2,
+      "cachedInput": 0.02,
+      "cacheWrite": 0.25,
+      "output": 1.2,
+      "longThreshold": 272000,
+      "creditInput": 5,
+      "creditCachedInput": 0.5,
+      "creditOutput": 30
+    },
+    {
+      "model": "gpt-5.5",
+      "input": 5,
+      "cachedInput": 0.5,
+      "cacheWrite": null,
+      "output": 30,
+      "longThreshold": 272000,
+      "creditInput": 125,
+      "creditCachedInput": 12.5,
+      "creditOutput": 750
+    },
+    {
+      "model": "gpt-5.4",
+      "input": 2.5,
+      "cachedInput": 0.25,
+      "cacheWrite": null,
+      "output": 15,
+      "longThreshold": 272000,
+      "creditInput": 62.5,
+      "creditCachedInput": 6.25,
+      "creditOutput": 375
+    },
+    {
+      "model": "gpt-5.4-mini",
+      "input": 0.75,
+      "cachedInput": 0.075,
+      "cacheWrite": null,
+      "output": 4.5,
+      "longThreshold": null,
+      "creditInput": 18.75,
+      "creditCachedInput": 1.875,
+      "creditOutput": 113
+    },
+    {
+      "model": "gpt-5.3-codex",
+      "input": 1.75,
+      "cachedInput": 0.175,
+      "cacheWrite": null,
+      "output": 14,
+      "longThreshold": null,
+      "creditInput": null,
+      "creditCachedInput": null,
+      "creditOutput": null
+    },
+    {
+      "model": "gpt-5.2",
+      "input": 1.75,
+      "cachedInput": 0.175,
+      "cacheWrite": null,
+      "output": 14,
+      "longThreshold": null,
+      "creditInput": null,
+      "creditCachedInput": null,
+      "creditOutput": null
+    }
+  ]
+}

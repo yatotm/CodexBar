@@ -6,9 +6,29 @@ final nonisolated class RefreshTaskCoordinator: Sendable {
     private struct State {
         var task: Task<Void, Never>?
         var generation = 0
+        var suspended = false
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
+
+    var isSuspended: Bool {
+        state.withLock { $0.suspended }
+    }
+
+    func suspend() {
+        let task = state.withLock {
+            $0.suspended = true
+            $0.generation += 1
+            let task = $0.task
+            $0.task = nil
+            return task
+        }
+        task?.cancel()
+    }
+
+    func resume() {
+        state.withLock { $0.suspended = false }
+    }
 
     deinit {
         cancel()
@@ -18,7 +38,9 @@ final nonisolated class RefreshTaskCoordinator: Sendable {
     @discardableResult
     func start(_ operation: @escaping @MainActor @Sendable (_ generation: Int) async -> Void) -> Int {
         let generation = begin()
-        store(Task { @MainActor in
+        guard !isSuspended else { return generation }
+        store(Task { @MainActor [weak self] in
+            guard self?.canCommit(generation) == true else { return }
             await operation(generation)
         })
         return generation
@@ -32,6 +54,7 @@ final nonisolated class RefreshTaskCoordinator: Sendable {
         operation: @escaping @MainActor @Sendable () async -> Value,
         commit: @escaping @MainActor @Sendable (Value) -> Void
     ) {
+        guard !isSuspended else { return }
         setRefreshing(true)
         start { [self] generation in
             defer {
@@ -68,7 +91,7 @@ final nonisolated class RefreshTaskCoordinator: Sendable {
 
     func canCommit(_ generation: Int) -> Bool {
         !Task.isCancelled && state.withLock {
-            generation == $0.generation
+            generation == $0.generation && !$0.suspended
         }
     }
 

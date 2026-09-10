@@ -4,10 +4,11 @@ import SwiftUI
 /// 全局快捷键无法信任 status item 锚点时使用的无箭头菜单面板
 @MainActor
 final class FallbackPanelController {
-    private let makeContentController: () -> NSHostingController<AnyView>
+    private let makeContentController: () -> MenuHostingController
     private var panel: KeyableBorderlessPanel?
+    private var measuredContentSize: CGSize?
 
-    init(makeContentController: @escaping () -> NSHostingController<AnyView>) {
+    init(makeContentController: @escaping () -> MenuHostingController) {
         self.makeContentController = makeContentController
     }
 
@@ -27,6 +28,22 @@ final class FallbackPanelController {
         let panel = makePanelIfNeeded()
         let contentSize = contentSize(for: panel)
         panel.setFrame(frame(for: contentSize, on: screen), display: false)
+    }
+
+    func resizeContent(to size: CGSize) {
+        measuredContentSize = size
+        guard let panel, panel.frame.size != size else { return }
+        let frame = NSRect(
+            x: panel.frame.minX,
+            y: panel.frame.maxY - size.height,
+            width: size.width,
+            height: size.height
+        )
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = panel.isVisible ? 0.20 : 0
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().setFrame(frame, display: true)
+        }
     }
 
     func show() {
@@ -66,7 +83,8 @@ final class FallbackPanelController {
     }
 
     private func contentSize(for panel: NSPanel) -> NSSize {
-        guard let fittingSize = panel.contentViewController?.view.validFittingSize else {
+        let measured = (panel.contentViewController as? MenuHostingController)?.contentSize
+        guard let fittingSize = measuredContentSize ?? measured, fittingSize.height.isFinite, fittingSize.height > 0 else {
             return Metrics.fallbackSize
         }
 

@@ -7,6 +7,8 @@ import SwiftUI
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate {
     private let viewModel: CodexStatusViewModel
+    private let usageCenterViewModel: UsageCenterViewModel
+    private let usageCenterWindowController: UsageCenterWindowController
     private let workflowViewModel: WorkflowViewModel
     private let codexHookSettings: CodexHookSettings
     private let codexCLINotificationSettings: CodexCLINotificationSettings
@@ -112,6 +114,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     init(
         viewModel: CodexStatusViewModel,
+        usageCenterViewModel: UsageCenterViewModel,
         workflowViewModel: WorkflowViewModel,
         codexHookSettings: CodexHookSettings,
         codexCLINotificationSettings: CodexCLINotificationSettings,
@@ -127,6 +130,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         proxySettings: CodexProxySettings
     ) {
         self.viewModel = viewModel
+        self.usageCenterViewModel = usageCenterViewModel
+        usageCenterWindowController = UsageCenterWindowController(viewModel: usageCenterViewModel) { NSScreen.containingMouse() }
         self.workflowViewModel = workflowViewModel
         self.codexHookSettings = codexHookSettings
         self.codexCLINotificationSettings = codexCLINotificationSettings
@@ -454,6 +459,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     func uninstall() {
+        viewModel.stopAutoRefresh()
         closeMenuSurface(animated: false)
         auxiliaryWindowFocusRestoreTask?.cancel()
         statusIconAnimationTask?.cancel()
@@ -497,37 +503,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         popover.behavior = .applicationDefined
         popover.animates = false
         popover.contentViewController = hostingController
-    }
-
-    private func makeMenuHostingController(usesPreferredContentSize: Bool) -> NSHostingController<AnyView> {
-        let rootView = CodexStatusMenuView(
-            viewModel: viewModel,
-            workflowViewModel: workflowViewModel,
-            codexHookSettings: codexHookSettings,
-            mainPanelSettings: mainPanelSettings,
-            activityMonitor: activityMonitor,
-            syncSettings: syncSettings,
-            keepAliveController: keepAliveController,
-            menuSurfaceVisibility: menuSurfaceVisibility,
-            activityCenterPresentationState: activityCenterPresentationState,
-            onUsageHeatmapHoverChange: { [weak self] context in
-                self?.updateHeatmapDetailPanel(context)
-            },
-            onResetCreditsTap: { [weak self] context in
-                self?.toggleResetCreditsPanel(context)
-            },
-            onActivityCenterTap: { [weak self] context in
-                self?.toggleActivityCenterPanel(context)
-            }
-        )
-        .environmentObject(appUpdater)
-        .frame(width: CodexStatusMenuView.menuWidth)
-
-        let hostingController = NSHostingController(rootView: AnyView(rootView))
-        if usesPreferredContentSize {
-            hostingController.sizingOptions = [.preferredContentSize]
-        }
-        return hostingController
+        popover.contentSize = hostingController.contentSize
     }
 
     // MARK: - 订阅与全局快捷键
@@ -999,6 +975,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
 
         menu.addItem(menuItem(
+            title: "用量中心",
+            action: #selector(openUsageCenter),
+            keyEquivalent: "u",
+            symbolName: "chart.bar.xaxis"
+        ))
+
+        menu.addItem(menuItem(
             title: "app.menu.settings",
             action: #selector(openSettings),
             keyEquivalent: ",",
@@ -1050,6 +1033,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         openAuxiliaryWindow { [weak self] in
             self?.logWindowController.open()
         }
+    }
+
+    @objc private func openUsageCenter() {
+        closeMenuSurface(animated: false)
+        usageCenterViewModel.openMenuDetails()
+        openAuxiliaryWindow(usageCenterWindowController.open)
     }
 
     // MARK: - 辅助窗口与焦点
@@ -1198,6 +1187,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func setAuxiliaryWindowKeyFocus(_ allowsKeyFocus: Bool) {
         settingsWindowController.setAllowsKeyFocus(allowsKeyFocus)
         logWindowController.setAllowsKeyFocus(allowsKeyFocus)
+        usageCenterWindowController.setAllowsKeyFocus(allowsKeyFocus)
     }
 
     // MARK: - 刷新与同步
@@ -1410,3 +1400,50 @@ private protocol MenuSideDetailPanel: AnyObject {
 extension HeatmapDetailPanelController: MenuSideDetailPanel {}
 extension ResetCreditsPanelController: MenuSideDetailPanel {}
 extension ActivityCenterPanelController: MenuSideDetailPanel {}
+
+private extension StatusItemController {
+    func makeMenuHostingController(usesPreferredContentSize: Bool) -> MenuHostingController {
+        let controller = MenuHostingController()
+        let rootView = CodexStatusMenuView(
+            viewModel: viewModel,
+            usageCenterViewModel: usageCenterViewModel,
+            workflowViewModel: workflowViewModel,
+            codexHookSettings: codexHookSettings,
+            mainPanelSettings: mainPanelSettings,
+            activityMonitor: activityMonitor,
+            syncSettings: syncSettings,
+            keepAliveController: keepAliveController,
+            menuSurfaceVisibility: menuSurfaceVisibility,
+            activityCenterPresentationState: activityCenterPresentationState,
+            onUsageHeatmapHoverChange: { [weak self] in self?.updateHeatmapDetailPanel($0) },
+            onResetCreditsTap: { [weak self] in self?.toggleResetCreditsPanel($0) },
+            onActivityCenterTap: { [weak self] in self?.toggleActivityCenterPanel($0) },
+            onScopeChange: { [weak self] in self?.hideSideDetailPanels() },
+            onOpenUsageDetails: { [weak self] in self?.openUsageCenter() }
+        )
+        .environmentObject(appUpdater)
+        .frame(width: CodexStatusMenuView.menuWidth)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { [weak self, weak controller] size in
+            guard let self, size.width.isFinite, size.height.isFinite, size.height > 0 else { return }
+            let size = CGSize(width: ceil(size.width), height: ceil(size.height))
+            controller?.resizeContent(to: size)
+            if usesPreferredContentSize {
+                guard popover.contentSize != size else { return }
+                popover.animates = popover.isShown
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.20
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    popover.contentSize = size
+                }
+                popover.animates = false
+            } else {
+                fallbackPanelController.resizeContent(to: size)
+            }
+        }
+
+        // 额度条依赖显式动画, 不能在根视图清空整棵视图的动画事务
+        controller.install(AnyView(rootView))
+        return controller
+    }
+}

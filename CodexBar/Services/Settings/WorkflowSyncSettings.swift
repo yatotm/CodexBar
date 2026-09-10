@@ -181,8 +181,11 @@ final class WorkflowSyncSettings: ObservableObject {
     }
 
     private nonisolated static func querySyncAvailability() async -> WorkflowSyncAvailabilityResult {
-        await withCheckedContinuation { continuation in
-            WorkflowSyncCloudKit.makeContainer().accountStatus { status, error in
+        guard let container = WorkflowSyncCloudKit.makeContainer() else {
+            return .unavailable(.accountUnavailable)
+        }
+        return await withCheckedContinuation { continuation in
+            container.accountStatus { status, error in
                 continuation.resume(
                     returning: WorkflowSyncFailureReason.availabilityResult(
                         status: status,

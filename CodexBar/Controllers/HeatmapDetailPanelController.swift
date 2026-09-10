@@ -111,7 +111,7 @@ final class HeatmapDetailPanelController {
             attach(panel, to: menuSurfaceWindow)
         }
 
-        let panelSize = UsageHeatmapDayDetailView.panelSize(showsWorkflow: context.showsWorkflow)
+        let panelSize = UsageHeatmapDayDetailView.panelSize(showsWorkflow: context.showsExtendedDetails)
         let position = panelPosition(
             for: panelSize,
             relativeTo: menuSurfaceWindow,
@@ -290,7 +290,7 @@ final class HeatmapDetailPanelController {
     private func updateContent(_ context: UsageHeatmapHoverContext) {
         contentHost.updateContent(
             UsageHeatmapDayDetailView(context: context),
-            size: UsageHeatmapDayDetailView.panelSize(showsWorkflow: context.showsWorkflow)
+            size: UsageHeatmapDayDetailView.panelSize(showsWorkflow: context.showsExtendedDetails)
         )
     }
 

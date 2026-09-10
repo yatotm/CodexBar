@@ -45,3 +45,11 @@ codesign2
 .agents/
 .claude/
 .specify/
+
+# 统计采集器的本地运行产物
+__pycache__/
+*.pyc
+Collector/.env
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

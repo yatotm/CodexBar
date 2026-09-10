@@ -256,48 +256,40 @@ private struct LiquidGlassFrostedTexture: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Canvas(opaque: false, rendersAsynchronously: true) { context, size in
-            let step: CGFloat = isOuterSurface ? 4 : 3
-            let columns = max(Int((size.width / step).rounded(.up)), 0)
-            let rows = max(Int((size.height / step).rounded(.up)), 0)
-            let baseOpacity = colorScheme == .dark ? 0.035 : 0.045
-            let outerScale = isOuterSurface ? 0.75 : 1.0
-            let shadowFactor = colorScheme == .dark ? 0.24 : 0.16
+        let index = (colorScheme == .dark ? 2 : 0) + (isOuterSurface ? 1 : 0)
+        if let tile = Self.tiles[index] {
+            Image(decorative: tile, scale: 1)
+                .resizable(resizingMode: .tile)
+                .interpolation(.none)
+                .allowsHitTesting(false)
+        }
+    }
 
-            // 按强度分桶合并同色点, 把上万次单点 fill 压缩成每桶一次路径填充
-            // 桶内取中值不透明度, 与逐点绘制的偏差不超过 baseOpacity / (2 * bucketCount)
-            var highlightPaths = [Path](repeating: Path(), count: Self.bucketCount)
-            var shadowPaths = [Path](repeating: Path(), count: Self.bucketCount)
-
-            for row in 0 ..< rows {
-                for column in 0 ..< columns {
-                    let sample = Self.noise(column: column, row: row)
-                    let isHighlight = sample >= 0.5
-                    let strength = isHighlight ? (sample - 0.5) * 2 : (0.5 - sample) * 2
-                    let bucket = min(Int(strength * Double(Self.bucketCount)), Self.bucketCount - 1)
-                    let rect = CGRect(
-                        x: CGFloat(column) * step,
-                        y: CGFloat(row) * step,
-                        width: 1,
-                        height: 1
-                    )
-
-                    if isHighlight {
-                        highlightPaths[bucket].addRect(rect)
-                    } else {
-                        shadowPaths[bucket].addRect(rect)
-                    }
-                }
-            }
-
-            for bucket in 0 ..< Self.bucketCount {
-                let strength = (Double(bucket) + 0.5) / Double(Self.bucketCount)
-                let opacity = baseOpacity * strength * outerScale
-                context.fill(highlightPaths[bucket], with: .color(.white.opacity(opacity)))
-                context.fill(shadowPaths[bucket], with: .color(.black.opacity(opacity * shadowFactor)))
+    /// 纹理只生成四份小位图, 滚动和尺寸动画不再逐帧构建成千上万个路径
+    private static let tiles: [CGImage?] = (0 ..< 4).map { index in
+        let dark = index >= 2
+        let outer = index % 2 == 1
+        let side = 192
+        guard let context = CGContext(
+            data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        let step = outer ? 4 : 3
+        let baseOpacity = dark ? 0.035 : 0.045
+        let scale = outer ? 0.75 : 1.0
+        for row in 0 ..< side / step {
+            for column in 0 ..< side / step {
+                let sample = noise(column: column, row: row)
+                let highlight = sample >= 0.5
+                let strength = abs(sample - 0.5) * 2
+                let bucket = min(Int(strength * Double(bucketCount)), bucketCount - 1)
+                let opacity = baseOpacity * (Double(bucket) + 0.5) / Double(bucketCount) * scale
+                let alpha = highlight ? opacity : opacity * (dark ? 0.24 : 0.16)
+                context.setFillColor(CGColor(gray: highlight ? 1 : 0, alpha: alpha))
+                context.fill(CGRect(x: column * step, y: row * step, width: 1, height: 1))
             }
         }
-        .allowsHitTesting(false)
+        return context.makeImage()
     }
 
     private static let bucketCount = 16

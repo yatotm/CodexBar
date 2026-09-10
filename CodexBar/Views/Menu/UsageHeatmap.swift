@@ -8,6 +8,11 @@ nonisolated struct UsageHeatmapHoverContext: Equatable {
     let alignmentScreenFrame: CGRect?
     let preferredSide: UsageHeatmapDetailSide
     let peakTokens: Int
+    var recordedDay: UsageDay?
+
+    var showsExtendedDetails: Bool {
+        showsWorkflow || recordedDay != nil
+    }
 }
 
 nonisolated enum UsageHeatmapDetailSide: Equatable {
@@ -32,6 +37,7 @@ struct UsageSummaryView: View {
     let onHoverContextChange: (UsageHeatmapHoverContext?) -> Void
     private let days: [UsageHeatmapDay?]
     private let peakTokens: Int
+    private let recordedDays: [String: UsageDay]
     @State private var hoverSelection: UsageHeatmapSelection?
     @State private var heatmapScreenFrame: CGRect?
 
@@ -40,12 +46,14 @@ struct UsageSummaryView: View {
         workflow: WorkflowSnapshot,
         showsWorkflow: Bool,
         isStale: Bool = false,
+        recordedDays: [UsageDay] = [],
         onHoverContextChange: @escaping (UsageHeatmapHoverContext?) -> Void = { _ in }
     ) {
         self.usage = usage
         self.isStale = isStale
         self.showsWorkflow = showsWorkflow
         self.onHoverContextChange = onHoverContextChange
+        self.recordedDays = Dictionary(recordedDays.map { ($0.day, $0) }, uniquingKeysWith: { _, latest in latest })
 
         let days = UsageHeatmapDay.grid(
             usage: usage,
@@ -198,7 +206,8 @@ struct UsageSummaryView: View {
                 showsWorkflow: showsWorkflow,
                 alignmentScreenFrame: heatmapScreenFrame,
                 preferredSide: UsageHeatmap.Metrics.preferredDetailSide(for: $0.column),
-                peakTokens: peakTokens
+                peakTokens: peakTokens,
+                recordedDay: showsWorkflow ? nil : recordedDays[$0.day.id]
             )
         }
     }
@@ -306,6 +315,15 @@ struct UsageHeatmap: View {
                                     percent: Double(day.tokensForHeatmap) / Double(peakTokens),
                                     isHovered: snapSelection?.day.id == day.id
                                 )
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel("\(day.startDate), \(day.tokensForHeatmap) Token")
+                                .accessibilityAddTraits(.isButton)
+                                .accessibilityValue(selection?.day.id == day.id ? "显示日期详情" : "")
+                                .accessibilityAction {
+                                    cancelHoverClearTask()
+                                    snapSelection = UsageHeatmapSelection(day: day, column: column, row: row)
+                                    selection = UsageHeatmapSelection(day: day, column: column, row: row)
+                                }
                                 .opacity(showsSquares ? 1 : 0)
                                 .scaleEffect(showsSquares ? 1 : Metrics.entranceScale)
                                 .animation(
@@ -572,7 +590,7 @@ struct UsageHeatmapDayDetailView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let panelSize = Self.panelSize(showsWorkflow: context.showsWorkflow)
+        let panelSize = Self.panelSize(showsWorkflow: context.showsExtendedDetails)
 
         detailContent
             .padding(.horizontal, Metrics.horizontalPadding)
@@ -599,11 +617,57 @@ struct UsageHeatmapDayDetailView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        if context.showsWorkflow {
+        if let day = context.recordedDay {
+            recordedContent(day)
+        } else if context.showsWorkflow {
             workflowContent
         } else {
             tokenOnlyContent
         }
+    }
+
+    private func recordedContent(_ day: UsageDay) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.sectionSpacing) {
+            header
+            LiquidGlassDivider().opacity(0.72)
+            VStack(alignment: .leading, spacing: Metrics.metricSpacing) {
+                ForEach(Array(recordedRows(day).enumerated()), id: \.offset) { _, row in
+                    metricRowLayout {
+                        metricDot(tint: row.tint)
+                        Text(row.label).foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Text(row.value).lineLimit(1).minimumScaleFactor(0.65)
+                    }
+                }
+            }
+        }
+        .help("设备日志按 UTC 统计; 主要模型按 Token 排名, 会话包含子会话, 缺少权限事件时显示未知")
+    }
+
+    private struct RecordedMetricRow {
+        let label: String
+        let value: String
+        let tint: Color
+    }
+
+    private func recordedRows(_ day: UsageDay) -> [RecordedMetricRow] {
+        let metrics = day.metrics
+        func count(_ value: Int64?) -> String {
+            value?.formatted() ?? "未知"
+        }
+        let input = (metrics?.tokens ?? 0) - (metrics?.output ?? 0)
+        let cache = input > 0 && (metrics?.cacheRead ?? 0) <= input
+            ? "\(Int(100 * Double(metrics?.cacheRead ?? 0) / Double(input)))%" : "--"
+        return [
+            RecordedMetricRow(label: "主要模型", value: day.topModel ?? "未知", tint: .cyan),
+            RecordedMetricRow(label: "会话总数", value: count(metrics?.sessions), tint: .green),
+            RecordedMetricRow(label: "对话轮次", value: count(metrics?.turns), tint: .teal),
+            RecordedMetricRow(label: "工具调用", value: count(metrics?.tools), tint: .orange),
+            RecordedMetricRow(label: "子智能体", value: count(metrics?.subagents), tint: .indigo),
+            RecordedMetricRow(label: "上下文压缩", value: count(metrics?.compactions), tint: .purple),
+            RecordedMetricRow(label: "已记录权限请求", value: count((metrics?.permissions ?? 0) > 0 ? metrics?.permissions : nil), tint: .red),
+            RecordedMetricRow(label: "缓存读取占比", value: cache, tint: .blue)
+        ]
     }
 
     private var header: some View {
@@ -614,6 +678,10 @@ struct UsageHeatmapDayDetailView: View {
                 .liquidGlassCapsule(tint: .accentColor)
 
             Spacer(minLength: 8)
+
+            if context.recordedDay != nil {
+                Text("日志").font(.caption2).foregroundStyle(.tertiary)
+            }
 
             tokenText
                 .frame(minWidth: Metrics.tokenMinimumWidth, alignment: .trailing)
@@ -758,7 +826,7 @@ struct UsageHeatmapDayDetailView: View {
 
     private var tokenText: some View {
         HeatmapTokenText(
-            tokenState: context.day.tokenState,
+            tokenState: context.recordedDay.map { .available(Int(clamping: $0.tokens)) } ?? context.day.tokenState,
             font: tokenFont,
             numericWidth: Metrics.tokenMinimumWidth,
             unitWidth: Metrics.tokenUnitWidth
