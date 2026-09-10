@@ -1,0 +1,33 @@
+name: Verify
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check style
+        run: |
+          swiftformat --lint .
+          swiftlint --strict
+      - name: Run regression checks
+        run: |
+          bash Scripts/verify-usage-center.sh
+          python3 -B -m unittest discover -s Tests -p 'test_release.py' -v
+      - name: Build app and helper
+        env:
+          CODEXBAR_LOCAL_OUTPUT: ${{ runner.temp }}/codexbar-build
+        run: bash Scripts/build-local.sh

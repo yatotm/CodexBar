@@ -7,8 +7,8 @@ BUILD_DIR="${BUILD_DIR:-${PROJECT_DIR}/Build}"
 
 DMG_PATH="${1:-}"
 APPCAST_PATH="${APPCAST_PATH:-${PROJECT_DIR}/appcast.xml}"
-DOWNLOAD_BASE_URL="${DOWNLOAD_BASE_URL:-https://codexbar.zabrian.app/download}"
-RELEASE_NOTES_BASE_URL="${RELEASE_NOTES_BASE_URL:-https://codexbar.zabrian.app/notes}"
+DOWNLOAD_BASE_URL="${DOWNLOAD_BASE_URL:-https://github.com/yatotm/CodexBar/releases/download}"
+RELEASE_NOTES_BASE_URL="${RELEASE_NOTES_BASE_URL:-https://github.com/yatotm/CodexBar/releases/tag}"
 MINIMUM_SYSTEM_VERSION="${MINIMUM_SYSTEM_VERSION:-15.0}"
 INCLUDE_RELEASE_NOTES="${INCLUDE_RELEASE_NOTES:-1}"
 SIGN_UPDATE="${SIGN_UPDATE:-}"
@@ -28,10 +28,10 @@ Environment:
                            Defaults to Build/.
   APPCAST_PATH            Path to appcast.xml. Defaults to appcast.xml.
   DOWNLOAD_BASE_URL       Base URL for DMG downloads.
-                           Defaults to https://codexbar.zabrian.app/download.
+                           Defaults to https://github.com/yatotm/CodexBar/releases/download.
   RELEASE_NOTES_BASE_URL  Base URL for release notes. The version is appended
-                           as a fragment anchor (BASE#X.Y.Z).
-                           Defaults to https://codexbar.zabrian.app/notes.
+                           as a tag path (BASE/vX.Y.Z).
+                           Defaults to https://github.com/yatotm/CodexBar/releases/tag.
   INCLUDE_RELEASE_NOTES   Set to 0 to omit sparkle:releaseNotesLink.
   MINIMUM_SYSTEM_VERSION  Defaults to 15.0.
   SIGN_UPDATE             Optional path to Sparkle's sign_update tool.
@@ -183,7 +183,7 @@ if [[ -z "${SIGN_UPDATE}" || ! -x "${SIGN_UPDATE}" ]]; then
 fi
 
 echo "==> Signing update archive"
-SIGN_OUTPUT="$("${SIGN_UPDATE}" "${DMG_PATH}")"
+SIGN_OUTPUT="$("${SIGN_UPDATE}" --account "${SIGN_UPDATE_ACCOUNT:-yatotm.CodexBar}" "${DMG_PATH}")"
 ED_SIGNATURE="$(
     printf '%s\n' "${SIGN_OUTPUT}" |
         sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' |
@@ -205,7 +205,7 @@ if [[ -z "${ARCHIVE_LENGTH}" ]]; then
     ARCHIVE_LENGTH="$(stat -f%z "${DMG_PATH}")"
 fi
 
-DOWNLOAD_URL="${DOWNLOAD_BASE_URL%/}/$(basename "${DMG_PATH}")"
+DOWNLOAD_URL="${DOWNLOAD_BASE_URL%/}/v${SHORT_VERSION}/$(basename "${DMG_PATH}")"
 PUB_DATE="$(LC_ALL=C TZ=Asia/Shanghai date '+%a, %d %b %Y %H:%M:%S %z')"
 TITLE="$(printf '%s %s' "${PRODUCT_NAME}" "${SHORT_VERSION}" | xml_escape)"
 DOWNLOAD_URL_ESCAPED="$(printf '%s' "${DOWNLOAD_URL}" | xml_escape)"
@@ -214,7 +214,7 @@ MIN_SYSTEM_ESCAPED="$(printf '%s' "${MINIMUM_SYSTEM_VERSION}" | xml_escape)"
 
 RELEASE_NOTES_XML=""
 if [[ "${INCLUDE_RELEASE_NOTES}" != "0" ]]; then
-    RELEASE_NOTES_URL="${RELEASE_NOTES_BASE_URL%/}#${SHORT_VERSION}"
+    RELEASE_NOTES_URL="${RELEASE_NOTES_BASE_URL%/}/v${SHORT_VERSION}"
     RELEASE_NOTES_URL_ESCAPED="$(printf '%s' "${RELEASE_NOTES_URL}" | xml_escape)"
     RELEASE_NOTES_XML="<sparkle:releaseNotesLink>${RELEASE_NOTES_URL_ESCAPED}</sparkle:releaseNotesLink>
     "

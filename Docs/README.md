@@ -29,5 +29,5 @@
 
 ## 在线资料
 
-- [运行架构](https://codexbar.zabrian.app/architecture)
-- [性能报告](https://codexbar.zabrian.app/performance)
+- [上游运行架构](https://codexbar.zabrian.app/architecture)
+- [上游性能报告](https://codexbar.zabrian.app/performance)

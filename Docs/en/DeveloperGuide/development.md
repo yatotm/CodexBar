@@ -71,7 +71,7 @@ Record the build, initial settings, action sequence, actual results, and relevan
 
 ### Performance Validation
 
-View CPU, memory, wakeups, disk activity, and the recording environment in the [Performance Report](https://codexbar.zabrian.app/performance). Results apply to the build and workload recorded in the report.
+View CPU, memory, wakeups, disk activity, and the recording environment in the [Upstream Performance Report](https://codexbar.zabrian.app/performance). Results apply to the build and workload recorded in the report.
 
 For collection, report generation, and baseline comparisons, see the [performance tool guide (Chinese)](../../../Scripts/performance/README.md).
 

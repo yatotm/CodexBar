@@ -11,6 +11,10 @@ import tempfile
 
 root = Path(sys.argv[1])
 output = Path(os.environ.get("CODEXBAR_LOCAL_OUTPUT", str(Path.home() / "Library/Caches/CodexBar/LocalBuild")))
+configuration = os.environ.get("CODEXBAR_BUILD_CONFIGURATION", "Debug")
+if configuration not in ("Debug", "Release"):
+    raise SystemExit("CODEXBAR_BUILD_CONFIGURATION 必须为 Debug 或 Release")
+app_name = "CodexBar Debug.app" if configuration == "Debug" else "CodexBar.app"
 output.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="codexbar-local-build.", dir="/tmp") as directory:
     stage = Path(directory)
@@ -28,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix="codexbar-local-build.", dir="/tmp") as 
     with log_path.open("w") as log:
         result = subprocess.run([
             "xcodebuild", "-project", str(stage / "CodexBar.xcodeproj"), "-scheme", "CodexBar",
-            "-configuration", "Debug", "-destination", "generic/platform=macOS",
+            "-configuration", configuration, "-destination", "generic/platform=macOS",
             "-derivedDataPath", str(output / "DerivedData"), "CODE_SIGNING_ALLOWED=NO",
             "CODE_SIGN_ENTITLEMENTS=", "ENABLE_DEBUG_DYLIB=NO", "SWIFT_OPTIMIZATION_LEVEL=-O", "build"
         ], stdout=log, stderr=subprocess.STDOUT)
@@ -37,8 +41,8 @@ with tempfile.TemporaryDirectory(prefix="codexbar-local-build.", dir="/tmp") as 
         sys.exit(result.returncode)
 
     # 本地签名不申请 iCloud 权限, 正式构建仍使用工程原有的授权配置
-    app = stage / "CodexBar Debug.app"
-    subprocess.run(["ditto", "--noextattr", str(output / "DerivedData/Build/Products/Debug" / app.name), str(app)], check=True)
+    app = stage / app_name
+    subprocess.run(["ditto", "--noextattr", str(output / "DerivedData/Build/Products" / configuration / app.name), str(app)], check=True)
     subprocess.run(["xattr", "-cr", str(app)], check=True)
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
     # ditto 会保留目标目录的旧文件, 先移除旧产物避免残留资源破坏签名

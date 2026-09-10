@@ -21,7 +21,7 @@ struct UsageSourceEditor: View {
                     }
                 }
                 if source.transport == .ssh {
-                    TextField("SSH 主机别名", text: $source.address, prompt: Text("例如 sk_203"))
+                    TextField("SSH 主机别名", text: $source.address, prompt: Text("例如 dev-a"))
                     Text("使用系统 SSH 配置和已有密钥。首次连接请先在终端完成主机身份校验。")
                         .font(.caption).foregroundStyle(.secondary)
                 }

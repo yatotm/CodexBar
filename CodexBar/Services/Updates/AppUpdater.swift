@@ -29,10 +29,10 @@ final class AppUpdater: NSObject, ObservableObject {
     init(bundle: Bundle = .main) {
         super.init()
 
-        // 开发环境可能没有 Sparkle feed 或公钥
-        // 此时保留设置 UI, 但禁用更新能力
+        // Debug 与 Release 标识不同, 开发构建不能进入正式更新通道
 
-        guard Self.hasUsableSparkleConfiguration(in: bundle) else {
+        guard bundle.bundleIdentifier?.hasSuffix(".debug") != true,
+              Self.hasUsableSparkleConfiguration(in: bundle) else {
             return
         }
 

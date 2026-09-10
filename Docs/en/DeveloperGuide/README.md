@@ -20,8 +20,8 @@
 
 ## Online Resources
 
-- [Runtime Architecture](https://codexbar.zabrian.app/architecture)
-- [Performance Report](https://codexbar.zabrian.app/performance)
+- [Upstream Runtime Architecture](https://codexbar.zabrian.app/architecture)
+- [Upstream Performance Report](https://codexbar.zabrian.app/performance)
 
 ## Core Terminology
 

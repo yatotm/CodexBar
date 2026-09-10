@@ -4,16 +4,16 @@
 
 # CodexBar
 
-**在 macOS 菜单栏一眼看清 Codex**
+**在 macOS 菜单栏查看 Codex 与 Claude Code 用量**
 
 简体中文 | [English](README.en.md)
 
 [![macOS](https://img.shields.io/badge/macOS-15.0+-000000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
-[![Release](https://img.shields.io/github/v/release/bob-zebedy/CodexBar?color=1F6FEB)](https://github.com/bob-zebedy/CodexBar/releases)
-[![Downloads](https://img.shields.io/github/downloads/bob-zebedy/CodexBar/total?color=2EA043)](https://github.com/bob-zebedy/CodexBar/releases)
-[![License](https://img.shields.io/github/license/bob-zebedy/CodexBar?color=8957E5)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/yatotm/CodexBar?color=1F6FEB)](https://github.com/yatotm/CodexBar/releases)
+[![Downloads](https://img.shields.io/github/downloads/yatotm/CodexBar/total?color=2EA043)](https://github.com/yatotm/CodexBar/releases)
+[![License](https://img.shields.io/github/license/yatotm/CodexBar?color=8957E5)](LICENSE)
 
-[功能](#功能) | [安装](#安装) | [快速开始](#快速开始) | [使用文档](#使用文档) | [隐私](#隐私) | [运行架构](https://codexbar.zabrian.app/architecture) | [性能报告](https://codexbar.zabrian.app/performance)
+[功能](#功能) | [安装](#安装) | [快速开始](#快速开始) | [使用文档](#使用文档) | [隐私](#隐私) | [运行架构](Docs/DeveloperGuide/architecture.md)
 
 <img src="Images/preview-zh.gif" width="640" alt="CodexBar 预览">
 
@@ -21,11 +21,9 @@
 
 ---
 
-CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，用于集中展示 Codex 账户、额度、Token 用量和实时任务状态。
+CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，集中展示 Codex 额度、任务状态，以及本机和远程设备的 Codex、Claude Code 用量。
 
-它可以在任务完成、等待批准或额度变化时提醒你，也能只在 Codex 任务运行期间自动防止系统睡眠。
-
-本 fork 增加了独立的 [多机器用量中心](Docs/UserGuide/usage-center.md)，支持本机和 SSH 开发机的 Codex、Claude Code 日志统计，以及可选的 Docker/HTTPS 统计端。入口位于菜单栏右键菜单，新增功能需要从本 fork 构建，下面的上游发行版安装链接不包含这些改动。
+> 本仓库基于 [bob-zebedy/CodexBar](https://github.com/bob-zebedy/CodexBar) 独立维护。保留原菜单栏交互，增加多机器统计、Claude 被动额度和订阅价值估算；下载、更新与反馈均使用本仓库。
 
 ## 功能
 
@@ -43,6 +41,19 @@ CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，用于集中展示
 - 展示最长任务时长
 - 通过 30 周热力图回顾每日 Token 用量
 - 开启 CodexBar Hook 后可查看会话、对话轮次、工具调用和子 Agent 等每日统计
+
+### 汇总多台设备的用量
+
+- 在 `全部 / Codex / Claude` 标签间切换，设备明细默认折叠
+- 汇总 Mac 与 SSH 开发机，按机器、模型、登录方式和时间查看，跨设备去重
+- 用量中心提供每日图表、输入输出与缓存分布；VPS 可每五分钟独立采集，也可部署 Docker/HTTPS 统计端
+- Claude 额度取同账号最新的本地缓存，可选接入状态栏和 Hook 补充后续记录
+
+### 了解订阅额度的使用价值
+
+- 通过本机 Codex OAuth 读取官网账号分析，无需浏览器 Cookie
+- 合并同账号设备的周限观察，按实际重置周期估算价值，支持提前重置和套餐变化
+- 有数据时按模型价格推算，缺少样本时显示所选套餐参考范围，并区分估算依据
 
 ### 不错过正在发生的任务
 
@@ -62,21 +73,26 @@ CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，用于集中展示
 
 - 作为菜单栏 App 运行，不占用 Dock
 - 支持全局快捷键、开机启动和自动更新
-- 支持简体中文和英文界面
+- 原主面板支持中英文，新增用量中心以中文为主
 - 支持为 Codex 服务配置 HTTP/HTTPS 代理
-- 可选通过 iCloud 合并多台 Mac 的每日 Hook 统计
+- 可选通过 iCloud 合并多台 Mac 的每日 Hook 统计，需要可用的签名与 CloudKit 配置
+- 系统睡眠时暂停 Mac 的周期刷新，正式唤醒后恢复；VPS 采集独立运行
 
 ## 安装
 
-### Homebrew
+### 下载
+
+从本仓库的 [GitHub Releases](https://github.com/yatotm/CodexBar/releases/latest) 下载应用，解压后拖入 Applications。首次切换到本 fork 请手动安装，之后由应用内更新继续维护。
+
+### 从源码构建
 
 ```bash
-brew install --cask bob-zebedy/tap/codexbar
+git clone https://github.com/yatotm/CodexBar.git
+cd CodexBar
+bash Scripts/build-local.sh
 ```
 
-### DMG
-
-从 [GitHub Releases](https://github.com/bob-zebedy/CodexBar/releases) 下载最新版本并拖入 Applications。
+构建与发布配置见 [开发者指南](Docs/DeveloperGuide/releasing.md)。
 
 ## 运行要求
 
@@ -84,14 +100,17 @@ brew install --cask bob-zebedy/tap/codexbar
 - 已安装并登录 [Codex CLI](https://github.com/openai/codex) 或安装了内置 Codex 的 ChatGPT App 或 Codex App
 - 当前运行的 Codex 版本需要为 `0.143.0` 或更高版本
 - 使用实时任务等 Hook 功能时，当前运行的 Codex 版本需要为 `0.145.0` 或更高版本
-- 使用跨设备同步时，Mac 需要登录可用的 iCloud 账户
+- 采集本机或远程日志需要 Python 3.9 或更高版本，无需额外 Python 包
+- Claude 统计需要可读取的会话日志；5h/7d 额度取决于客户端是否留下相应记录
+- iCloud 与系统 Helper 功能需要匹配的签名和授权
 
 ## 快速开始
 
 1. 启动 CodexBar，在菜单栏找到 CodexBar 图标
-2. 左键点击图标查看账户、额度和 Token 用量
+2. 左键点击图标，在 `全部 / Codex / Claude` 中查看额度与热力图
 3. 右键或按住 Control 点击图标打开设置、日志或退出菜单
-4. 在 `设置 > 高级` 中启用 CodexBar Hook，解锁实时任务、任务类通知、防睡眠和 Hook 统计
+4. 点击 `用量详情` 添加 SSH 来源；在订阅价值卡片中选择已确认同账号的历史周限来源
+5. 需要实时任务时，在 `设置 > 高级` 中启用 CodexBar Hook
 
 默认全局快捷键为 `⌘⇧W`，可在设置中重新录制或关闭。
 
@@ -101,17 +120,21 @@ brew install --cask bob-zebedy/tap/codexbar
 | --- | --- |
 | [用户指南](Docs/UserGuide/README.md) | 安装、主面板、Hook、通知、防睡眠、同步、全部设置和问题排查 |
 | [开发者指南](Docs/DeveloperGuide/README.md) | 架构、数据链路、核心状态机、存储、隐私边界和开发验证 |
+| [多机器用量中心](Docs/UserGuide/usage-center.md) | SSH、Claude 被动额度、价值估算与统计边界 |
+| [Linux 采集端](Collector/README.md) | 定时任务、Docker 与 HTTPS 部署 |
 | [文档导航](Docs/README.md) | 文档导航 |
 
 ## 隐私
 
-Hook 原始事件和实时任务在本机处理。开启跨设备同步后，日级 Hook 聚合会上传到 iCloud private database。账户和用量通过本机 Codex app-server 获取，由 Codex 连接服务端；更新检查使用 Sparkle。
+会话日志在各设备解析，只同步经过筛选的统计元数据，不传输对话正文、工具参数或登录 Token。Claude 采集器不主动请求 Anthropic；Codex 账户额度和官网分析使用本机登录访问官方服务。
+
+iCloud 仅用于原有日级 Hook 聚合，更新检查使用本 fork 的 Sparkle 更新源。Token、额度比例和美元估算是不同口径，普通网页 Chat 对话不计入这些统计。
 
 完整的数据访问、本机存储和网络边界见 [数据、同步与隐私](Docs/UserGuide/sync-data-privacy.md)
 
 ## 反馈
 
-Bug、功能建议或使用问题欢迎通过 [GitHub Issues](https://github.com/bob-zebedy/CodexBar/issues) 反馈。
+Bug、功能建议或使用问题欢迎通过 [GitHub Issues](https://github.com/yatotm/CodexBar/issues) 反馈。
 
 ## 许可证
 

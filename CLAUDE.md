@@ -316,8 +316,8 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar/HookEvents/ev
 
 改动涉及网络、日志或同步时必须遵守：
 
-- App 只有三类外部通信行为，分别是本机 app-server stdio 通信（不算网络）、Sparkle 更新、用户显式开启后的 CloudKit 同步；新增网络请求需要非常明确的理由
-- 账户、额度、Token 用量和 Reset Credits 明细统一通过本机 app-server 获取；Sparkle 更新走 `https://codexbar.zabrian.app/appcast.xml` 这个 feed
+- 外部通信包括 Sparkle 更新、用户启用的 CloudKit 同步、已配置的 SSH/HTTPS 统计来源，以及使用本机 Codex OAuth 的官方账号分析；app-server stdio 本身不是网络。Claude 采集不主动访问 Anthropic，新增通信必须核对数据边界
+- Codex 当前账户、额度和 Reset Credits 明细通过本机 app-server 获取；跨设备日志与官方账号分析由用量中心独立维护。Sparkle 更新走 `https://github.com/yatotm/CodexBar/releases/latest/download/appcast.xml` 这个 feed
 - 不展示 app-server stderr；不展示或记录 Codex OAuth token；不把原始敏感 RPC 响应写进文档
 - CloudKit 只同步去掉 `sessionIds` 与 `turnIds` 的 daily 聚合，不同步原始 Hook events、账号、额度或 Token 用量
 - 异常会话保护状态只保存在本机，不同步 CloudKit；记录不含原始 session ID、turn ID、项目名或任务内容

@@ -14,15 +14,17 @@ By default, CodexBar automatically prefers a globally installed Codex CLI. If it
 
 ## Installation
 
-### Homebrew
+### Build from source
 
 ```bash
-brew install --cask bob-zebedy/tap/codexbar
+git clone https://github.com/yatotm/CodexBar.git
+cd CodexBar
+bash Scripts/build-local.sh
 ```
 
 ### DMG
 
-1. Download the latest DMG from [GitHub Releases](https://github.com/bob-zebedy/CodexBar/releases)
+1. Download the latest DMG from [GitHub Releases](https://github.com/yatotm/CodexBar/releases)
 2. Open the DMG and drag CodexBar into Applications
 3. Launch CodexBar from Applications
 

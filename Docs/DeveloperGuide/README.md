@@ -20,8 +20,8 @@
 
 ## 在线资料
 
-- [运行架构](https://codexbar.zabrian.app/architecture)
-- [性能报告](https://codexbar.zabrian.app/performance)
+- [上游运行架构](https://codexbar.zabrian.app/architecture)
+- [上游性能报告](https://codexbar.zabrian.app/performance)
 
 ## 核心术语
 
@@ -48,3 +48,5 @@
 - 自动重置唤醒同步：[`AutoResetWakeScheduler.swift`](../../CodexBar/Services/KeepAlive/AutoResetWakeScheduler.swift)
 - 防睡眠编排：[`KeepAliveController.swift`](../../CodexBar/Services/KeepAlive/KeepAliveController.swift)
 - CodexBarHelper：[`main.swift`](../../CodexBarHelper/main.swift)
+
+独立 fork 的构建和自动发布见 [构建与独立发布](releasing.md)

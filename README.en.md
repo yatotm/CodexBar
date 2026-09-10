@@ -4,16 +4,16 @@
 
 # CodexBar
 
-**Codex at a glance, right from your macOS menu bar**
+**Codex and Claude Code usage in your macOS menu bar**
 
 [简体中文](README.md) | English
 
 [![macOS](https://img.shields.io/badge/macOS-15.0+-000000?logo=apple&logoColor=white)](https://www.apple.com/macos/)
-[![Release](https://img.shields.io/github/v/release/bob-zebedy/CodexBar?color=1F6FEB)](https://github.com/bob-zebedy/CodexBar/releases)
-[![Downloads](https://img.shields.io/github/downloads/bob-zebedy/CodexBar/total?color=2EA043)](https://github.com/bob-zebedy/CodexBar/releases)
-[![License](https://img.shields.io/github/license/bob-zebedy/CodexBar?color=8957E5)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/yatotm/CodexBar?color=1F6FEB)](https://github.com/yatotm/CodexBar/releases)
+[![Downloads](https://img.shields.io/github/downloads/yatotm/CodexBar/total?color=2EA043)](https://github.com/yatotm/CodexBar/releases)
+[![License](https://img.shields.io/github/license/yatotm/CodexBar?color=8957E5)](LICENSE)
 
-[Features](#features) | [Installation](#installation) | [Quick Start](#quick-start) | [Documentation](#documentation) | [Privacy](#privacy) | [Runtime Architecture](https://codexbar.zabrian.app/architecture) | [Performance Report](https://codexbar.zabrian.app/performance)
+[Features](#features) | [Installation](#installation) | [Quick Start](#quick-start) | [Documentation](#documentation) | [Privacy](#privacy) | [Runtime Architecture](Docs/en/DeveloperGuide/architecture.md)
 
 <img src="Images/preview-en.gif" width="640" alt="CodexBar preview">
 
@@ -21,9 +21,9 @@
 
 ---
 
-CodexBar is a menu bar app for macOS 15 and later that brings your Codex account, rate limits, token usage, and live task status into one place.
+CodexBar is a macOS 15+ menu bar app for Codex quotas and task status, plus Codex and Claude Code usage across local and remote machines.
 
-It can notify you when a task finishes, needs approval, or when your rate limits change. It can also keep your Mac awake only while Codex tasks are running.
+> This independently maintained fork is based on [bob-zebedy/CodexBar](https://github.com/bob-zebedy/CodexBar). Downloads, updates, and issue reports use this repository.
 
 ## Features
 
@@ -64,17 +64,29 @@ It can notify you when a task finishes, needs approval, or when your rate limits
 - Configurable HTTP/HTTPS proxy for the Codex service
 - Optionally merges daily Hook metrics across Macs through iCloud
 
+### Multi-machine usage and subscription estimates
+
+- Switch between All, Codex, and Claude while keeping the original menu bar interface
+- Aggregate local and SSH logs, with daily charts and model, input/output, and cache breakdowns
+- Use optional Linux timers or a Docker/HTTPS collector; VPS collection continues while the Mac sleeps
+- Read existing Claude quota caches without sending additional Anthropic requests
+- Estimate subscription value from official account analytics and account-matched quota history, including early resets and plan changes
+
+The new Usage Center currently uses Chinese. See the [usage guide](Docs/UserGuide/usage-center.md) and [Linux collector guide](Collector/README.md) for setup and data boundaries. Estimates are not billing statements.
+
 ## Installation
 
-### Homebrew
+### Download
+
+Download the app from [GitHub Releases](https://github.com/yatotm/CodexBar/releases/latest), extract it, and move it to Applications. Install this fork manually once; subsequent updates use its own Sparkle feed.
+
+### Build from source
 
 ```bash
-brew install --cask bob-zebedy/tap/codexbar
+git clone https://github.com/yatotm/CodexBar.git
+cd CodexBar
+bash Scripts/build-local.sh
 ```
-
-### DMG
-
-Download the latest version from [GitHub Releases](https://github.com/bob-zebedy/CodexBar/releases), then drag CodexBar into Applications.
 
 ## Requirements
 
@@ -82,7 +94,9 @@ Download the latest version from [GitHub Releases](https://github.com/bob-zebedy
 - [Codex CLI](https://github.com/openai/codex) installed and signed in, or ChatGPT App or Codex App with bundled Codex installed
 - The running Codex version must be `0.143.0` or later
 - Live tasks and other Hook features require the running Codex version to be `0.145.0` or later
-- Cross-device sync requires an available iCloud account on the Mac
+- Log collection requires Python 3.9 or later, with no extra packages
+- Claude quotas require matching records in local client caches
+- iCloud and system Helper features require matching signing and authorization
 
 ## Quick Start
 
@@ -109,7 +123,7 @@ See [Data, Sync, and Privacy](Docs/en/UserGuide/sync-data-privacy.md) for comple
 
 ## Feedback
 
-Report bugs, request features, or ask questions through [GitHub Issues](https://github.com/bob-zebedy/CodexBar/issues).
+Report bugs, request features, or ask questions through [GitHub Issues](https://github.com/yatotm/CodexBar/issues).
 
 ## License
 

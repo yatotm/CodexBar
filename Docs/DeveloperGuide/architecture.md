@@ -2,7 +2,7 @@
 
 简体中文 | [English](../en/DeveloperGuide/architecture.md)
 
-进程、数据链路与恢复路径的交互式总览见[运行架构](https://codexbar.zabrian.app/architecture)
+进程、数据链路与恢复路径的交互式总览见[上游运行架构](https://codexbar.zabrian.app/architecture)
 
 ## 技术基线
 

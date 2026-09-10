@@ -2,7 +2,7 @@
 
 [简体中文](../../DeveloperGuide/architecture.md) | English
 
-Explore the processes, data flows, and recovery paths in the [Runtime Architecture](https://codexbar.zabrian.app/architecture).
+Explore the processes, data flows, and recovery paths in the [Upstream Runtime Architecture](https://codexbar.zabrian.app/architecture).
 
 ## Technical Baseline
 

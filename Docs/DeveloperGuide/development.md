@@ -71,7 +71,7 @@ helper 改动还需检查 App 包内可执行文件和 plist 的位置、签名�
 
 ### 性能验证
 
-CPU、内存、唤醒、磁盘活动与采集环境见[性能报告](https://codexbar.zabrian.app/performance)
+CPU、内存、唤醒、磁盘活动与采集环境见[上游性能报告](https://codexbar.zabrian.app/performance)
 
 结果对应报告中记录的构建和测试场景。采集、生成报告和基线对比方法见[性能采集工具说明](../../Scripts/performance/README.md)
 

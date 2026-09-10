@@ -14,15 +14,17 @@ CodexBar 默认自动选择来源，优先使用全局安装的 Codex CLI，找�
 
 ## 安装
 
-### 通过 Homebrew
+### 从源码构建
 
 ```bash
-brew install --cask bob-zebedy/tap/codexbar
+git clone https://github.com/yatotm/CodexBar.git
+cd CodexBar
+bash Scripts/build-local.sh
 ```
 
 ### 通过 DMG
 
-1. 从 [GitHub Releases](https://github.com/bob-zebedy/CodexBar/releases) 下载最新 DMG
+1. 从 [GitHub Releases](https://github.com/yatotm/CodexBar/releases) 下载最新 DMG
 2. 打开 DMG 并将 CodexBar 拖入 Applications
 3. 从 Applications 启动 CodexBar
 

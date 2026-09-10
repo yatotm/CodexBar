@@ -177,7 +177,7 @@ private extension AppSettingsView {
         static let statusAnimation = Animation.codexStatus
     }
 
-    static let githubProjectURL = URL(string: "https://github.com/bob-zebedy/CodexBar")!
+    static let githubProjectURL = URL(string: "https://github.com/yatotm/CodexBar")!
 
     // MARK: - 分页骨架
 
