@@ -23,7 +23,6 @@ jobs:
       contents: write
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-      CODEXBAR_LOCAL_OUTPUT: ${{ runner.temp }}/codexbar-build
       CODEXBAR_BUILD_CONFIGURATION: Release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,6 +31,7 @@ jobs:
           persist-credentials: false
       - name: Validate version
         run: |
+          echo "CODEXBAR_LOCAL_OUTPUT=$RUNNER_TEMP/codexbar-build" >> "$GITHUB_ENV"
           python3 - <<'PY'
           import os, pathlib, re
           config = pathlib.Path('Config/Version.xcconfig').read_text()
@@ -45,6 +45,10 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a') as out:
               out.write(f'RELEASE_TAG={tag}\nRELEASE_BUILD={build}\n')
           PY
+      - name: Install missing lint tools
+        run: |
+          command -v swiftformat >/dev/null || brew install swiftformat
+          command -v swiftlint >/dev/null || brew install swiftlint
       - name: Verify
         run: |
           swiftformat --lint .
