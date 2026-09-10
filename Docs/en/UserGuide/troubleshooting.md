@@ -141,3 +141,7 @@ You can view or copy the full content in a separate window. It cannot be recover
 Include reproduction steps, CodexBar and Codex versions, and visible errors. Interaction logs may contain account and request content; review private information before sharing.
 
 Back to the [User Guide](README.md).
+
+## Fork behavior
+
+Missing Claude quotas mean the client did not provide a usable passive record, not zero usage. Check SSH access, timer status, and the configured cache directory for stale remote data. OAuth/API history and early resets affect valuation; estimates are not bills. Debug builds do not offer Release updates, and the first fork installation is manual.

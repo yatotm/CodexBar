@@ -491,3 +491,7 @@ Reset Credits 明细包含 opaque credit ID。系统日志不能记录 ID 或原
 - [`AutoResetIdentity.swift`](../../CodexBar/Services/CodexStatus/AutoResetIdentity.swift)
 - [`AutoResetWakeScheduler.swift`](../../CodexBar/Services/KeepAlive/AutoResetWakeScheduler.swift)
 - [`CodexBarHelperXPC.swift`](../../Shared/CodexBarHelperXPC.swift)
+
+## 与用量中心的边界
+
+当前额度仍以本机 app-server 为准。官网日统计由独立 OAuth 客户端读取，远端日志和历史额度不能替代实时额度，也不能触发自动重置。睡眠期间暂停普通轮询，取消检查同时覆盖排队请求和结果提交，正式唤醒后恢复。

@@ -35,7 +35,7 @@ actor ActivityProtectionStateStore {
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
         directoryURL = applicationSupportURL
-            .appendingPathComponent("CodexBar", isDirectory: true)
+            .appendingPathComponent("CodexBar-yatotm", isDirectory: true)
             .appendingPathComponent("ActivityProtection", isDirectory: true)
         stateURL = directoryURL.appendingPathComponent("state.json", isDirectory: false)
         lockURL = directoryURL.appendingPathComponent("state.lock", isDirectory: false)

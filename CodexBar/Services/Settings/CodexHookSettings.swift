@@ -404,7 +404,7 @@ private extension CodexHookSettings {
     var currentExecutablePath: String {
         Bundle.main.executableURL?.path
             ?? CommandLine.arguments.first
-            ?? "/Applications/CodexBar.app/Contents/MacOS/CodexBar"
+            ?? "/Applications/CodexBar Fork.app/Contents/MacOS/CodexBar"
     }
 
     var hooksListWorkingDirectory: String {

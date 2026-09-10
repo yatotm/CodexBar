@@ -23,7 +23,7 @@ nonisolated enum AppLog {
     /// 本地通知
     static let notification = Logger(subsystem: subsystem, category: "notification")
 
-    private static let subsystem = Bundle.main.bundleIdentifier ?? "app.zabrian.codexbar"
+    private static let subsystem = Bundle.main.bundleIdentifier ?? "io.github.yatotm.codexbar"
 }
 
 nonisolated enum LogFields {

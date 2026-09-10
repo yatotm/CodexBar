@@ -21,7 +21,7 @@ fi
 
 usage() {
     cat >&2 <<USAGE
-usage: Scripts/appcast.sh [CodexBar-vX.Y.Z.dmg]
+usage: Scripts/appcast.sh [CodexBar-fork-vX.Y.Z.dmg]
 
 Environment:
   BUILD_DIR               Directory used for default DMG lookup.
@@ -30,7 +30,7 @@ Environment:
   DOWNLOAD_BASE_URL       Base URL for DMG downloads.
                            Defaults to https://github.com/yatotm/CodexBar/releases/download.
   RELEASE_NOTES_BASE_URL  Base URL for release notes. The version is appended
-                           as a tag path (BASE/vX.Y.Z).
+                           as a tag path (BASE/fork-vX.Y.Z).
                            Defaults to https://github.com/yatotm/CodexBar/releases/tag.
   INCLUDE_RELEASE_NOTES   Set to 0 to omit sparkle:releaseNotesLink.
   MINIMUM_SYSTEM_VERSION  Defaults to 15.0.
@@ -205,7 +205,7 @@ if [[ -z "${ARCHIVE_LENGTH}" ]]; then
     ARCHIVE_LENGTH="$(stat -f%z "${DMG_PATH}")"
 fi
 
-DOWNLOAD_URL="${DOWNLOAD_BASE_URL%/}/v${SHORT_VERSION}/$(basename "${DMG_PATH}")"
+DOWNLOAD_URL="${DOWNLOAD_BASE_URL%/}/fork-v${SHORT_VERSION}/$(basename "${DMG_PATH}")"
 PUB_DATE="$(LC_ALL=C TZ=Asia/Shanghai date '+%a, %d %b %Y %H:%M:%S %z')"
 TITLE="$(printf '%s %s' "${PRODUCT_NAME}" "${SHORT_VERSION}" | xml_escape)"
 DOWNLOAD_URL_ESCAPED="$(printf '%s' "${DOWNLOAD_URL}" | xml_escape)"
@@ -214,7 +214,7 @@ MIN_SYSTEM_ESCAPED="$(printf '%s' "${MINIMUM_SYSTEM_VERSION}" | xml_escape)"
 
 RELEASE_NOTES_XML=""
 if [[ "${INCLUDE_RELEASE_NOTES}" != "0" ]]; then
-    RELEASE_NOTES_URL="${RELEASE_NOTES_BASE_URL%/}/v${SHORT_VERSION}"
+    RELEASE_NOTES_URL="${RELEASE_NOTES_BASE_URL%/}/fork-v${SHORT_VERSION}"
     RELEASE_NOTES_URL_ESCAPED="$(printf '%s' "${RELEASE_NOTES_URL}" | xml_escape)"
     RELEASE_NOTES_XML="<sparkle:releaseNotesLink>${RELEASE_NOTES_URL_ESCAPED}</sparkle:releaseNotesLink>
     "

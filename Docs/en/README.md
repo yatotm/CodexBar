@@ -31,3 +31,12 @@
 
 - [Upstream Runtime Architecture](https://codexbar.zabrian.app/architecture)
 - [Upstream Performance Report](https://codexbar.zabrian.app/performance)
+
+## Fork additions
+
+The following guides currently use Chinese:
+
+- [Multi-machine Usage Center](../UserGuide/usage-center.md)
+- [Migration](../UserGuide/migration.md)
+- [Implementation and verification](../DeveloperGuide/usage-center.md)
+- [Independent releases](../DeveloperGuide/releasing.md)

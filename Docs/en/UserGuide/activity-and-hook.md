@@ -42,3 +42,7 @@ Disabling Hook stops updates to live tasks, task notifications, haptics, sleep p
 Hook records task information such as time, model, tool name, and project, without saving prompt, reply, or tool input/output content. See [Data, Sync, and Privacy](sync-data-privacy.md) for retention and sync details.
 
 Back to the [User Guide](README.md).
+
+## Fork behavior
+
+Live tasks and task control described here apply to local Codex only. Remote and Claude usage records do not drive activity monitoring, sleep prevention, or task notifications.

@@ -298,3 +298,9 @@ Hook + rollout --------> CodexActivityMonitor --------> UI
 - [`WorkflowSyncService.swift`](../../CodexBar/Services/Workflow/WorkflowSyncService.swift) 管理 CloudKit 同步
 - [`CodexBarHelperXPC.swift`](../../Shared/CodexBarHelperXPC.swift) 定义受限特权接口
 - [`CodexBarHelper/main.swift`](../../CodexBarHelper/main.swift) 执行并验证系统睡眠与唤醒操作
+
+## 用量中心的独立链路
+
+`UsageCenterViewModel`、`UsageCenterStore` 和采集器负责本机及远端日志。官网分析由 `UsageAnalyticsClient` 独立请求，`UsageQuotaHistoryController` 维护同账号周限证据。数据库查询和网络解析不在主 actor 执行，菜单摘要与详情筛选分开缓存。
+
+这些记录只用于展示和估算，不进入 `CodexActivityMonitor` 或自动重置状态机。睡眠时 AppDelegate 统一暂停额度刷新、用量同步、官网分析和历史采集，取消的旧结果不能回填。完整协议、去重与外推规则见 [用量中心实现与验证](usage-center.md)

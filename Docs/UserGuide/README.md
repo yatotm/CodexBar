@@ -20,4 +20,9 @@
 - CodexBar Hook：开启实时任务与每日活动统计的功能
 - CodexBarHelper：随 App 安装的后台服务，用于防睡眠和自动重置唤醒
 
+## 本分支新增
+
+- [多机器用量中心](usage-center.md)
+- [切换到独立 fork](migration.md)
+
 返回 [CodexBar README](../../README.md)

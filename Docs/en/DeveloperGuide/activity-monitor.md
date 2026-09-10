@@ -415,7 +415,7 @@ Turning off the sleep-prevention switch disables Activity Protection and restore
 [`ActivityProtectionStateStore.swift`](../../../CodexBar/Services/Workflow/ActivityProtectionStateStore.swift) writes:
 
 ```text
-~/Library/Application Support/CodexBar/ActivityProtection/state.json
+~/Library/Application Support/CodexBar-yatotm/ActivityProtection/state.json
 ```
 
 - Current schema is `1`

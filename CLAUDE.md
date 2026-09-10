@@ -26,10 +26,10 @@ swiftformat .
 swiftlint
 
 # 查看系统日志; zsh 里 log 会和 shell 冲突, 必须写完整路径
-# Debug 版把 subsystem 换成 app.zabrian.codexbar.debug, helper 进程另带 .helper 后缀
+# Debug 版把 subsystem 换成 io.github.yatotm.codexbar.debug, helper 进程另带 .helper 后缀
 # BEGINSWITH 会同时命中 Debug 与 Release, 要分版本得用 == 或 IN
-/usr/bin/log stream --predicate 'subsystem == "app.zabrian.codexbar"' --style compact
-/usr/bin/log show --predicate 'subsystem == "app.zabrian.codexbar"' --last 30m --style compact
+/usr/bin/log stream --predicate 'subsystem == "io.github.yatotm.codexbar"' --style compact
+/usr/bin/log show --predicate 'subsystem == "io.github.yatotm.codexbar"' --last 30m --style compact
 
 # 发布流程 (需要 Developer ID 凭据, 不要当普通本地验证跑)
 Scripts/build.sh    # Release archive + Developer ID 导出 + notarize + staple + Gatekeeper 校验
@@ -43,11 +43,11 @@ Scripts/appcast.sh  # sign_update 签名并写入 appcast.xml
 Scripts/cleanup.swift --help
 ```
 
-日常调试直接用 `open CodexBar.xcodeproj` 在 Xcode 中运行 Debug scheme。Debug 产物使用 `app.zabrian.codexbar.debug` 这个 bundle ID，与 Release 安装版可以共存，排查防睡眠问题时要确认自己查看的是哪一套 helper。
+日常调试直接用 `open CodexBar.xcodeproj` 在 Xcode 中运行 Debug scheme。Debug 产物使用 `io.github.yatotm.codexbar.debug` 这个 bundle ID，与 Release 安装版可以共存，排查防睡眠问题时要确认自己查看的是哪一套 helper。
 
 `Scripts/build.sh` 会先清空 `Build/` 目录，成功后只保留最终的 `.app` 文件。凭据推荐使用 keychain profile，先运行一次 `xcrun notarytool store-credentials "codexbar-notary" --apple-id "<Apple ID>" --team-id "<Team ID>"` 保存凭据，之后构建时加上 `--notary-profile codexbar-notary`
 
-Debug 与 Release 使用不同 bundle ID，分别是 `app.zabrian.codexbar.debug` 与 `app.zabrian.codexbar`。helper 相应带 `.debug.helper` 与 `.helper` 后缀，所以 `CodexBarHelper/` 下有两份 LaunchDaemon plist，`cleanup.swift` 也需要同时处理两套。
+Debug 与 Release 使用不同 bundle ID，分别是 `io.github.yatotm.codexbar.debug` 与 `io.github.yatotm.codexbar`。helper 相应带 `.debug.helper` 与 `.helper` 后缀，所以 `CodexBarHelper/` 下有两份 LaunchDaemon plist，`cleanup.swift` 也需要同时处理两套。
 
 ## Git 补充规则
 
@@ -86,7 +86,7 @@ Debug 与 Release 使用不同 bundle ID，分别是 `app.zabrian.codexbar.debug
 
 **链路二：Hook 统计（历史聚合）**
 
-Hook 子进程按天写入 `~/Library/Application Support/CodexBar/HookEvents/events/YYYY-MM-DD.jsonl` 这类文件，主 App 的 `WorkflowService`（actor）增量聚合出 `daily.jsonl` 与 `WorkflowSnapshot`，供热力图详情面板展示。可选跨设备同步由 `WorkflowSyncScheduler`（唯一调度者）与 `WorkflowSyncService` 负责，使用 `iCloud.app.zabrian.codexbar` 容器的 CloudKit private database，只上传脱敏 daily 聚合。
+Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEvents/events/YYYY-MM-DD.jsonl` 这类文件，主 App 的 `WorkflowService`（actor）增量聚合出 `daily.jsonl` 与 `WorkflowSnapshot`，供热力图详情面板展示。可选跨设备同步由 `WorkflowSyncScheduler`（唯一调度者）与 `WorkflowSyncService` 负责，使用 `iCloud.io.github.yatotm.codexbar` 容器的 CloudKit private database，只上传脱敏 daily 聚合。
 
 - `WorkflowStorage` 管理的存储目录含 `events/`、`daily.jsonl`、`stats.lock`、`maintenance.json`、`Sync/` 五项
 - 原始事件文件与 daily 聚合统一保留 210 天，聚合里的会话与轮次标识只保留 3 天，到期后只留下去重计数
@@ -120,7 +120,7 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar/HookEvents/ev
 - KeepAlive 关闭时恢复当前进程内所有隐藏任务并撤回通知，已经隐藏任务的持久化记录保留；再次开启后按当前阈值和最近进展时间无通知对账
 - 判定要求监控已启动、KeepAlive 已开启、reader 存在、bootstrap 已结束、不在睡眠或唤醒恢复阶段且 Hook 数据源健康；进入不满足条件的阶段时会取消计时器和在途通知 attempt
 - 静默定时器使用 `SuspendingClock`，系统时间变化由 `NSSystemClockDidChange` 触发无通知重算；系统睡眠期间暂停判定，唤醒完成 Hook 读取和 rollout 对账后再恢复
-- `ActivityProtectionStateStore` 把记录写入 `~/Library/Application Support/CodexBar/ActivityProtection/state.json`，字段只有 SHA-256 任务标识与 `lastProgressAt`、`markedAt`、`expiresAt`，最长保留到最后进展后的 24 小时
+- `ActivityProtectionStateStore` 把记录写入 `~/Library/Application Support/CodexBar-yatotm/ActivityProtection/state.json`，字段只有 SHA-256 任务标识与 `lastProgressAt`、`markedAt`、`expiresAt`，最长保留到最后进展后的 24 小时
 - Debug 与 Release 共用状态文件，actor 串行化进程内访问，`flock` 保护跨进程读写，文件权限固定为 `0600`，当前 schema 为 `1`；状态在 task reader 启动前完成加载
 - 持久化操作按 `activityProtectionPersistenceTask` 串行排队，条件删除用 `markedAt` 防止旧 attempt 删除新记录，终态与保留期清理执行无条件删除
 
@@ -153,7 +153,7 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar/HookEvents/ev
 - App 同步唤醒计划失败后按 2/4/8/16/32/64 秒重试；App 正常退出或 helper 更新前按立即、250 毫秒、1 秒取消，失败就保留错误并取消本次退出或更新
 - `Scripts/cleanup.swift` 注销 helper 前先通过 XPC 取消固定 owner 的事件并回读；事件仍存在时必须停止注销，不能让系统计划失去最后一个具备清理能力的进程
 - 调用方校验由 XPC 层强制；helper 启动时用 `SecCodeCopySelf` 读自身签名，拼出形如 `anchor apple generic and certificate leaf[subject.OU] = "<team>" and identifier "<主 App identifier>"` 的 requirement 字符串，交给 `NSXPCListener.setConnectionCodeSigningRequirement` 生效；没有逐次连接的 audit token 检查，改签名或改 bundle ID 会直接连不上
-- 所有权记录固定放在 `/Library/Application Support/CodexBar/helper-state.json`，由 root 在同目录写临时文件，完成 `F_FULLFSYNC` 后原子替换并同步目录，权限固定为 `0600`；只持久化 `idle`、`owned`、`restoring` 三态，`external` 只是任务期间的运行态，不落盘也不承担恢复责任
+- 所有权记录固定放在 `/Library/Application Support/CodexBar-yatotm/helper-state.json`，由 root 在同目录写临时文件，完成 `F_FULLFSYNC` 后原子替换并同步目录，权限固定为 `0600`；只持久化 `idle`、`owned`、`restoring` 三态，`external` 只是任务期间的运行态，不落盘也不承担恢复责任
 - 当前值为 0 时必须先写 `owned` 再写 `pmset 1`；释放时必须先写 `restoring` 再写 `pmset 0`；两次 pmset 都要重新读取 `pmset -g` 确认实际值，只有确认为 0 才能记回 `idle`
 - 任务开始时实际值已为 1 就返回 `external`，不写 `pmset`；helper 每 5 秒观察一次，如果其他来源在任务期间改回 0，helper 立即按上一条顺序取得所有权
 - helper 取得所有权后每 5 秒检查一次实际值与磁盘 transaction，值被改成 0 时重新写回 1，记录缺失、损坏或 transaction 不一致时先修复记录；修复失败也必须继续尝试恢复为 0

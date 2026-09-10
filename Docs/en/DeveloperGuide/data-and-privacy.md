@@ -48,7 +48,7 @@ CodexBar narrows data in this order:
 
 | Source | Use in CodexBar | Persisted? | Uploaded to CloudKit? |
 | --- | --- | --- | --- |
-| app-server account, rate limits, and Reset Credits | Main panel, notification decisions, and user-enabled Automatic Reset | Short-lived state only | No |
+| app-server account, rate limits, and Reset Credits | Main panel, notification decisions, and user-enabled Automatic Reset | In-memory snapshots; filtered quota history is also stored by Usage Center | No |
 | Structured Hook events | Historical aggregation and live tasks | Yes, up to 210 days | Daily aggregations only |
 | Rollout lifecycle | Terminal and progress reconciliation | Not persisted separately | No |
 | App settings | Feature switches and thresholds | UserDefaults | No |
@@ -64,7 +64,7 @@ The app launches local `codex app-server --listen stdio://` to obtain account da
 
 CodexBar does not implement account sign-in. Whether app-server accesses OpenAI services follows normal Codex CLI authentication and protocol behavior.
 
-CodexBar communicates with the local process only over stdio and does not copy authentication material from app-server responses. The request log stores normalized complete request and response JSON only in current-process memory. It may contain account responses, opaque credit IDs, and idempotency keys and must not be treated as a redacted summary.
+The app-server flow communicates with the local process only over stdio and does not copy authentication material from app-server responses. The request log stores normalized complete request and response JSON only in current-process memory. It may contain account responses, opaque credit IDs, and idempotency keys and must not be treated as a redacted summary.
 
 ### Hook Events
 
@@ -110,7 +110,7 @@ A rate-limit response from stale cache may remain visible but cannot trigger a n
 ### App User Directory
 
 ```text
-~/Library/Application Support/CodexBar/
+~/Library/Application Support/CodexBar-yatotm/
   HookEvents/
     events/YYYY-MM-DD.jsonl
     daily.jsonl
@@ -119,6 +119,10 @@ A rate-limit response from stale cache may remain visible but cannot trigger a n
     Sync/
   ActivityProtection/
     state.json
+  UsageCenter/
+    center-v1.sqlite
+  UsageAnalytics/
+  UsageQuotaHistory/
 ```
 
 | Path | Contents | Lifetime |
@@ -150,15 +154,15 @@ Changes to persistence keys, data structures, enum raw values, or defaults for m
 
 The `CodexProxy.configuration` key stores one JSON data value containing `configuration` and `password`. Passwords are stored in plain text in local UserDefaults and removed when settings are saved with authentication disabled or the configuration is cleared. Debug and Release use separate preference domains:
 
-- Debug: `~/Library/Preferences/app.zabrian.codexbar.debug.plist`
-- Release: `~/Library/Preferences/app.zabrian.codexbar.plist`
+- Debug: `~/Library/Preferences/io.github.yatotm.codexbar.debug.plist`
+- Release: `~/Library/Preferences/io.github.yatotm.codexbar.plist`
 
 `CodexProxyStore` distinguishes a missing record from a decoding failure. A failed record remains available for the configuration dialog’s clear action.
 
 ### CodexBarHelper Directory
 
 ```text
-/Library/Application Support/CodexBar/helper-state.json
+/Library/Application Support/CodexBar-yatotm/helper-state.json
 ```
 
 The file stores only the recovery transaction describing whether CodexBarHelper owns `SleepDisabled`. It contains no Codex task, account, or Hook data.
@@ -173,7 +177,7 @@ The in-app [`RequestLog.swift`](../../../CodexBar/Services/CodexStatus/RequestLo
 
 It diagnoses the app-server protocol. Even in memory, it must not contain OAuth tokens or Hook content.
 
-The unified logging subsystem is `app.zabrian.codexbar`, with a `.debug` suffix in Debug builds.
+The unified logging subsystem is `io.github.yatotm.codexbar`, with a `.debug` suffix in Debug builds.
 
 System logs may contain only:
 
@@ -288,3 +292,7 @@ The helper ownership file is a crash-recovery transaction record, not a user pre
 - [`ActivityProtectionStateStore.swift`](../../../CodexBar/Services/Workflow/ActivityProtectionStateStore.swift)
 - [`RequestLog.swift`](../../../CodexBar/Services/CodexStatus/RequestLog.swift)
 - [`CodexBarHelper/main.swift`](../../../CodexBarHelper/main.swift)
+
+## Fork integration
+
+UsageCenter/center-v1.sqlite stores filtered cross-device history; UsageAnalytics and UsageQuotaHistory hold account-isolated caches. Official chatgpt.com analytics uses local OAuth in memory, refuses redirects, and does not copy credentials to VPS collectors. Claude collection is passive. HTTPS collector credentials use io.github.yatotm.codexbar.usage-center in Keychain. Migration retains old files and skips upstream cloud cursors; the Helper root recovery state is not migrated.

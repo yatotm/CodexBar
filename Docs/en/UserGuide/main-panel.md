@@ -131,3 +131,7 @@ The bottom of the main panel shows:
 When a new version is available, double-click the update indicator to start the update.
 
 Back to the [User Guide](README.md)
+
+## Fork behavior
+
+The All, Codex, and Claude tabs select the menu scope. Device details start collapsed; refresh and Usage Details remain accessible. Claude quotas use the newest available passive record across configured account-matched devices. Both providers replay quota bars when opening the menu or switching tabs. The separate Usage Center filter does not change the menu scope.

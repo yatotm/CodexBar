@@ -50,3 +50,6 @@
 - CodexBarHelper：[`main.swift`](../../CodexBarHelper/main.swift)
 
 独立 fork 的构建和自动发布见 [构建与独立发布](releasing.md)
+
+- [用量中心实现与验证](usage-center.md)：采集协议、查询、官方分析与估算
+- [切换到独立 fork](../UserGuide/migration.md)：本机设置和历史迁移

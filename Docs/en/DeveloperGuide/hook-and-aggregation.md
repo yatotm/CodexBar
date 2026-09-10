@@ -243,7 +243,7 @@ Backward search finds the latest context for a turn nearest the file tail. The r
 The default data root is:
 
 ```text
-~/Library/Application Support/CodexBar/HookEvents/
+~/Library/Application Support/CodexBar-yatotm/HookEvents/
 ```
 
 Directory structure:

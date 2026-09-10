@@ -156,7 +156,7 @@ private final nonisolated class UsageHTTPDelegate: NSObject, URLSessionTaskDeleg
 }
 
 actor UsageCollectorClient {
-    private static let keychainService = "app.zabrian.codexbar.usage-center"
+    private static let keychainService = "io.github.yatotm.codexbar.usage-center"
 
     func saveToken(_ token: String, for sourceID: String) throws {
         guard !token.isEmpty else { return }

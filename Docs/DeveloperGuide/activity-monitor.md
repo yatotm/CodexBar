@@ -415,7 +415,7 @@ rollout 对账必须发生在 Hook drain 成功之后。
 [`ActivityProtectionStateStore.swift`](../../CodexBar/Services/Workflow/ActivityProtectionStateStore.swift) 保存到：
 
 ```text
-~/Library/Application Support/CodexBar/ActivityProtection/state.json
+~/Library/Application Support/CodexBar-yatotm/ActivityProtection/state.json
 ```
 
 - 当前 schema 为 `1`

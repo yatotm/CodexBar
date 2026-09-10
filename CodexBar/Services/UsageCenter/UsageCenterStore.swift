@@ -26,7 +26,7 @@ actor UsageCenterStore {
 
     init(directory: URL? = nil) {
         self.directory = directory ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/CodexBar/UsageCenter", isDirectory: true)
+            .appendingPathComponent("Library/Application Support/CodexBar-yatotm/UsageCenter", isDirectory: true)
     }
 
     private func connect() throws -> OpaquePointer {

@@ -29,9 +29,9 @@ def api(path, payload=None, method=None, optional=False):
 def publish(directory, tag, commit):
     if os.environ.get("GITHUB_REPOSITORY", REPOSITORY) != REPOSITORY:
         raise ValueError("发布仓库不匹配")
-    if not re.fullmatch(r"v\d+\.\d+\.\d+", tag) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+    if not re.fullmatch(r"fork-v\d+\.\d+\.\d+", tag) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("标签或提交格式无效")
-    version = tag[1:]
+    version = tag.removeprefix("fork-v")
     files = [directory / f"CodexBar-{tag}.zip", directory / f"CodexBar-{tag}.dmg", directory / "appcast.xml", directory / "SHA256SUMS.txt"]
     if not all(path.is_file() and path.stat().st_size > 0 for path in files):
         raise ValueError("发布附件不完整")
@@ -56,9 +56,9 @@ def publish(directory, tag, commit):
     if files[3].read_text() != expected_checksums:
         raise ValueError("发布附件校验失败")
     latest = api("releases/latest", optional=True)
-    if latest and re.fullmatch(r"v\d+\.\d+\.\d+", latest["tag_name"]):
+    if latest and re.fullmatch(r"fork-v\d+\.\d+\.\d+", latest["tag_name"]):
         current = tuple(map(int, version.split(".")))
-        previous = tuple(map(int, latest["tag_name"][1:].split(".")))
+        previous = tuple(map(int, latest["tag_name"].removeprefix("fork-v").split(".")))
         if current < previous:
             raise ValueError("不能把较旧版本发布为最新更新")
     existing = api("git/ref/tags/" + tag, optional=True)

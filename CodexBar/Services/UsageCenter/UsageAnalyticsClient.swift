@@ -15,7 +15,7 @@ private final class AnalyticsRedirectGuard: NSObject, URLSessionTaskDelegate, @u
 
 actor UsageAnalyticsClient {
     private let directory = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/CodexBar/UsageAnalytics", isDirectory: true)
+        .appendingPathComponent("Library/Application Support/CodexBar-yatotm/UsageAnalytics", isDirectory: true)
 
     private func credentials() throws -> AnalyticsCredentials {
         let home = CodexCLIResolver.environment["CODEX_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path

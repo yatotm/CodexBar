@@ -3,7 +3,7 @@ import Foundation
 
 private actor UsageQuotaHistoryCache {
     private let directory = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/CodexBar/UsageQuotaHistory", isDirectory: true)
+        .appendingPathComponent("Library/Application Support/CodexBar-yatotm/UsageQuotaHistory", isDirectory: true)
 
     func read(_ key: String) -> UsageSourceQuotaEvidence? {
         guard let data = try? Data(contentsOf: directory.appendingPathComponent(key + ".json")), data.count <= 8 * 1024 * 1024,

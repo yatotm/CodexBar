@@ -300,3 +300,7 @@ Release scripts require Developer ID, signing, and notarization credentials and 
 - [`SettingsWindowController.swift`](../../../CodexBar/Controllers/SettingsWindowController.swift)
 - [`LogWindowController.swift`](../../../CodexBar/Controllers/LogWindowController.swift)
 - [`CodexStatusMenuView.swift`](../../../CodexBar/Views/Menu/CodexStatusMenuView.swift)
+
+## Fork integration
+
+MenuHostingController anchors device content to the top while the native window clips its expansion. Visible hosts preserve quota animations; hidden hosts disable them only after closing. Scope and presentation identity restart both providers’ bars. Usage Center uses cached queries and immediately hides content on collapse.

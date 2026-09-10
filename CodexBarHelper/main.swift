@@ -26,7 +26,7 @@ private enum CodexBarHelperStorage {
             exit(EXIT_FAILURE)
         }
         return applicationSupportURL
-            .appending(path: "CodexBar", directoryHint: .isDirectory)
+            .appending(path: "CodexBar-yatotm", directoryHint: .isDirectory)
             .appending(path: "helper-state.json")
     }()
 }

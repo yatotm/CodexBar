@@ -300,3 +300,9 @@ app-server 状态默认每 60 秒检查刷新。主面板打开后约 160 ms 调
 - [`SettingsWindowController.swift`](../../CodexBar/Controllers/SettingsWindowController.swift)
 - [`LogWindowController.swift`](../../CodexBar/Controllers/LogWindowController.swift)
 - [`CodexStatusMenuView.swift`](../../CodexBar/Views/Menu/CodexStatusMenuView.swift)
+
+## fork 菜单与用量中心
+
+三个提供商标签保留原生菜单宿主，`MenuHostingController` 用固定顶部的完整内容配合外层窗口裁剪动画展开设备列表。可见宿主保留额度动画，实际关闭后才禁用后台 SwiftUI 动画；标签和展示代次共同控制额度条重播。
+
+用量中心通过独立窗口展示缓存查询结果。`UsageReveal` 收起时立即隐藏文字，避免穿透其他卡片；每日图表与分布行各自提供统一悬浮信息。详见 [查询和绘制性能](usage-center.md#查询和绘制性能)

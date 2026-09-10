@@ -49,12 +49,12 @@ Options:
   --notary-password PASSWORD     App-specific password fallback. Prefer profile.
   --skip-notarization            Build/export without notarytool and stapling.
   --skip-spctl-assess            Skip final Gatekeeper spctl assessment.
-  --output-app PATH              Final app path. Defaults to Build/CodexBar.app.
+  --output-app PATH              Final app path. Defaults to Build/CodexBar Fork.app.
   -h, --help                     Show this help.
 
 Recommended credential setup:
   xcrun notarytool store-credentials "codexbar-notary" --apple-id "<Apple ID>" --team-id "<Team ID>" --sync
-  Scripts/build.sh --export-options Scripts/DeveloperID.plist --notary-profile codexbar-notary
+  Scripts/build.sh --team-id YOUR_TEAM_ID --notary-profile codexbar-notary
 USAGE
 }
 

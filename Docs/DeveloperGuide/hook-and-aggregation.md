@@ -243,7 +243,7 @@ Hook payload 在不同版本中可能把标识或时间表示为不同 JSON 类�
 默认数据根目录是：
 
 ```text
-~/Library/Application Support/CodexBar/HookEvents/
+~/Library/Application Support/CodexBar-yatotm/HookEvents/
 ```
 
 目录结构如下：

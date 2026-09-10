@@ -4,17 +4,17 @@
 	<dict>
 		<key>AssociatedBundleIdentifiers</key>
 		<array>
-			<string>app.zabrian.codexbar</string>
+			<string>io.github.yatotm.codexbar.debug</string>
 		</array>
 		<key>BundleProgram</key>
 		<string>Contents/Resources/CodexBarHelper</string>
 		<key>KeepAlive</key>
 		<true/>
 		<key>Label</key>
-		<string>app.zabrian.codexbar.helper</string>
+		<string>io.github.yatotm.codexbar.debug.helper</string>
 		<key>MachServices</key>
 		<dict>
-			<key>app.zabrian.codexbar.helper</key>
+			<key>io.github.yatotm.codexbar.debug.helper</key>
 			<true/>
 		</dict>
 		<key>ProcessType</key>

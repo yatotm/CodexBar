@@ -61,3 +61,7 @@ If another app has already disabled system sleep, Settings identifies an externa
 Before a normal exit, CodexBar restores sleep state it manages and cancels Automatic Reset wake schedules. If exit does not complete, check Settings for background-service errors.
 
 Back to the [User Guide](README.md).
+
+## Fork behavior
+
+Sleep prevention uses local Codex tasks, not remote or Claude history. The independent Helper requires fresh authorization and matching signing. Its root recovery state and scheduled-wake owner are isolated from upstream; see the [migration guide](../../UserGuide/migration.md).

@@ -14,7 +14,7 @@ output = Path(os.environ.get("CODEXBAR_LOCAL_OUTPUT", str(Path.home() / "Library
 configuration = os.environ.get("CODEXBAR_BUILD_CONFIGURATION", "Debug")
 if configuration not in ("Debug", "Release"):
     raise SystemExit("CODEXBAR_BUILD_CONFIGURATION 必须为 Debug 或 Release")
-app_name = "CodexBar Debug.app" if configuration == "Debug" else "CodexBar.app"
+app_name = "CodexBar Fork Debug.app" if configuration == "Debug" else "CodexBar Fork.app"
 output.mkdir(parents=True, exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="codexbar-local-build.", dir="/tmp") as directory:
     stage = Path(directory)

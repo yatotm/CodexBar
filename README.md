@@ -82,7 +82,7 @@ CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，集中展示 Codex
 
 ### 下载
 
-从本仓库的 [GitHub Releases](https://github.com/yatotm/CodexBar/releases/latest) 下载应用，解压后拖入 Applications。首次切换到本 fork 请手动安装，之后由应用内更新继续维护。
+从本仓库的 [GitHub Releases](https://github.com/yatotm/CodexBar/releases/latest) 下载应用，解压后拖入 Applications。安装包名为 `CodexBar Fork.app`。首次切换请手动安装并按 [迁移说明](Docs/UserGuide/migration.md) 复制旧数据，之后由本分支独立更新。
 
 ### 从源码构建
 
@@ -122,7 +122,7 @@ bash Scripts/build-local.sh
 | [开发者指南](Docs/DeveloperGuide/README.md) | 架构、数据链路、核心状态机、存储、隐私边界和开发验证 |
 | [多机器用量中心](Docs/UserGuide/usage-center.md) | SSH、Claude 被动额度、价值估算与统计边界 |
 | [Linux 采集端](Collector/README.md) | 定时任务、Docker 与 HTTPS 部署 |
-| [文档导航](Docs/README.md) | 文档导航 |
+| [文档导航](Docs/README.md) | 用户与开发文档总目录 |
 
 ## 隐私
 

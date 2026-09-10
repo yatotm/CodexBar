@@ -41,7 +41,7 @@ Mac 后台任务单轮分页和回填有上限，取消与超时会终止本轮�
 
 每日模型排名、事件计数、峰值、连胜和单轮最大时长直接查询既有记录，不增加持久化列，不改变原 Hook 聚合 schema。原 Hook 可用时保留其悬浮详情，缺少 Hook 时用独立设备日志补充。
 
-本机和 SSH 读取可通过 `--include-auth-type` 获取当前 Codex `auth.json` 中明确的类型字段，输出只有枚举值；它不写数据库，也不回填历史身份。定时器未启用此选项，原凭据文件隔离保持有效。HTTPS 端未提供当前身份时，客户端兼容缺失字段。历史归类和未来切换跟踪尚待规则确认。
+本机和 SSH 读取可通过 `--include-auth-type` 获取当前 Codex `auth.json` 中明确的类型字段，输出只有枚举值；它不写数据库，也不回填历史身份。定时器未启用此选项，原凭据文件隔离保持有效。HTTPS 端未提供当前身份时，客户端兼容缺失字段。历史归类按来源保存；周限历史另按每条记录的提供商和认证上下文判断，不能用当前登录状态回填所有历史。
 
 ### 官方分析与维护
 
@@ -116,7 +116,7 @@ xcodebuild -project CodexBar.xcodeproj -scheme CodexBar -destination 'generic/pl
 
 需要指定独立 Swift 编译器时，将 `CODEXBAR_SWIFTC` 设为它的路径。测试脚本对支持该选项的编译器启用 `MainActor` 默认隔离。
 
-本机 Xcode `26.3` 无法读取仓库现有的工程格式 `100` 时，可运行 `bash Scripts/build-local.sh`。脚本仅在临时副本中将两个格式标记改为 `77`，完整编译两个 target，使用本地签名，产物位于 `~/Library/Caches/CodexBar/LocalBuild/CodexBar Debug.app`
+本机 Xcode `26.3` 无法读取仓库现有的工程格式 `100` 时，可运行 `bash Scripts/build-local.sh`。脚本仅在临时副本中将两个格式标记改为 `77`，完整编译两个 target，使用本地签名，产物位于 `~/Library/Caches/CodexBar/LocalBuild/CodexBar Fork Debug.app`
 
 本地构建不申请需要开发者授权的 CloudKit entitlement。服务创建容器前检查实际签名权限，缺少权限时显示 iCloud 不可用，继续使用本地缓存，不修改同步开关或云端格式。正式构建仍保留原 entitlements；需要 iCloud 同步和 root helper 授权的验证必须使用匹配的开发者签名。
 

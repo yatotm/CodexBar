@@ -48,3 +48,12 @@
 - Automatic Reset wake synchronization: [`AutoResetWakeScheduler.swift`](../../../CodexBar/Services/KeepAlive/AutoResetWakeScheduler.swift)
 - Sleep-prevention orchestration: [`KeepAliveController.swift`](../../../CodexBar/Services/KeepAlive/KeepAliveController.swift)
 - CodexBarHelper: [`main.swift`](../../../CodexBarHelper/main.swift)
+
+## Fork additions
+
+The following guides currently use Chinese:
+
+- [Multi-machine Usage Center](../../UserGuide/usage-center.md)
+- [Migration](../../UserGuide/migration.md)
+- [Implementation and verification](../../DeveloperGuide/usage-center.md)
+- [Independent releases](../../DeveloperGuide/releasing.md)

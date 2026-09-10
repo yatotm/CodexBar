@@ -31,3 +31,12 @@
 
 - [上游运行架构](https://codexbar.zabrian.app/architecture)
 - [上游性能报告](https://codexbar.zabrian.app/performance)
+
+## 本分支新增
+
+- [多机器用量中心](UserGuide/usage-center.md)
+- [切换到独立 fork](UserGuide/migration.md)
+
+- [用量中心实现与验证](DeveloperGuide/usage-center.md)
+- [构建与独立发布](DeveloperGuide/releasing.md)
+- [Linux 采集端](../Collector/README.md)

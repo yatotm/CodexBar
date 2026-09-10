@@ -86,3 +86,7 @@ Automatic Reset runs independently of notifications. Configure result alerts in 
 Source selection is temporarily disabled while connecting. Connection failure reasons appear below the version area to help you troubleshoot or choose another source.
 
 Back to the [User Guide](README.md).
+
+## Fork behavior
+
+Usage Details opens separate source, refresh, account-history, and valuation controls. The GitHub link opens yatotm/CodexBar. Release updates use this fork’s feed; Debug builds do not use that channel. The About page also shows Helper installation and approval status.

@@ -4,7 +4,7 @@
 
 ## Cross-Device Sync
 
-Enable `Cross-Device Sync` in `Settings > Advanced` to combine daily Hook statistics from Macs using the same iCloud account. CodexBar Hook must be enabled and an available iCloud account signed in.
+Enable `Cross-Device Sync` in `Settings > Advanced` to combine daily Hook statistics from Macs using the same iCloud account. CodexBar Hook must be enabled, iCloud must be signed in, and the build must have this fork’s CloudKit signing entitlement.
 
 The first sync uploads statistics within local retention; later changes sync automatically. Turning sync off keeps local data.
 
@@ -56,6 +56,8 @@ Rebuilding recalculates Hook statistics from retained local records and displays
 | Network access | Purpose |
 | --- | --- |
 | Codex service | Read account, quota, and usage data; perform Automatic Reset |
+| Official account analytics | Read account statistics using local Codex OAuth |
+| Configured SSH / HTTPS sources | Read filtered usage metadata |
 | Update service | Check for and download CodexBar updates |
 | iCloud | Transfer daily Hook statistics when sync is enabled |
 
@@ -64,3 +66,7 @@ The proxy applies only to CodexBar’s Codex service connection, not updates, iC
 Interaction logs may contain account data and request or response content and are cleared when the app quits. Check for private information before sharing them.
 
 Back to the [User Guide](README.md).
+
+## Fork behavior
+
+SSH/HTTPS usage aggregation is separate from iCloud Hook sync. Configured sources return filtered metadata, including project display names, but no message bodies, tool arguments, or login tokens. Official account analytics uses local Codex OAuth only with chatgpt.com, without browser cookies. Claude collection sends no additional Anthropic requests. The fork has its own app, storage, Keychain, and CloudKit identities.

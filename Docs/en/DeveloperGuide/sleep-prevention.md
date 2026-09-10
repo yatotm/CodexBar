@@ -248,7 +248,7 @@ Release persists restoring first. A crash before `pmset 0` or final idle commit 
 CodexBarHelper stores ownership at:
 
 ```text
-/Library/Application Support/CodexBar/helper-state.json
+/Library/Application Support/CodexBar-yatotm/helper-state.json
 ```
 
 Security and reliability requirements are:

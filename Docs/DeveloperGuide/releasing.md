@@ -9,6 +9,7 @@ swiftformat --lint .
 swiftlint --strict
 bash Scripts/verify-usage-center.sh
 python3 -B -m unittest discover -s Tests -p 'test_release.py' -v
+python3 -B -m unittest discover -s Tests -p 'test_fork_migration.py' -v
 bash Scripts/build-local.sh
 ```
 
@@ -19,7 +20,7 @@ bash Scripts/build-local.sh
 ## 发布流程
 
 1. 修改 `Config/Version.xcconfig`，同时递增用户版本和构建号
-2. 添加对应的 `ReleaseNotes/vX.Y.Z.md`
+2. 添加对应的 `ReleaseNotes/fork-vX.Y.Z.md`
 3. 将通过验证的提交推送到本仓库 `main`
 
 云端使用 macOS 26 和 Xcode 26.3，避开旧 CI 系统上的图标编译器异常；应用最低要求仍为 macOS 15。
@@ -37,3 +38,13 @@ bash Scripts/build-local.sh
 - 首次从上游或 Debug 构建切换请手动安装，后续更新走本 fork 的通道
 
 更换更新公钥、应用标识、CloudKit 容器或 Helper 标识会影响已有安装，需要单独设计迁移。自动重置代码中的上游 URL 是 UUID 命名空间，不会发起网络请求，不能作为更新地址替换。
+
+## 应用身份与版本
+
+正式 App 标识为 `io.github.yatotm.codexbar`，Debug 追加 `.debug`，Helper 再追加 `.helper`。安装包分别为 `CodexBar Fork.app` 和 `CodexBar Fork Debug.app`，可与上游安装并存。
+
+fork 从 `1.0.0` 独立计版本，tag 使用 `fork-vX.Y.Z`，不跟随上游版本或标签。同步上游使用 `git fetch --no-tags`，审核后合并代码；不要导入上游 appcast 或发布附件。
+
+CloudKit 容器为 `iCloud.io.github.yatotm.codexbar`，须在维护者自己的 Apple Developer 团队中配置。仓库不再包含原作者的团队、证书或 provisioning profile。正式签名需提供自己的 Team ID、Developer ID Application 证书和公证凭据；具体费用与申请条件见 [Apple Developer Program](https://developer.apple.com/cn/programs/enroll/)
+
+旧安装迁移步骤见 [切换到独立 fork](../UserGuide/migration.md)。迁移不更改 schema，也不修改原安装的数据。

@@ -78,7 +78,7 @@ The new Usage Center currently uses Chinese. See the [usage guide](Docs/UserGuid
 
 ### Download
 
-Download the app from [GitHub Releases](https://github.com/yatotm/CodexBar/releases/latest), extract it, and move it to Applications. Install this fork manually once; subsequent updates use its own Sparkle feed.
+Download the app from [GitHub Releases](https://github.com/yatotm/CodexBar/releases/latest), extract it, and move it to Applications. Install `CodexBar Fork.app` manually once; follow the [migration guide](Docs/UserGuide/migration.md) to copy existing data. Subsequent versions use independent `fork-v*` tags and their own Sparkle feed.
 
 ### Build from source
 

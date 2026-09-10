@@ -23,16 +23,16 @@ def package(app, output, signer):
     build = info["CFBundleVersion"]
     if not re.fullmatch(r"\d+\.\d+\.\d+", version) or not str(build).isdigit():
         raise ValueError("发布版本格式无效")
-    if info["CFBundleIdentifier"].endswith(".debug"):
-        raise ValueError("不能发布 Debug 应用到正式更新源")
+    if info["CFBundleIdentifier"] != "io.github.yatotm.codexbar":
+        raise ValueError("只能发布本 fork 的正式应用")
     if info.get("SUFeedURL") != f"https://github.com/{REPOSITORY}/releases/latest/download/appcast.xml":
         raise ValueError("更新地址没有指向当前 fork")
     private_key = os.environ.get("SPARKLE_PRIVATE_KEY", "").strip()
     if not private_key:
         raise ValueError("未配置 SPARKLE_PRIVATE_KEY")
     output.mkdir(parents=True, exist_ok=True)
-    archive = output / f"CodexBar-v{version}.zip"
-    dmg = output / f"CodexBar-v{version}.dmg"
+    archive = output / f"CodexBar-fork-v{version}.zip"
+    dmg = output / f"CodexBar-fork-v{version}.dmg"
     if archive.exists() or dmg.exists():
         raise ValueError("发布附件已存在, 请使用空输出目录")
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
@@ -59,10 +59,10 @@ def package(app, output, signer):
     ET.SubElement(item, f"{{{SPARKLE}}}version").text = str(build)
     ET.SubElement(item, f"{{{SPARKLE}}}shortVersionString").text = version
     ET.SubElement(item, f"{{{SPARKLE}}}minimumSystemVersion").text = info["LSMinimumSystemVersion"]
-    ET.SubElement(item, f"{{{SPARKLE}}}releaseNotesLink").text = f"https://github.com/{REPOSITORY}/releases/tag/v{version}"
+    ET.SubElement(item, f"{{{SPARKLE}}}releaseNotesLink").text = f"https://github.com/{REPOSITORY}/releases/tag/fork-v{version}"
     ET.SubElement(item, "pubDate").text = dt.datetime.now(dt.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
     ET.SubElement(item, "enclosure", {
-        "url": f"https://github.com/{REPOSITORY}/releases/download/v{version}/{archive.name}",
+        "url": f"https://github.com/{REPOSITORY}/releases/download/fork-v{version}/{archive.name}",
         f"{{{SPARKLE}}}edSignature": signature,
         "length": str(archive.stat().st_size), "type": "application/octet-stream"
     })

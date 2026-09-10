@@ -2,6 +2,8 @@
 
 简体中文 | [English](../en/UserGuide/notifications.md)
 
+本页的实时任务、任务通知和防睡眠规则针对本机 Codex。远程设备及 Claude 的历史统计不会驱动这些功能。
+
 ## 开启通知
 
 1. 打开 `设置 > 高级`

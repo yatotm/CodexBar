@@ -298,3 +298,7 @@ When adding a consumer, subscribe to an existing snapshot first. If it lacks a f
 - [`WorkflowSyncService.swift`](../../../CodexBar/Services/Workflow/WorkflowSyncService.swift) manages CloudKit sync
 - [`CodexBarHelperXPC.swift`](../../../Shared/CodexBarHelperXPC.swift) defines the constrained privileged interface
 - [`CodexBarHelper/main.swift`](../../../CodexBarHelper/main.swift) executes and validates system sleep and wake operations
+
+## Fork integration
+
+Usage Center adds an independent log/SQLite and official-analytics flow, assembled by the AppDelegate. Its history never drives the local activity monitor or auto-reset state machine. Queries, account caches, and menu summaries remain separate. Sleep suspension covers quota polling, usage sync, analytics, and quota-history collection.

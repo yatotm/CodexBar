@@ -79,8 +79,8 @@ For collection, report generation, and baseline comparisons, see the [performanc
 
 | Configuration | App bundle ID | Helper bundle ID |
 | --- | --- | --- |
-| Debug | `app.zabrian.codexbar.debug` | `app.zabrian.codexbar.debug.helper` |
-| Release | `app.zabrian.codexbar` | `app.zabrian.codexbar.helper` |
+| Debug | `io.github.yatotm.codexbar.debug` | `io.github.yatotm.codexbar.debug.helper` |
+| Release | `io.github.yatotm.codexbar` | `io.github.yatotm.codexbar.helper` |
 
 Preferences and system approval are isolated by identity; Hook data and Activity Protection files are shared. Identify the running app, helper, and installed Hook executable path when debugging.
 
@@ -89,10 +89,10 @@ Preferences and system approval are isolated by identity; Hook data and Activity
 Release system logs:
 
 ```bash
-/usr/bin/log stream --predicate 'subsystem == "app.zabrian.codexbar"' --style compact
+/usr/bin/log stream --predicate 'subsystem == "io.github.yatotm.codexbar"' --style compact
 ```
 
-Debug uses `app.zabrian.codexbar.debug`; the helper subsystem uses its corresponding bundle ID.
+Debug uses `io.github.yatotm.codexbar.debug`; the helper subsystem uses its corresponding bundle ID.
 
 The app’s Logs window retains the latest 500 app-server interactions. Proxy configuration errors use the system-log `settings` category; temporary proxy tests do not write interaction logs.
 
@@ -120,3 +120,7 @@ Logs use `LogTrigger`, `LogDuration`, and `LogFields.joined` for stages, classif
 Release scripts require signing and notarization credentials and are not daily validation tools. The version comes from [`Version.xcconfig`](../../../Config/Version.xcconfig).
 
 Helper cleanup cancels and verifies an empty system wake schedule before unregistering; failure stops cleanup. See [Sleep Prevention](sleep-prevention.md).
+
+## Fork integration
+
+Use bash Scripts/build-local.sh for the independent Debug build and bash Scripts/verify-usage-center.sh for regression checks. Release workflow configuration and migration instructions are in the [fork release guide](../../DeveloperGuide/releasing.md). Manually verify all provider transitions, close/reopen, expansion, and side-panel cleanup. Ad-hoc builds cannot validate signed Helper or CloudKit operation.

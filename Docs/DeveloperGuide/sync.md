@@ -38,7 +38,7 @@ CloudKit 同步用于在同一 iCloud 账户的 Mac 之间合并 Hook 日级统�
 
 | 项目 | 值 |
 | --- | --- |
-| Container | `iCloud.app.zabrian.codexbar` |
+| Container | `iCloud.io.github.yatotm.codexbar` |
 | Custom zone | `CodexBarZone` |
 | 元数据 record type | `CodexBarSyncMetadata` |
 | 日聚合 record type | `CodexBarDailyAggregate` |
@@ -212,7 +212,7 @@ replacement 进行中时，快照会临时过滤当前设备该日期的云端�
 同步状态位于：
 
 ```text
-~/Library/Application Support/CodexBar/HookEvents/Sync/
+~/Library/Application Support/CodexBar-yatotm/HookEvents/Sync/
 ```
 
 | 文件 | 作用 |
@@ -309,3 +309,7 @@ CloudKit 记录保留期与本地 Hook 历史一致，最长 210 天：
 - [`WorkflowSyncSettings.swift`](../../CodexBar/Services/Settings/WorkflowSyncSettings.swift)
 - [`CodexWorkflowModels.swift`](../../CodexBar/Models/CodexWorkflowModels.swift)
 - [`CodexBar.entitlements`](../../CodexBar/Resources/CodexBar.entitlements)
+
+## fork 隔离
+
+本分支使用 `iCloud.io.github.yatotm.codexbar`，不能沿用原作者 CloudKit 容器的授权或同步游标。首次迁移保留本机 Hook 数据，排除旧 `Sync` 目录，待维护者配置独立容器并由用户重新启用后全量同步。SSH/HTTPS 统计不经过 CloudKit。

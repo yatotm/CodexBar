@@ -84,3 +84,7 @@ This option controls Codex’s own notifications independently of CodexBar notif
 - When a task resumes progress or no longer meets the Stalled Task Protection conditions, its notification is removed from Notification Center
 
 Back to the [User Guide](README.md)
+
+## Fork behavior
+
+These notifications use local Codex state. Adding remote or Claude history to Usage Center does not extend task notifications to those sources.

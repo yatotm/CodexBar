@@ -23,18 +23,18 @@ class ReleaseTests(unittest.TestCase):
         self.addCleanup(os.chdir, self.previous)
         self.addCleanup(self.temp.cleanup)
         (self.root / "Config").mkdir()
-        (self.root / "Config/Version.xcconfig").write_text("MARKETING_VERSION = 3.8.0\nCURRENT_PROJECT_VERSION = 87\n")
+        (self.root / "Config/Version.xcconfig").write_text("MARKETING_VERSION = 1.0.0\nCURRENT_PROJECT_VERSION = 1\n")
         (self.root / "ReleaseNotes").mkdir()
-        (self.root / "ReleaseNotes/v3.8.0.md").write_text("测试说明")
+        (self.root / "ReleaseNotes/fork-v1.0.0.md").write_text("测试说明")
         self.output = self.root / "output"
         self.output.mkdir()
         for suffix in ("zip", "dmg"):
-            (self.output / f"CodexBar-v3.8.0.{suffix}").write_bytes(b"fixture")
+            (self.output / f"CodexBar-fork-v1.0.0.{suffix}").write_bytes(b"fixture")
         (self.output / "appcast.xml").write_text('''<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>
-        <sparkle:version>87</sparkle:version><sparkle:shortVersionString>3.8.0</sparkle:shortVersionString>
-        <enclosure url="https://github.com/yatotm/CodexBar/releases/download/v3.8.0/CodexBar-v3.8.0.zip" length="7"/>
+        <sparkle:version>1</sparkle:version><sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+        <enclosure url="https://github.com/yatotm/CodexBar/releases/download/fork-v1.0.0/CodexBar-fork-v1.0.0.zip" length="7"/>
         </item></channel></rss>''')
-        self.names = ["CodexBar-v3.8.0.zip", "CodexBar-v3.8.0.dmg", "appcast.xml", "SHA256SUMS.txt"]
+        self.names = ["CodexBar-fork-v1.0.0.zip", "CodexBar-fork-v1.0.0.dmg", "appcast.xml", "SHA256SUMS.txt"]
         self.checksums()
         self.env = patch.dict(os.environ, {"GITHUB_REPOSITORY": "yatotm/CodexBar"})
         self.env.start()
@@ -45,7 +45,7 @@ class ReleaseTests(unittest.TestCase):
             f"{hashlib.sha256((self.output / name).read_bytes()).hexdigest()}  {name}\n" for name in self.names[:3]))
 
     def publish(self):
-        publisher.publish(self.output, "v3.8.0", COMMIT)
+        publisher.publish(self.output, "fork-v1.0.0", COMMIT)
 
     def test_mismatched_artifact_fails_before_network(self):
         (self.output / self.names[1]).write_bytes(b"changed")
@@ -56,7 +56,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_wrong_feed_version_fails_before_network(self):
         feed = self.output / "appcast.xml"
-        feed.write_text(feed.read_text().replace(">87<", ">86<"))
+        feed.write_text(feed.read_text().replace(">1<", ">0<"))
         self.checksums()
         with patch.object(publisher, "api") as api:
             with self.assertRaisesRegex(ValueError, "版本配置不一致"):
@@ -70,7 +70,7 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(api.call_count, 2)
 
     def test_refuses_older_release(self):
-        with patch.object(publisher, "api", return_value={"tag_name": "v3.9.0"}) as api:
+        with patch.object(publisher, "api", return_value={"tag_name": "fork-v1.1.0"}) as api:
             with self.assertRaisesRegex(ValueError, "较旧版本"):
                 self.publish()
             self.assertEqual(api.call_count, 1)

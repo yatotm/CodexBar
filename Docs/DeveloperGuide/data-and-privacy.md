@@ -48,9 +48,11 @@ CodexBar 的最小化顺序是：
 
 | 来源 | CodexBar 使用方式 | 是否持久化 | 是否上传 CloudKit |
 | --- | --- | --- | --- |
-| app-server 账户、额度和 Reset Credits | 主面板、通知判断和用户启用的自动重置 | 仅短期状态 | 否 |
+| app-server 账户、额度和 Reset Credits | 主面板、通知判断和用户启用的自动重置 | 内存快照；用量中心另存筛选后的额度观察 | 否 |
 | Hook 结构化事件 | 历史聚合和实时任务 | 是，最长 210 天 | 只上传日聚合 |
 | rollout 生命周期 | terminal 和进展对账 | 不单独持久化 | 否 |
+| 用量中心日志 | 按来源合并事件、Token、额度和模型统计 | 独立 SQLite | 否 |
+| 官网分析与周限历史 | 账号内的实际周期估算 | 按账号哈希隔离的缓存 | 否 |
 | App 设置 | 功能开关和阈值 | UserDefaults | 否 |
 | Activity Protection | 异常会话恢复 | 哈希身份，最长 24 小时 | 否 |
 | CodexBarHelper ownership | 系统睡眠恢复 | root 状态文件 | 否 |
@@ -64,7 +66,7 @@ App 通过本机 `codex app-server --listen stdio://` 获取账户、额度、to
 
 CodexBar 不自行实现账户登录。app-server 是否访问 OpenAI 服务由 Codex CLI 的正常认证和协议行为决定。
 
-CodexBar 只通过 stdio 与本机进程通信，不从 app-server 响应中复制认证材料。request log 保存规范化后的完整请求与响应 JSON，只存在当前 App 进程内存，不持久化。内容可能包含账户响应、opaque credit ID 和幂等键，不能把它当作脱敏摘要。
+app-server 链路只通过 stdio 与本机进程通信，不从响应中复制认证材料。官网分析是独立的 HTTPS 链路。request log 保存规范化后的完整请求与响应 JSON，只存在当前 App 进程内存，不持久化。内容可能包含账户响应、opaque credit ID 和幂等键，不能把它当作脱敏摘要。
 
 ### Hook 事件
 
@@ -110,7 +112,7 @@ rollout reader 从文件尾部按预算扫描，一方面减少 I/O，另一方�
 ### App 用户目录
 
 ```text
-~/Library/Application Support/CodexBar/
+~/Library/Application Support/CodexBar-yatotm/
   HookEvents/
     events/YYYY-MM-DD.jsonl
     daily.jsonl
@@ -119,6 +121,10 @@ rollout reader 从文件尾部按预算扫描，一方面减少 I/O，另一方�
     Sync/
   ActivityProtection/
     state.json
+  UsageCenter/
+    center-v1.sqlite
+  UsageAnalytics/
+  UsageQuotaHistory/
 ```
 
 | 路径 | 内容 | 生命周期 |
@@ -150,15 +156,15 @@ UserDefaults 保存：
 
 代理使用 `CodexProxy.configuration` 保存一条包含 `configuration` 和 `password` 的 JSON 数据。密码明文保存在本机 UserDefaults，保存关闭身份验证的配置或删除配置时删除。Debug 与 Release 使用各自的偏好域，不共享代理配置：
 
-- Debug：`~/Library/Preferences/app.zabrian.codexbar.debug.plist`
-- Release：`~/Library/Preferences/app.zabrian.codexbar.plist`
+- Debug：`~/Library/Preferences/io.github.yatotm.codexbar.debug.plist`
+- Release：`~/Library/Preferences/io.github.yatotm.codexbar.plist`
 
 `CodexProxyStore` 区分记录不存在与解码失败；解码失败时保留记录，以便配置窗口提供清除入口。
 
 ### CodexBarHelper 目录
 
 ```text
-/Library/Application Support/CodexBar/helper-state.json
+/Library/Application Support/CodexBar-yatotm/helper-state.json
 ```
 
 文件只保存 CodexBarHelper 是否拥有 `SleepDisabled` 的恢复事务，不包含 Codex 任务、账户或 Hook 数据。
@@ -173,7 +179,7 @@ App 内 [`RequestLog.swift`](../../CodexBar/Services/CodexStatus/RequestLog.swif
 
 请求日志用于诊断 app-server 协议。即使只存在内存，也不应写入 OAuth token 或 Hook 内容。
 
-统一系统日志 subsystem 为 `app.zabrian.codexbar`，Debug 版本带 `.debug` 后缀。
+统一系统日志 subsystem 为 `io.github.yatotm.codexbar`，Debug 版本带 `.debug` 后缀。
 
 系统日志只应记录：
 
@@ -196,7 +202,9 @@ App 内 [`RequestLog.swift`](../../CodexBar/Services/CodexStatus/RequestLog.swif
 
 | 目标 | 用途 | 触发条件 |
 | --- | --- | --- |
-| CloudKit private database | 同步日级 Hook 聚合 | 用户主动开启同步 |
+| 官方 `chatgpt.com` 分析 | 读取账号日统计和核对额度 | 用量中心刷新，复用本机 Codex OAuth |
+| 已配置的 SSH/HTTPS 来源 | 读取统计元数据和可用历史额度 | 用户添加来源后刷新 |
+| CloudKit private database | 同步日级 Hook 聚合 | 用户主动开启同步且签名支持 |
 | Codex 服务（app-server 子进程） | 认证、额度、用量和 Reset Credit 消费 | 正式刷新、代理测试或自动重置 |
 | Sparkle appcast 和更新资源 | 检查或安装更新 | 自动检查或用户手动检查 |
 
@@ -288,3 +296,11 @@ helper 的 ownership 文件不是用户偏好，而是 crash recovery 事务记�
 - [`ActivityProtectionStateStore.swift`](../../CodexBar/Services/Workflow/ActivityProtectionStateStore.swift)
 - [`RequestLog.swift`](../../CodexBar/Services/CodexStatus/RequestLog.swift)
 - [`CodexBarHelper/main.swift`](../../CodexBarHelper/main.swift)
+
+## 用量中心的额外边界
+
+原始 JSONL 在每台设备解析，导出只保留白名单统计字段和哈希身份，不包含正文、工具参数、完整工作目录或登录 Token；项目显示名仍属于可传输字段。HTTPS 服务令牌放在独立钥匙串服务 `io.github.yatotm.codexbar.usage-center` 中。
+
+官网分析读取本机 Codex OAuth，只向限定的官方主机发送，拒绝重定向，不写 Token 日志。Claude 链路完全被动。缓存单位、身份校验和响应上限见 [用量中心实现与验证](usage-center.md)。Linux 定时器和 Docker 服务的数据目录不随 Mac bundle ID 改名，既有来源身份和游标保持不变。
+
+本地迁移使用 SQLite backup 复制一致快照，不删除旧文件；跳过符号链接、锁文件和原 CloudKit 缓存。Helper 的 root 恢复状态不迁移，新旧 Helper 各自负责自己的唤醒 owner 和恢复文件。

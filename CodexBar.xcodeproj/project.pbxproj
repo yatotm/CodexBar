@@ -44,7 +44,7 @@
 /* Begin PBXFileReference section */
 		B10000000000000000000014 /* CodexBarHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = CodexBarHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 		C449FB5030203E0000ED2123 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
-		C4A0FD952FD9302E000263A7 /* CodexBar Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "CodexBar Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C4A0FD952FD9302E000263A7 /* CodexBar Fork Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "CodexBar Fork Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -62,8 +62,8 @@
 			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
 			buildPhase = B10000000000000000000024 /* Copy LaunchDaemons */;
 			membershipExceptions = (
-				app.zabrian.codexbar.debug.helper.plist,
-				app.zabrian.codexbar.helper.plist,
+				io.github.yatotm.codexbar.debug.helper.plist,
+				io.github.yatotm.codexbar.helper.plist,
 			);
 		};
 /* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
@@ -129,7 +129,7 @@
 		C4A0FD962FD9302E000263A7 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C4A0FD952FD9302E000263A7 /* CodexBar Debug.app */,
+				C4A0FD952FD9302E000263A7 /* CodexBar Fork Debug.app */,
 				B10000000000000000000014 /* CodexBarHelper */,
 			);
 			name = Products;
@@ -180,7 +180,7 @@
 				C42A52F02FDACDEC004A2B53 /* Sparkle */,
 			);
 			productName = CodexBar;
-			productReference = C4A0FD952FD9302E000263A7 /* CodexBar Debug.app */;
+			productReference = C4A0FD952FD9302E000263A7 /* CodexBar Fork Debug.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -264,7 +264,7 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = app.zabrian.codexbar.debug.helper;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.yatotm.codexbar.debug.helper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
@@ -280,7 +280,7 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = app.zabrian.codexbar.helper;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.yatotm.codexbar.helper;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
@@ -324,7 +324,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = 4KJ362VJW5;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -393,7 +393,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 4KJ362VJW5;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -430,22 +430,22 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = NO;
-				EXCLUDED_SOURCE_FILE_NAMES = app.zabrian.codexbar.helper.plist;
+				EXCLUDED_SOURCE_FILE_NAMES = io.github.yatotm.codexbar.helper.plist;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CodexBar/Resources/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "CodexBar Debug";
+				INFOPLIST_KEY_CFBundleDisplayName = "CodexBar Fork Debug";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = app.zabrian.codexbar.debug;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.yatotm.codexbar.debug;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				WRAPPER_NAME = "CodexBar Debug.app";
+				WRAPPER_NAME = "CodexBar Fork Debug.app";
 			};
 			name = Debug;
 		};
@@ -463,15 +463,16 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = NO;
-				EXCLUDED_SOURCE_FILE_NAMES = app.zabrian.codexbar.debug.helper.plist;
+				EXCLUDED_SOURCE_FILE_NAMES = io.github.yatotm.codexbar.debug.helper.plist;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CodexBar/Resources/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = CodexBar;
+				INFOPLIST_KEY_CFBundleDisplayName = "CodexBar Fork";
+				WRAPPER_NAME = "CodexBar Fork.app";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = app.zabrian.codexbar;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.yatotm.codexbar;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "$(CODEXBAR_PROVISIONING_PROFILE_SPECIFIER)";
 				REGISTER_APP_GROUPS = YES;

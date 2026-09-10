@@ -139,14 +139,14 @@ python3 CodexBar/Resources/UsageCollector.py uninstall-claude
 
 | 位置 | 内容 |
 | --- | --- |
-| `~/Library/Application Support/CodexBar/UsageCenter/center-v1.sqlite` | Mac 的来源配置、增量游标和经过筛选的统计元数据 |
+| `~/Library/Application Support/CodexBar-yatotm/UsageCenter/center-v1.sqlite` | Mac 的来源配置、增量游标和经过筛选的统计元数据 |
 | `~/.local/state/codexbar-usage/sources/<hash>/usage-v1.sqlite` | 各采集端的文件读取位置和增量统计，遵循 `XDG_STATE_HOME` |
 | `~/.claude/codexbar-usage/` | 可选 Claude 包装器、原状态栏配置备份及事件记录 |
 | macOS 钥匙串 | HTTPS 统计端专用令牌 |
-| `~/Library/Application Support/CodexBar/UsageAnalytics/<account-hash>.json` | 账号隔离的官方统计与周限观察，不含登录 Token |
+| `~/Library/Application Support/CodexBar-yatotm/UsageAnalytics/<account-hash>.json` | 账号隔离的官方统计与周限观察，不含登录 Token |
 | 本机采集目录的 `valuation-v1.sqlite` | 旧版本的本机周期证据，保留原格式 |
 | 各采集目录的 `quota-history-v1.sqlite` | 新的增量周限证据、可用的账号摘要与套餐元数据 |
-| `~/Library/Application Support/CodexBar/UsageQuotaHistory/` | 按账号和来源配置隔离的额度历史缓存 |
+| `~/Library/Application Support/CodexBar-yatotm/UsageQuotaHistory/` | 按账号和来源配置隔离的额度历史缓存 |
 
 用量中心采用独立存储，不修改原 `HookEvents`、`ActivityProtection`、CloudKit schema 或既有设置键。关闭新版后，旧版仍使用原来的数据链路。新统计协议为 `1`，不支持的响应会被拒绝，已有缓存保留。
 

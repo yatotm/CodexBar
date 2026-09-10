@@ -248,7 +248,7 @@ helper 按以下顺序写入恢复记录和系统值：
 CodexBarHelper 把系统所有权记录保存在：
 
 ```text
-/Library/Application Support/CodexBar/helper-state.json
+/Library/Application Support/CodexBar-yatotm/helper-state.json
 ```
 
 安全和可靠性要求如下：

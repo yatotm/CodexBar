@@ -11,7 +11,7 @@ CodexBar 是面向 macOS 15+ 的 `LSUIElement` 菜单栏应用，使用 Swift 6,
 - `xcodebuild -project CodexBar.xcodeproj -scheme CodexBar -destination 'generic/platform=macOS' build` 执行代码变更后的构建验证
 - `swiftformat .` 按 `.swiftformat` 格式化全部 Swift，使用 Swift 6 和 4 空格缩进
 - `swiftlint` 按 `.swiftlint.yml` 检查
-- `/usr/bin/log stream --predicate 'subsystem == "app.zabrian.codexbar"' --style compact` 查看系统日志，Debug 版 subsystem 带 `.debug` 后缀
+- `/usr/bin/log stream --predicate 'subsystem == "io.github.yatotm.codexbar"' --style compact` 查看系统日志，Debug 版 subsystem 带 `.debug` 后缀
 
 `Scripts/build.sh` `dmg.sh` 和 `appcast.sh` 需要 Developer ID 与公证凭据，不用于日常验证。
 
@@ -64,7 +64,7 @@ CodexBar 是面向 macOS 15+ 的 `LSUIElement` 菜单栏应用，使用 Swift 6,
 
 `HookEventTailReader.drainNow()` 是读取屏障，每个调用方必须等待一轮在本次请求之后开始的读取。系统唤醒只有在该轮读取成功后才执行 rollout 生命周期对账并恢复异常会话保护判定。reader 更换时丢弃旧结果，数据源不可用或任务取消时不得使用旧快照继续判定。
 
-异常会话保护记录由 `ActivityProtectionStateStore` 保存在 `~/Library/Application Support/CodexBar/ActivityProtection/state.json`，只包含哈希任务标识和时间戳，最长保留到最后进展后的 24 小时。Debug 与 Release 通过 `flock` 共用该文件，当前 schema 为 `1`。修改格式或身份计算属于兼容性问题。
+异常会话保护记录由 `ActivityProtectionStateStore` 保存在 `~/Library/Application Support/CodexBar-yatotm/ActivityProtection/state.json`，只包含哈希任务标识和时间戳，最长保留到最后进展后的 24 小时。Debug 与 Release 通过 `flock` 共用该文件，当前 schema 为 `1`。修改格式或身份计算属于兼容性问题。
 
 需要从原始 Hook 事件重新计算的聚合算法、输出字段、字段含义或去重规则变化时，必须递增 `WorkflowMaintenanceState.currentAggregationSchema`，统一从保留期内的原始 JSONL 完整重建，不新增字段级历史迁移。Hook 计数字段缺失表示历史来源不可用，不能解码成明确的 `0`
 
@@ -85,7 +85,7 @@ CodexBar 是面向 macOS 15+ 的 `LSUIElement` 菜单栏应用，使用 Swift 6,
 - body 中的 bullet 连续排列，每条缩进 4 个空格
 - commit message 中不要出现版本号，Release 标记或其他发布版本相关内容
 
-Tag 名 `v{MARKETING_VERSION}` 里的版本号从 `Config/Version.xcconfig` 读取，使用附注 tag `git tag -a v3.x.y -m "Release v3.x.y"`
+Tag 名 `fork-v{MARKETING_VERSION}` 里的版本号从 `Config/Version.xcconfig` 读取，使用附注 tag `git tag -a fork-v1.x.y -m "Release fork-v1.x.y"`
 
 ## 代码修改原则
 

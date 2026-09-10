@@ -45,9 +45,9 @@ private enum CleanupBuildConfiguration: String, CaseIterable {
     var bundleIdentifier: String {
         switch self {
         case .release:
-            "app.zabrian.codexbar"
+            "io.github.yatotm.codexbar"
         case .debug:
-            "app.zabrian.codexbar.debug"
+            "io.github.yatotm.codexbar.debug"
         }
     }
 }
@@ -212,7 +212,7 @@ private final class KeepAliveCleanupCommand {
         let bundleIdentifier = configuration.bundleIdentifier
         var candidates: [URL] = []
         if configuration == .release {
-            candidates.append(URL(fileURLWithPath: "/Applications/CodexBar.app"))
+            candidates.append(URL(fileURLWithPath: "/Applications/CodexBar Fork.app"))
         }
         if let registeredURL = NSWorkspace.shared.urlForApplication(
             withBundleIdentifier: bundleIdentifier
@@ -220,7 +220,7 @@ private final class KeepAliveCleanupCommand {
             candidates.append(registeredURL)
         }
         if configuration == .release {
-            candidates.append(projectURL.appending(path: "Build/CodexBar.app"))
+            candidates.append(projectURL.appending(path: "Build/CodexBar Fork.app"))
         }
 
         for candidate in candidates {

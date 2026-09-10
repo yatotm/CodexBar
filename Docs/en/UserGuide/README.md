@@ -21,3 +21,12 @@
 - CodexBarHelper: the included background service for sleep prevention and Automatic Reset wakes
 
 Back to the [CodexBar README](../../../README.en.md).
+
+## Fork additions
+
+The following guides currently use Chinese:
+
+- [Multi-machine Usage Center](../../UserGuide/usage-center.md)
+- [Migration](../../UserGuide/migration.md)
+- [Implementation and verification](../../DeveloperGuide/usage-center.md)
+- [Independent releases](../../DeveloperGuide/releasing.md)

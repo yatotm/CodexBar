@@ -1016,7 +1016,7 @@ nonisolated enum WorkflowStorage {
             .appendingPathComponent("Application Support", isDirectory: true)
 
         return applicationSupportURL
-            .appendingPathComponent("CodexBar", isDirectory: true)
+            .appendingPathComponent("CodexBar-yatotm", isDirectory: true)
             .appendingPathComponent("HookEvents", isDirectory: true)
     }
 

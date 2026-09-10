@@ -79,8 +79,8 @@ CPU、内存、唤醒、磁盘活动与采集环境见[上游性能报告](https
 
 | 配置 | App bundle ID | Helper bundle ID |
 | --- | --- | --- |
-| Debug | `app.zabrian.codexbar.debug` | `app.zabrian.codexbar.debug.helper` |
-| Release | `app.zabrian.codexbar` | `app.zabrian.codexbar.helper` |
+| Debug | `io.github.yatotm.codexbar.debug` | `io.github.yatotm.codexbar.debug.helper` |
+| Release | `io.github.yatotm.codexbar` | `io.github.yatotm.codexbar.helper` |
 
 App 偏好和系统授权按身份隔离，Hook 数据与异常会话保护文件共享。排查时确认正在运行的 App、helper 和已安装 Hook 的可执行路径。
 
@@ -89,10 +89,10 @@ App 偏好和系统授权按身份隔离，Hook 数据与异常会话保护文�
 Release 系统日志：
 
 ```bash
-/usr/bin/log stream --predicate 'subsystem == "app.zabrian.codexbar"' --style compact
+/usr/bin/log stream --predicate 'subsystem == "io.github.yatotm.codexbar"' --style compact
 ```
 
-Debug 使用 `app.zabrian.codexbar.debug`，helper 的 subsystem 使用对应 helper bundle ID。
+Debug 使用 `io.github.yatotm.codexbar.debug`，helper 的 subsystem 使用对应 helper bundle ID。
 
 App 内日志窗口保留最近 500 条 app-server 交互。代理配置错误在系统日志的 `settings` 分类中，临时代理测试不写交互日志。
 
@@ -120,3 +120,9 @@ App 内日志窗口保留最近 500 条 app-server 交互。代理配置错误�
 发布脚本需要签名和公证凭据，不用于日常验证。版本号从 [`Version.xcconfig`](../../Config/Version.xcconfig) 读取。
 
 helper 清理先取消并确认系统唤醒计划清零，再注销服务；失败时停止。详细行为见 [防睡眠系统](sleep-prevention.md)
+
+## fork 验证入口
+
+本地使用 `bash Scripts/build-local.sh` 构建独立 Debug App，执行 `bash Scripts/verify-usage-center.sh` 检查采集、账号隔离、提前重置、窗口展开和睡眠取消。迁移与发布边界另有 Python 回归检查，入口见 [构建与独立发布](releasing.md)
+
+菜单手动验证应覆盖全部标签之间的切换、关闭后重开、设备展开收起及侧边详情清理。改名后的 Helper 还需在有正式签名时验证首次授权、等待/运行切换、唤醒计划清理及异常退出恢复；ad-hoc 构建通过不代表这些系统能力已验证。

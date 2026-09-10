@@ -491,3 +491,7 @@ Proxy checks also cover disabling invalid settings, clearing corrupt records, is
 - [`AutoResetIdentity.swift`](../../../CodexBar/Services/CodexStatus/AutoResetIdentity.swift)
 - [`AutoResetWakeScheduler.swift`](../../../CodexBar/Services/KeepAlive/AutoResetWakeScheduler.swift)
 - [`CodexBarHelperXPC.swift`](../../../Shared/CodexBarHelperXPC.swift)
+
+## Fork integration
+
+The app-server remains authoritative for current local quotas. Official daily analytics is a separate OAuth/HTTPS client. Remote observations are for history and estimation only; cancelled polling cannot submit stale results after sleep.

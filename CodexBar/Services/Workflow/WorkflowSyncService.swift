@@ -6,7 +6,7 @@ import os
 import Security
 
 nonisolated enum WorkflowSyncCloudKit {
-    private static let containerIdentifier = "iCloud.app.zabrian.codexbar"
+    private static let containerIdentifier = "iCloud.io.github.yatotm.codexbar"
 
     static func makeContainer() -> CKContainer? {
         // 本地自签名构建没有 CloudKit 权限, 此时创建容器会直接终止进程

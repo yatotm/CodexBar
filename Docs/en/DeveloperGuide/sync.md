@@ -38,7 +38,7 @@ The remote cache is a rebuildable projection, and the cursor is only an optimiza
 
 | Item | Value |
 | --- | --- |
-| Container | `iCloud.app.zabrian.codexbar` |
+| Container | `iCloud.io.github.yatotm.codexbar` |
 | Custom zone | `CodexBarZone` |
 | Metadata record type | `CodexBarSyncMetadata` |
 | Daily aggregate record type | `CodexBarDailyAggregate` |
@@ -212,7 +212,7 @@ The full fetch before deletion is the crucial detail. An incremental cursor guar
 Sync state lives at:
 
 ```text
-~/Library/Application Support/CodexBar/HookEvents/Sync/
+~/Library/Application Support/CodexBar-yatotm/HookEvents/Sync/
 ```
 
 | File | Purpose |
@@ -309,3 +309,7 @@ Transient errors preserve the last usable remote cache. After account switching 
 - [`WorkflowSyncSettings.swift`](../../../CodexBar/Services/Settings/WorkflowSyncSettings.swift)
 - [`CodexWorkflowModels.swift`](../../../CodexBar/Models/CodexWorkflowModels.swift)
 - [`CodexBar.entitlements`](../../../CodexBar/Resources/CodexBar.entitlements)
+
+## Fork integration
+
+The fork uses iCloud.io.github.yatotm.codexbar and cannot reuse upstream CloudKit authorization or cursors. Migration preserves local Hook data but excludes the old Sync cache. SSH/HTTPS aggregation never uses CloudKit.
