@@ -1,10 +1,10 @@
 import SwiftUI
 
 /// Hook 开启时常驻的固定高度活动摘要, 使用菜单面板共享的逐秒时间
-/// 在卡片内部观察 activityMonitor 与逐秒时间, 让 1Hz 失效范围只覆盖本卡片而不是整个菜单树
+/// 在卡片内部观察 activityPresentation 与逐秒时间, 让 1Hz 失效范围只覆盖本卡片而不是整个菜单树
 /// keepAliveController 同理, 它的 helperStatus 等字段与菜单树无关却会无条件发信号
 struct CodexActivityCard: View {
-    @ObservedObject var activityMonitor: CodexActivityMonitor
+    @ObservedObject var activityPresentation: ActivityPresentationModel
     @ObservedObject var presentationState: CodexActivityCenterPresentationState
     @ObservedObject var keepAliveController: KeepAliveController
     let showsUnavailableState: Bool
@@ -13,7 +13,7 @@ struct CodexActivityCard: View {
     @State private var isHovered = false
 
     private var snapshot: CodexActivitySnapshot {
-        showsUnavailableState ? .empty : activityMonitor.snapshot
+        showsUnavailableState ? .empty : activityPresentation.snapshot
     }
 
     private var timelineDate: Date {
@@ -194,11 +194,11 @@ struct CodexActivityCard: View {
             )
         case .idle:
             return ActivityCardContent(
-                symbolName: "moon.zzz.fill",
+                symbolName: snapshot.unconfirmedTasks.isEmpty ? "moon.zzz.fill" : "questionmark.circle",
                 tint: .secondary,
                 title: showsUnavailableState
                     ? String(localized: "common.empty.no-data")
-                    : String(localized: "activity.empty.no-activity"),
+                    : snapshot.unconfirmedTasks.isEmpty ? String(localized: "activity.empty.no-activity") : "任务状态待确认",
                 detail: nil,
                 otherTaskCount: 0,
                 isAnonymous: false

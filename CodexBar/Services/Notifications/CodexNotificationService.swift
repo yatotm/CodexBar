@@ -164,6 +164,20 @@ final class CodexNotificationService: NSObject {
         }
     }
 
+    func notifyRemoteActivity(_ task: RemoteActivityTask, sourceName: String) {
+        guard settings.canDeliver else { return }
+        let waiting = task.state == "waiting"
+        let duration = task.updatedAt - task.startedAt
+        guard waiting ? settings.isTaskWaitingEnabled
+            : settings.isTaskCompletionEnabled && duration >= Double(settings.taskCompletionMinimumDurationSeconds) else { return }
+        let provider = task.provider == "codex" ? "Codex" : "Claude Code"
+        send(CodexNotificationContent(
+            kind: waiting ? "remoteTaskWaiting" : "remoteTaskCompleted",
+            title: "\(provider) · \(task.title)",
+            body: task.project.isEmpty ? sourceName : "\(sourceName) · \(task.project)"
+        ), sound: waiting ? settings.taskWaitingSound : settings.taskCompletionSound)
+    }
+
     private func isTaskStillWaiting(
         _ taskID: UUID,
         notificationIdentifier: String

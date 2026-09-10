@@ -30,6 +30,8 @@ struct AppSettingsView: View {
     @State private var isRebuildingWorkflowData = false
     @State private var rebuildStatus: RebuildStatus?
     @State private var helperFeatureConfirmation: HelperFeatureConfirmation?
+    @State private var pendingKeepAliveMode: KeepAliveController.Mode?
+    @State private var needsTaskHook = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -132,11 +134,21 @@ struct AppSettingsView: View {
         } message: {
             Text(LocalizedStringResource("workflow.rebuild.confirmation.message", defaultValue: "\(selectedRebuildRange?.displayText ?? "")"))
         }
+        .alert("需要 CodexBar Hook", isPresented: $needsTaskHook) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("请先启用并校验本机 CodexBar Hook, 再选择随任务防睡眠")
+        }
         .alert(item: $helperFeatureConfirmation) { feature in
-            feature.alert(helperStatus: keepAliveController.helperStatus) {
+            feature.alert(helperStatus: keepAliveController.helperStatus, manualKeepAlive: (pendingKeepAliveMode ?? keepAliveController.mode) == .manual) {
                 switch feature {
                 case .autoReset: autoResetSettings.setEnabled(true)
-                case .keepAlive: keepAliveController.setEnabled(true)
+                case .keepAlive:
+                    if let pendingKeepAliveMode {
+                        keepAliveController.setMode(pendingKeepAliveMode)
+                    }
+                    pendingKeepAliveMode = nil
+                    keepAliveController.setEnabled(true)
                 }
             }
         }
@@ -160,7 +172,6 @@ private extension AppSettingsView {
         static let tabVerticalPadding: CGFloat = 7
         static let tabContentSpacing = padding
         static let windowChromeHeight = padding * 2 + tabBarHeight + tabContentSpacing
-        static let menuBarQuotaPickerWidth: CGFloat = 72
         static let tabContentInitialScale = 0.975
         static let tabContentInitialOffset: CGFloat = 8
         static let tabContentTransition = Animation.spring(
@@ -274,7 +285,6 @@ private extension AppSettingsView {
             LiquidGlassDivider()
             keepAliveRow
             LiquidGlassDivider()
-            LiquidGlassDivider()
             rebuildWorkflowDataRow
         }
         .padding(Metrics.panelPadding)
@@ -287,8 +297,6 @@ private extension AppSettingsView {
                 codexVersionSection
                 LiquidGlassDivider()
                 versionRow
-                LiquidGlassDivider()
-                HelperInstallationStatusRow(status: keepAliveController.helperStatus)
                 LiquidGlassDivider()
                 githubProjectRow
             }
@@ -335,58 +343,14 @@ private extension AppSettingsView {
     }
 
     var menuBarQuotaRow: some View {
-        let isEnabled = isMenuBarQuotaEnabled
-
-        return SettingsToggleRow(
+        SettingsToggleRow(
             icon: "gauge.with.dots.needle.50percent",
             title: "settings.menu-bar-quota.title",
             isOn: Binding(
                 get: { isMenuBarQuotaEnabled },
                 set: { menuBarQuotaSettings.setEnabled($0) }
             )
-        ) {
-            if isEnabled {
-                Picker(
-                    "settings.menu-bar-quota.window",
-                    selection: Binding(
-                        get: { menuBarQuotaSettings.activeWindowSelection },
-                        set: { menuBarQuotaSettings.setSelection($0) }
-                    )
-                ) {
-                    ForEach(menuBarQuotaWindowOptions) { option in
-                        Text(option.title).tag(option.selection)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .controlSize(.small)
-                .frame(width: Metrics.menuBarQuotaPickerWidth)
-                .transition(.opacity.combined(with: .move(edge: .trailing)))
-            }
-        }
-        .animation(Metrics.statusAnimation, value: isEnabled)
-    }
-
-    var menuBarQuotaWindowOptions: [MenuBarQuotaOption] {
-        var options = (statusViewModel.snapshot?.codexLimit?.windows ?? [])
-            .map { window in
-                MenuBarQuotaOption(
-                    selection: MenuBarQuotaSelection(windowKind: window.kind),
-                    title: window.label
-                )
-            }
-
-        let selectedWindow = menuBarQuotaSettings.activeWindowSelection
-        if !options.contains(where: { $0.selection == selectedWindow }) {
-            options.append(
-                MenuBarQuotaOption(
-                    selection: selectedWindow,
-                    title: selectedWindow.fallbackTitle
-                )
-            )
-        }
-
-        return options
+        ).help("显示 Codex 7d 剩余额度")
     }
 
     var isMenuBarQuotaEnabled: Bool {
@@ -510,28 +474,23 @@ private extension AppSettingsView {
         let caption = keepAliveCaption
 
         return VStack(alignment: .leading, spacing: 4) {
-            SettingsToggleRow(
-                icon: "moon.zzz",
-                title: "settings.keep-alive.title",
-                isOn: Binding(
-                    get: { keepAliveController.isEnabled },
-                    set: { enabled in
-                        if enabled {
-                            helperFeatureConfirmation = .keepAlive
-                        } else {
-                            keepAliveController.setEnabled(false)
-                        }
-                    }
-                ),
-                isEnabled: KeepAliveHelperConfiguration.supportsHelper && codexHookSettings.isOperable && !codexHookSettings.isUpdating
-            ) {
+            HStack(spacing: SettingsRowMetrics.spacing) {
+                Image(systemName: "moon.zzz")
+                    .frame(width: SettingsRowMetrics.iconWidth).foregroundStyle(.tint)
+                Text("settings.keep-alive.title")
+                Spacer()
+                SettingsDropdownPicker(
+                    selection: keepAliveChoice,
+                    options: KeepAliveChoice.allCases,
+                    isEnabled: KeepAliveHelperConfiguration.supportsHelper || keepAliveController.isEnabled,
+                    title: keepAliveChoice.title,
+                    optionTitle: { $0.title },
+                    onSelect: selectKeepAliveChoice
+                )
                 SettingsOptionsButton(isAvailable: canShowKeepAliveOptions) {
-                    onOptionsAction(
-                        .toggle(panel: .keepAlive, anchorProvider: keepAliveAnchorProvider)
-                    )
+                    onOptionsAction(.toggle(panel: .keepAlive, anchorProvider: keepAliveAnchorProvider))
                 }
             }
-
             settingsStatusCaptionRow(caption)
         }
         .background {
@@ -545,6 +504,30 @@ private extension AppSettingsView {
             }
 
             onOptionsAction(.close(panel: .keepAlive))
+        }
+    }
+
+    private var keepAliveChoice: KeepAliveChoice {
+        guard keepAliveController.isEnabled else { return .off }
+        return keepAliveController.mode == .manual ? .manual : .tasks
+    }
+
+    private func selectKeepAliveChoice(_ choice: KeepAliveChoice) {
+        if choice == .off {
+            pendingKeepAliveMode = nil
+            keepAliveController.setEnabled(false)
+            return
+        }
+        if choice == .tasks, !codexHookSettings.isOperable {
+            needsTaskHook = true
+            return
+        }
+        let mode: KeepAliveController.Mode = choice == .manual ? .manual : .tasks
+        if keepAliveController.isEnabled {
+            keepAliveController.setMode(mode)
+        } else {
+            pendingKeepAliveMode = mode
+            helperFeatureConfirmation = .keepAlive
         }
     }
 
@@ -597,7 +580,7 @@ private extension AppSettingsView {
         guard keepAliveController.helperStatus == .enabled else {
             return SettingsStatusCaption(message: String(localized: "helper.status.not-registered"))
         }
-        guard codexHookSettings.isVerified else {
+        guard keepAliveController.mode == .manual || codexHookSettings.isVerified else {
             return SettingsStatusCaption(message: String(localized: "hook.status.inactive"))
         }
 
@@ -1372,11 +1355,16 @@ private struct SettingsPageHeightPreferenceKey: PreferenceKey {
     }
 }
 
-private struct MenuBarQuotaOption: Identifiable {
-    let selection: MenuBarQuotaSelection
-    let title: String
+private enum KeepAliveChoice: String, CaseIterable, Sendable {
+    case off
+    case manual
+    case tasks
 
-    var id: String {
-        selection.id
+    var title: String {
+        switch self {
+        case .off: "关闭"
+        case .manual: "手动"
+        case .tasks: "随任务"
+        }
     }
 }

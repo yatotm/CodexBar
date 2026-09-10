@@ -7,6 +7,7 @@ import ServiceManagement
 
 @MainActor
 final class KeepAliveController: ObservableObject {
+    @Published private(set) var mode: Mode
     @Published private(set) var isEnabled: Bool
     @Published private(set) var helperStatus = HelperStatus.notRegistered
     @Published private(set) var isPreventingSleep = false
@@ -139,6 +140,9 @@ final class KeepAliveController: ObservableObject {
         self.activityMonitor = activityMonitor
         self.codexHookSettings = codexHookSettings
         self.defaults = defaults
+        // 旧安装保留按任务行为, 新安装可直接选择手动防睡眠
+        mode = defaults.string(forKey: "KeepAlive.mode").flatMap(Mode.init(rawValue:))
+            ?? (defaults.object(forKey: Self.enabledKey) == nil ? .manual : .tasks)
         durationLimiter = KeepAliveDurationLimiter(defaults: defaults)
         isHookEnabled = codexHookSettings.isOperable
         isEnabled = KeepAliveHelperConfiguration.supportsHelper && defaults.bool(forKey: Self.enabledKey)
@@ -284,7 +288,7 @@ final class KeepAliveController: ObservableObject {
 
     func setEnabled(_ enabled: Bool) {
         // 与 sleepBlockReason 读同一份镜像, 类内只保留一个 Hook 状态的真相来源
-        guard !enabled || (KeepAliveHelperConfiguration.supportsHelper && isHookEnabled) else {
+        guard !enabled || (KeepAliveHelperConfiguration.supportsHelper && (mode == .manual || isHookEnabled)) else {
             return
         }
         guard enabled != isEnabled else {
@@ -303,6 +307,14 @@ final class KeepAliveController: ObservableObject {
         } else {
             durationLimiter.reset()
         }
+        reconcileSleepState(trigger: .settings)
+    }
+
+    func setMode(_ mode: Mode) {
+        guard mode != self.mode else { return }
+        self.mode = mode
+        defaults.set(mode.rawValue, forKey: "KeepAlive.mode")
+        durationLimiter.restart(isPreventingSleep: isPreventingSleep)
         reconcileSleepState(trigger: .settings)
     }
 
@@ -489,8 +501,8 @@ final class KeepAliveController: ObservableObject {
     }
 
     private func handleActivitySnapshot(_ snapshot: CodexActivitySnapshot) {
-        let runningTaskIDs = keepAliveTaskIDs(in: snapshot.runningTasks)
-        let currentWaitingTaskIDs = keepAliveTaskIDs(in: snapshot.waitingTasks)
+        let runningTaskIDs = Self.keepAliveTaskIDs(in: snapshot.runningTasks)
+        let currentWaitingTaskIDs = Self.keepAliveTaskIDs(in: snapshot.waitingTasks)
         let activeTaskIDs = runningTaskIDs.union(currentWaitingTaskIDs)
 
         startedRunningTaskIDs.formIntersection(activeTaskIDs)
@@ -502,16 +514,16 @@ final class KeepAliveController: ObservableObject {
         waitingTaskIDs = currentWaitingTaskIDs
 
         hasRunningTasks = !runningTaskIDs.isEmpty
+        if mode == .manual {
+            reconcileSleepState(trigger: .taskChanged)
+            return
+        }
         if activeTaskIDs.isEmpty {
             durationLimiter.reset()
         } else if !newRunningTaskIDs.isEmpty || !resumedRunningTaskIDs.isEmpty {
             restartMaximumDurationPeriod()
         }
         reconcileSleepState(trigger: .taskChanged)
-    }
-
-    private func keepAliveTaskIDs(in tasks: [CodexActivityTaskSnapshot]) -> Set<UUID> {
-        Set(tasks.lazy.filter { !$0.isAnonymous }.map(\.id))
     }
 
     /// 还没真正挡住睡眠时只清零不起表, 等禁用成功后由 begin 补上
@@ -787,7 +799,7 @@ final class KeepAliveController: ObservableObject {
     /// 输入分散在三条路径上 (用户开关与 Hook 走 reconcileSleepState, 电量与阈值走 updateBatteryState,
     /// 上限走 setMaximumDuration), 所以规则只写这一份, 三处都调它
     private func publishNotificationDependencies() {
-        let isKeepAliveUsable = isEnabled && isHookEnabled
+        let isKeepAliveUsable = isEnabled && (mode == .manual || isHookEnabled)
         assign(
             isKeepAliveUsable && hasBattery && lowBatteryThreshold != .off,
             to: \.isLowBatteryProtectionEnabled
@@ -796,16 +808,6 @@ final class KeepAliveController: ObservableObject {
             isKeepAliveUsable && maximumDuration != .unlimited,
             to: \.isMaximumDurationEnabled
         )
-    }
-
-    /// 缺依赖时收起入口, 只是没在防睡眠 (没任务, 低电量, 已达上限) 时仍然要能改设置
-    private static func allowsOptions(_ blockReason: SleepBlockReason?) -> Bool {
-        switch blockReason {
-        case .notStarted, .userOff, .hookDisabled, .helperUnavailable, .terminating:
-            false
-        case nil, .noTasks, .helperRefreshing, .lowBattery, .limitReached:
-            true
-        }
     }
 
     /// 任何一项变了才记一条, 逐次求值不记
@@ -1463,7 +1465,7 @@ final class KeepAliveController: ObservableObject {
 
     /// 等待批准算不算"有任务"由用户开关决定, 快照与设置两条路径共用这一份规则
     private var hasKeepAliveTasks: Bool {
-        hasRunningTasks || (keepsAwakeWhileWaiting && !waitingTaskIDs.isEmpty)
+        mode == .manual || hasRunningTasks || (keepsAwakeWhileWaiting && !waitingTaskIDs.isEmpty)
     }
 
     /// 按顺序返回第一个不满足的条件, 全部满足时为 nil
@@ -1478,7 +1480,7 @@ final class KeepAliveController: ObservableObject {
         if !isEnabled {
             return .userOff
         }
-        if !isHookEnabled {
+        if mode == .tasks, !isHookEnabled {
             return .hookDisabled
         }
         // 先检查依赖, 避免 Hook 恢复任务前以 noTasks 提前放出未授权 Helper 的设置入口
@@ -1501,13 +1503,6 @@ final class KeepAliveController: ObservableObject {
     }
 
     // MARK: - 常量
-
-    private static let enabledKey = "KeepAlive.isEnabled"
-    private static let lowBatteryThresholdKey = "KeepAlive.lowBatteryThresholdPercent"
-    private static let keepsAwakeWhileWaitingKey = "KeepAlive.keepsAwakeWhileWaiting"
-    private static let keepsDisplayAwakeKey = "KeepAlive.keepsDisplayAwake"
-    /// 解除门槛比触发门槛高这么多个百分点, 避免电量在阈值附近抖动导致反复切换
-    private static let lowBatteryHysteresis = 5
 }
 
 extension KeepAliveController {

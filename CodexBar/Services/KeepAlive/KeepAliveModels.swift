@@ -2,6 +2,36 @@ import Foundation
 import ServiceManagement
 
 extension KeepAliveController {
+    static let enabledKey = "KeepAlive.isEnabled"
+    static let lowBatteryThresholdKey = "KeepAlive.lowBatteryThresholdPercent"
+    static let keepsAwakeWhileWaitingKey = "KeepAlive.keepsAwakeWhileWaiting"
+    static let keepsDisplayAwakeKey = "KeepAlive.keepsDisplayAwake"
+    /// 解除门槛比触发门槛高这么多个百分点, 避免电量在阈值附近抖动导致反复切换
+    static let lowBatteryHysteresis = 5
+
+    enum Mode: String, CaseIterable {
+        case tasks
+        case manual
+
+        var title: String {
+            self == .manual ? "手动保持唤醒" : "跟随本机 Codex 任务"
+        }
+    }
+
+    /// 缺依赖时收起入口, 只是没在防睡眠 (没任务, 低电量, 已达上限) 时仍然要能改设置
+    static func allowsOptions(_ blockReason: SleepBlockReason?) -> Bool {
+        switch blockReason {
+        case .notStarted, .userOff, .hookDisabled, .helperUnavailable, .terminating:
+            false
+        case nil, .noTasks, .helperRefreshing, .lowBattery, .limitReached:
+            true
+        }
+    }
+
+    static func keepAliveTaskIDs(in tasks: [CodexActivityTaskSnapshot]) -> Set<UUID> {
+        Set(tasks.lazy.filter { !$0.isAnonymous }.map(\.id))
+    }
+
     /// 低电量保护阈值, rawValue 就是百分比; off 用 -1 与合法百分比区分
     enum LowBatteryThreshold: Int, CaseIterable, Identifiable {
         case off = -1

@@ -1,5 +1,7 @@
 # Notifications and Alerts
 
+Opted-in SSH Codex/Claude and local Claude live tasks share the waiting/completion notification switches. Reconnection establishes a silent baseline; historical usage does not trigger notifications.
+
 [简体中文](../../UserGuide/notifications.md) | English
 
 ## Enabling Notifications

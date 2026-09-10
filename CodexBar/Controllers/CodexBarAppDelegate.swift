@@ -31,7 +31,7 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
     let appUpdater = AppUpdater()
 
     private var analyticsObservation: AnyCancellable?
-    private var refreshSleepObservations = Set<AnyCancellable>()
+    private let connectionGate = SystemConnectionGate()
     private var statusItemController: StatusItemController?
     private var notificationService: CodexNotificationService?
     private var autoResetController: AutoResetController?
@@ -83,6 +83,10 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
         }
         notificationService.start()
         self.notificationService = notificationService
+        usageCenterViewModel.remoteActivity.onTransition = { [weak self, weak notificationService] sourceID, task in
+            guard let self, let source = usageCenterViewModel.sources.first(where: { $0.id == sourceID }) else { return }
+            notificationService?.notifyRemoteActivity(task, sourceName: source.name)
+        }
 
         let autoResetController = AutoResetController(
             settings: autoResetSettings,
@@ -112,7 +116,7 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_: Notification) {
-        refreshSleepObservations.removeAll()
+        connectionGate.stop()
         AppLog.app.notice("App 即将退出: reason=userQuit")
         terminationPreparationTask?.cancel()
         terminationPreparationTask = nil
@@ -125,21 +129,17 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func observeRefreshSleepState() {
-        let center = NSWorkspace.shared.notificationCenter
-        center.publisher(for: NSWorkspace.willSleepNotification).sink { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.viewModel.pauseForSleep()
-                self?.usageCenterViewModel.pauseForSleep()
-                AppLog.app.notice("周期刷新已暂停: reason=systemSleep")
+        connectionGate.start { [weak self] allowed, localAllowed in
+            guard let self else { return }
+            usageCenterViewModel.remoteActivity.setConnectionAllowed(allowed, localAllowed: localAllowed)
+            if allowed {
+                viewModel.resumeAfterWake()
+                usageCenterViewModel.resumeAfterWake()
+            } else {
+                viewModel.pauseForSleep()
+                usageCenterViewModel.pauseForSleep()
             }
-        }.store(in: &refreshSleepObservations)
-        center.publisher(for: NSWorkspace.didWakeNotification).sink { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.viewModel.resumeAfterWake()
-                self?.usageCenterViewModel.resumeAfterWake()
-                AppLog.app.notice("周期刷新已恢复: reason=workspaceWake")
-            }
-        }.store(in: &refreshSleepObservations)
+        }
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {

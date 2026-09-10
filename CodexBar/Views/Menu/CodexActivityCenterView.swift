@@ -45,7 +45,7 @@ struct CodexActivityCenterPanelContext {
 
 /// 并发任务中心, 实时展示全部等待; 运行; 最近完成和最近终止任务
 struct CodexActivityCenterView: View {
-    @ObservedObject var activityMonitor: CodexActivityMonitor
+    @ObservedObject var activityPresentation: ActivityPresentationModel
     @ObservedObject var presentationState: CodexActivityCenterPresentationState
 
     var body: some View {
@@ -74,7 +74,8 @@ struct CodexActivityCenterView: View {
             snapshot.waitingTasks.count,
             snapshot.runningTasks.count,
             snapshot.recentCompletions.count,
-            snapshot.recentTerminations.count
+            snapshot.recentTerminations.count,
+            snapshot.unconfirmedTasks.count
         ].filter { $0 > 0 }
         let rowCount = visibleSectionCounts.reduce(0, +)
         let contentHeight = Metrics.headerHeight
@@ -98,37 +99,53 @@ struct CodexActivityCenterView: View {
 
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: Metrics.sectionSpacing) {
-                    if !activityMonitor.snapshot.waitingTasks.isEmpty {
+                    if !activityPresentation.snapshot.waitingTasks.isEmpty {
                         taskSection(
                             title: "activity-center.section.waiting",
                             symbolName: "hand.raised.fill",
                             tint: .orange,
-                            tasks: activityMonitor.snapshot.waitingTasks,
+                            tasks: activityPresentation.snapshot.waitingTasks,
                             now: now,
                             isWaiting: true
                         )
                     }
 
-                    if !activityMonitor.snapshot.runningTasks.isEmpty {
+                    if !activityPresentation.snapshot.runningTasks.isEmpty {
                         taskSection(
                             title: "activity-center.section.running",
                             symbolName: "bolt.fill",
                             tint: .blue,
-                            tasks: activityMonitor.snapshot.runningTasks,
+                            tasks: activityPresentation.snapshot.runningTasks,
                             now: now,
                             isWaiting: false
                         )
                     }
 
-                    if !activityMonitor.snapshot.recentCompletions.isEmpty {
+                    if !activityPresentation.snapshot.recentCompletions.isEmpty {
                         completionSection(now: now)
                     }
 
-                    if !activityMonitor.snapshot.recentTerminations.isEmpty {
+                    if !activityPresentation.snapshot.unconfirmedTasks.isEmpty {
+                        section(title: "状态待确认", count: activityPresentation.snapshot.unconfirmedTasks.count) {
+                            ForEach(activityPresentation.snapshot.unconfirmedTasks) { task in
+                                row(
+                                    symbolName: "questionmark.circle",
+                                    tint: .secondary,
+                                    projectName: task.projectName,
+                                    modelName: task.modelName,
+                                    effort: task.effort,
+                                    isAnonymous: task.isAnonymous,
+                                    detail: "等待重新确认任务状态"
+                                )
+                            }
+                        }
+                    }
+
+                    if !activityPresentation.snapshot.recentTerminations.isEmpty {
                         terminationSection(now: now)
                     }
                 }
-                .animation(.codexStatus, value: activityMonitor.snapshot)
+                .animation(.codexStatus, value: activityPresentation.snapshot)
                 .padding(.horizontal, Metrics.horizontalPadding)
                 .padding(.vertical, Metrics.verticalPadding)
             }
@@ -153,8 +170,11 @@ struct CodexActivityCenterView: View {
     }
 
     private var headerSummary: String {
-        let snapshot = activityMonitor.snapshot
+        let snapshot = activityPresentation.snapshot
         var components = [String]()
+        if !snapshot.unconfirmedTasks.isEmpty {
+            components.append("待确认 \(snapshot.unconfirmedTasks.count)")
+        }
         if snapshot.waitingCount > 0 {
             components.append(String(localized: "activity-center.summary.waiting", defaultValue: "\(snapshot.waitingCount, specifier: "%lld")"))
         }
@@ -202,9 +222,9 @@ struct CodexActivityCenterView: View {
     private func completionSection(now: Date) -> some View {
         section(
             title: "activity-center.section.recent-completions",
-            count: activityMonitor.snapshot.recentCompletions.count
+            count: activityPresentation.snapshot.recentCompletions.count
         ) {
-            ForEach(activityMonitor.snapshot.recentCompletions) { completion in
+            ForEach(activityPresentation.snapshot.recentCompletions) { completion in
                 completionRow(completion, now: now)
             }
         }
@@ -213,9 +233,9 @@ struct CodexActivityCenterView: View {
     private func terminationSection(now: Date) -> some View {
         section(
             title: "activity-center.section.recent-terminations",
-            count: activityMonitor.snapshot.recentTerminations.count
+            count: activityPresentation.snapshot.recentTerminations.count
         ) {
-            ForEach(activityMonitor.snapshot.recentTerminations) { termination in
+            ForEach(activityPresentation.snapshot.recentTerminations) { termination in
                 terminationRow(termination, now: now)
             }
         }

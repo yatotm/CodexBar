@@ -5,7 +5,7 @@ import SwiftUI
 /// 点击活动卡片后展开的并发任务中心, 复用菜单侧边抽屉定位和动画
 @MainActor
 final class ActivityCenterPanelController {
-    private let activityMonitor: CodexActivityMonitor
+    private let activityPresentation: ActivityPresentationModel
     private let presentationState: CodexActivityCenterPresentationState
     private let contentHost = SidePanelContentHost<CodexActivityCenterView>(
         initialSize: CodexActivityCenterView.initialPanelSize,
@@ -28,13 +28,13 @@ final class ActivityCenterPanelController {
     )
 
     init(
-        activityMonitor: CodexActivityMonitor,
+        activityPresentation: ActivityPresentationModel,
         presentationState: CodexActivityCenterPresentationState
     ) {
-        self.activityMonitor = activityMonitor
+        self.activityPresentation = activityPresentation
         self.presentationState = presentationState
 
-        activityMonitor.$snapshot
+        activityPresentation.$snapshot
             .dropFirst()
             .sink { [weak self] snapshot in
                 guard let self, presentationState.isPresented else {
@@ -123,7 +123,7 @@ final class ActivityCenterPanelController {
         relativeTo menuSurfaceWindow: NSWindow?,
         contentView: NSView?
     ) {
-        let snapshot = activityMonitor.snapshot
+        let snapshot = activityPresentation.snapshot
         guard snapshot.hasTaskCenterContent,
               let menuSurfaceWindow else {
             hide(immediate: true)
@@ -230,7 +230,7 @@ final class ActivityCenterPanelController {
                   generation == panelUpdateGeneration else {
                 return
             }
-            let snapshot = activityMonitor.snapshot
+            let snapshot = activityPresentation.snapshot
             guard snapshot.hasTaskCenterContent == hasContent else {
                 return
             }
@@ -253,7 +253,7 @@ final class ActivityCenterPanelController {
     private func updateContent(panelSize: CGSize) {
         contentHost.updateContent(
             CodexActivityCenterView(
-                activityMonitor: activityMonitor,
+                activityPresentation: activityPresentation,
                 presentationState: presentationState
             ),
             size: panelSize

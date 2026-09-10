@@ -85,7 +85,7 @@ struct MainPanelOptionsView: View {
     }
 
     private func sectionRow(_ section: MainPanelSection) -> some View {
-        let isAvailable = section != .activity || codexHookSettings.isEnabled
+        let isAvailable = section != .activity || settings.hasActivitySource
         let isVisible = isAvailable && settings.layout.isVisible(section)
         let visibleSectionCount = settings.layout.visibleSections.filter { visibleSection in
             visibleSection != .activity || codexHookSettings.isEnabled

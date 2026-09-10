@@ -3,6 +3,17 @@ import Foundation
 @main
 struct RefreshSleepSmoke {
     static func main() async throws {
+        for sleeping in [false, true] {
+            for closed in [false, true] {
+                for network in [false, true] {
+                    precondition(
+                        SystemConnectionGate.allowsConnection(isSleeping: sleeping, lidClosed: closed, hasNetwork: network)
+                            == (!sleeping && !closed && network),
+                        "合盖 DarkWake 和网络变化不得越过连接门槛"
+                    )
+                }
+            }
+        }
         let coordinator = RefreshTaskCoordinator()
         var requests = 0
         var commits = 0

@@ -66,6 +66,8 @@ nonisolated struct MainPanelLayout: Equatable, Sendable {
 final class MainPanelSettings: ObservableObject {
     @Published private(set) var layout: MainPanelLayout
     @Published private(set) var areEntranceAnimationsEnabled: Bool
+    @Published private(set) var hasActivitySource = false
+    @Published private(set) var hasRemoteActivitySource = false
 
     private let defaults: UserDefaults
     private var isHookEnabled: Bool?
@@ -96,7 +98,10 @@ final class MainPanelSettings: ObservableObject {
         }
     }
 
-    func updateHookEnabled(_ isEnabled: Bool) {
+    func updateHookEnabled(_ localEnabled: Bool, hasRemote: Bool = false) {
+        hasRemoteActivitySource = hasRemote
+        let isEnabled = localEnabled || hasRemote
+        hasActivitySource = isEnabled
         isHookEnabled = isEnabled
         guard !isEnabled else {
             return

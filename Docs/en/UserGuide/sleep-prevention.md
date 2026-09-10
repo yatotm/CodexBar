@@ -1,5 +1,7 @@
 # Prevent System Sleep
 
+The fork also provides a manual keep-awake mode in builds with an authorized power service. Remote tasks do not control Mac sleep. The unsigned public build still requires further signing and authorization validation for lid-closed operation.
+
 [简体中文](../../UserGuide/sleep-prevention.md) | English
 
 CodexBar can keep your Mac awake while tasks run and restore sleep when tasks finish or a protection condition takes effect.

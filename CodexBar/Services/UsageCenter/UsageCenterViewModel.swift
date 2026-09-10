@@ -5,7 +5,10 @@ import Foundation
 @MainActor
 final class UsageCenterViewModel: ObservableObject {
     @Published private(set) var sources: [UsageSource] = [] {
-        didSet { analytics.history.setSources(sources) }
+        didSet {
+            analytics.history.setSources(sources)
+            remoteActivity.setSources(sources)
+        }
     }
 
     @Published private(set) var statuses: [String: UsageSourceStatus] = [:]
@@ -32,6 +35,7 @@ final class UsageCenterViewModel: ObservableObject {
     }
 
     let analytics = UsageAnalyticsViewModel()
+    let remoteActivity = RemoteActivityController()
     private let store = UsageCenterStore()
     private let client = UsageCollectorClient()
     private var refreshTask: Task<Void, Never>?
@@ -67,6 +71,7 @@ final class UsageCenterViewModel: ObservableObject {
     }
 
     func stop() {
+        remoteActivity.stop()
         refreshTask?.cancel()
         timerTask?.cancel()
         dashboardTask?.cancel()
@@ -201,6 +206,7 @@ final class UsageCenterViewModel: ObservableObject {
         guard !isRefreshing, source.id != "local" else { return }
         do {
             try await store.remove(source)
+            remoteActivity.setEnabled(false, sourceID: source.id)
             await client.deleteToken(for: source.id)
             sources = try await store.sources()
             statuses[source.id] = nil

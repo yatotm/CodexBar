@@ -3,6 +3,7 @@ set -euo pipefail
 local_root="$(cd "$(dirname "$0")/.." && pwd)"
 python3 - "$local_root" <<'PYTHON'
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -45,11 +46,17 @@ with tempfile.TemporaryDirectory(prefix="codexbar-local-build.", dir="/tmp") as 
         print(f"完整构建日志: {log_path}")
         sys.exit(result.returncode)
 
-    # 本地和自动构建使用 ad-hoc 签名, 不申请额外系统权限
+    # 默认临时签名, 已配置开发证书时可显式使用同一身份签署 App 与电源组件
     app = stage / app_name
     subprocess.run(["ditto", "--noextattr", str(output / "DerivedData/Build/Products" / configuration / app.name), str(app)], check=True)
     subprocess.run(["xattr", "-cr", str(app)], check=True)
-    subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
+    identity = os.environ.get("CODEXBAR_SIGNING_IDENTITY", "-")
+    signing = ["codesign", "--force", "--sign", identity]
+    if identity != "-":
+        signing += ["--options", "runtime", "--timestamp=none"]
+        info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+        subprocess.run(signing + ["--identifier", info["CFBundleIdentifier"] + ".helper", str(app / "Contents/Resources/CodexBarHelper")], check=True)
+    subprocess.run(signing + ["--deep", str(app)], check=True)
     # ditto 会保留目标目录的旧文件, 先移除旧产物避免残留资源破坏签名
     if (output / app.name).exists():
         shutil.rmtree(output / app.name)

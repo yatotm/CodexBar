@@ -37,8 +37,8 @@ struct CodexStatusMenuView: View {
     @ObservedObject var codexHookSettings: CodexHookSettings
     @ObservedObject var mainPanelSettings: MainPanelSettings
     /// 活动状态与逐秒时间只被活动卡片消费, 由卡片自行观察, 避免 1Hz tick 让整个菜单树每秒重算
-    let activityMonitor: CodexActivityMonitor
-    // 同 activityMonitor, 交给活动卡片自行观察, 不让 helper 状态变化重算整个菜单树
+    let activityPresentation: ActivityPresentationModel
+    // 同 activityPresentation, 交给活动卡片自行观察, 不让 helper 状态变化重算整个菜单树
     let keepAliveController: KeepAliveController
     @ObservedObject var menuSurfaceVisibility: MenuSurfaceVisibilityState
     @ObservedObject var animationState: MenuSurfaceAnimationState
@@ -125,9 +125,7 @@ private extension CodexStatusMenuView {
                 accountSection
             }
         case .activity:
-            if usageCenterViewModel.menuScope != .claude {
-                activitySection
-            }
+            activitySection
         case .quota:
             if usageCenterViewModel.menuScope != .claude {
                 quotaSection(dataPlaceholderSection: dataPlaceholderSection)
@@ -178,12 +176,12 @@ private extension CodexStatusMenuView {
 
     @ViewBuilder
     var activitySection: some View {
-        if codexHookSettings.isEnabled {
+        if mainPanelSettings.hasActivitySource {
             CodexActivityCard(
-                activityMonitor: activityMonitor,
+                activityPresentation: activityPresentation,
                 presentationState: activityCenterPresentationState,
                 keepAliveController: keepAliveController,
-                showsUnavailableState: viewModel.snapshot == nil,
+                showsUnavailableState: false,
                 onTaskCenterTap: { anchorProvider in
                     onActivityCenterTap(
                         CodexActivityCenterPanelContext(
@@ -278,7 +276,7 @@ private extension CodexStatusMenuView {
             case .account:
                 true
             case .activity:
-                codexHookSettings.isEnabled
+                mainPanelSettings.hasActivitySource
             case .quota, .usage:
                 hasData(for: section) || dataPlaceholderSection == section
             case .status:

@@ -26,6 +26,9 @@ fi
     CodexBar/Models/UsageValuationModels.swift \
     CodexBar/Services/UsageCenter/UsageCenterStore.swift \
     CodexBar/Services/UsageCenter/UsageCollectorClient.swift \
+    CodexBar/Services/UsageCenter/RemoteActivityController.swift \
+    CodexBar/Services/UsageCenter/ActivityPresentationModel.swift \
+    CodexBar/Models/CodexActivityModels.swift \
     CodexBar/Services/Process/ProcessTermination.swift \
     Tests/UsageCommandSmoke.swift -o "$usage_tmp/command-tests"
 "$usage_tmp/command-tests"
@@ -47,6 +50,7 @@ fi
 
 "$usage_compiler" "${usage_flags[@]}" \
     CodexBar/Services/Support/RefreshTaskCoordinator.swift \
+    CodexBar/Services/UsageCenter/SystemConnectionGate.swift \
     Tests/RefreshSleepSmoke.swift -o "$usage_tmp/refresh-sleep-tests"
 "$usage_tmp/refresh-sleep-tests"
 

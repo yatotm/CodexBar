@@ -12,7 +12,7 @@ Right-click or Control-click the menu bar icon and choose `Settings`, or press `
 | Animation Effects | Animate quota bars and the heatmap when opening the panel | On |
 | Launch at Login | Start CodexBar when you sign in to your Mac | Follows the system login-item state |
 | Automatically Check for Updates | Periodically check for CodexBar updates | Follows the current update setting |
-| Menu Bar Quota Indicator | Show the remaining allowance in a selected window | Primary quota |
+| Menu Bar Quota Indicator | Show the remaining Codex weekly allowance | 7d |
 | Global Shortcut | Toggle the main panel from any app | `⌘⇧W` |
 
 ### Main Panel Layout
@@ -23,7 +23,7 @@ Disabling Hook turns off Tasks; enable it manually after re-enabling Hook. If Ta
 
 ### Menu Bar Quota Indicator
 
-Choose the quota window to display. Turning the indicator off and back on restores the last choice. Faded data indicates cached quota.
+The indicator always uses the Codex 7d window. Only its visibility is configurable. Faded data indicates cached quota.
 
 ### Global Shortcut
 
@@ -37,7 +37,7 @@ A shortcut needs at least two modifier keys and cannot use `Command-Space` or `C
 | [CodexBar Hook](activity-and-hook.md) | Enable live tasks and daily activity statistics | Off if not installed |
 | [System Notifications](notifications.md) | Configure notification types, thresholds, sounds, and haptics | Main switch off |
 | Automatic Reset | Use banked resets shortly before expiration | Off, 30-minute lead time |
-| [Prevent System Sleep](sleep-prevention.md) | Keep your Mac awake while eligible tasks run | Off |
+| [Prevent System Sleep](sleep-prevention.md) | Choose Off, Manual, or Follow Tasks | Off |
 | [Rebuild Data](sync-data-privacy.md#rebuild-data) | Recalculate Hook statistics for selected dates | Manual |
 
 ### Proxy
@@ -88,4 +88,4 @@ Back to the [User Guide](README.md).
 
 ## Fork behavior
 
-Usage Details opens separate source, refresh, account-history, and valuation controls. The GitHub link opens yatotm/CodexBar. Release updates use this fork’s feed; Debug builds do not use that channel. The About page also shows Helper installation and approval status.
+Usage Details opens separate source, refresh, account-history, and valuation controls. The GitHub link opens yatotm/CodexBar. Release updates use this fork’s feed; Debug builds do not use that channel.

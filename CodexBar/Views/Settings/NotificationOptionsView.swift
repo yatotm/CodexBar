@@ -5,11 +5,16 @@ import SwiftUI
 /// 通知开启时展开音效子行, 关闭时连同占位一起收起
 struct NotificationOptionsView: View {
     @ObservedObject var notificationSettings: NotificationSettings
+    @ObservedObject var mainPanelSettings: MainPanelSettings
     @ObservedObject var codexHookSettings: CodexHookSettings
     @ObservedObject var codexCLINotificationSettings: CodexCLINotificationSettings
     @ObservedObject var autoResetSettings: AutoResetSettings
     @ObservedObject var keepAliveController: KeepAliveController
     @State private var previewSound: NSSound?
+
+    private var hasTaskSource: Bool {
+        codexHookSettings.isOperable || mainPanelSettings.hasRemoteActivitySource
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.rowSpacing) {
@@ -83,7 +88,7 @@ struct NotificationOptionsView: View {
 
     /// Hook 未开启或链路校验不通时显示为关闭并置灰, 不修改持久化的 isTaskCompletionEnabled
     private var taskCompletionRow: some View {
-        let isDisplayedOn = codexHookSettings.isOperable && notificationSettings.isTaskCompletionEnabled
+        let isDisplayedOn = hasTaskSource && notificationSettings.isTaskCompletionEnabled
 
         return notificationOptionRow(
             title: "settings.notifications.task-completion.title",
@@ -91,7 +96,7 @@ struct NotificationOptionsView: View {
                 get: { isDisplayedOn },
                 set: { notificationSettings.setTaskCompletionEnabled($0) }
             ),
-            isEnabled: codexHookSettings.isOperable,
+            isEnabled: hasTaskSource,
             sound: Binding(
                 get: { notificationSettings.taskCompletionSound },
                 set: { notificationSettings.setTaskCompletionSound($0) }
@@ -111,7 +116,7 @@ struct NotificationOptionsView: View {
 
     /// Hook 未开启或链路校验不通时显示为关闭并置灰, 不修改持久化的 isTaskWaitingEnabled
     private var taskWaitingRow: some View {
-        let isDisplayedOn = codexHookSettings.isOperable && notificationSettings.isTaskWaitingEnabled
+        let isDisplayedOn = hasTaskSource && notificationSettings.isTaskWaitingEnabled
 
         return notificationOptionRow(
             title: "settings.notifications.task-waiting.title",
@@ -119,7 +124,7 @@ struct NotificationOptionsView: View {
                 get: { isDisplayedOn },
                 set: { notificationSettings.setTaskWaitingEnabled($0) }
             ),
-            isEnabled: codexHookSettings.isOperable,
+            isEnabled: hasTaskSource,
             sound: Binding(
                 get: { notificationSettings.taskWaitingSound },
                 set: { notificationSettings.setTaskWaitingSound($0) }

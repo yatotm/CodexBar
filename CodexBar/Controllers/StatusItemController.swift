@@ -29,8 +29,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let activityCenterPresentationState = CodexActivityCenterPresentationState()
     private let heatmapDetailPanelController = HeatmapDetailPanelController()
     private let resetCreditsPanelController = ResetCreditsPanelController()
+    private lazy var activityPresentation = ActivityPresentationModel(local: activityMonitor, usage: usageCenterViewModel)
     private lazy var activityCenterPanelController = ActivityCenterPanelController(
-        activityMonitor: activityMonitor,
+        activityPresentation: activityPresentation,
         presentationState: activityCenterPresentationState
     )
     private var activeMenuSurface = ActiveMenuSurface.none
@@ -421,9 +422,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
 
         init?(snapshot: CodexQuotaSnapshot?, selection: MenuBarQuotaSelection) {
-            guard let targetKind = selection.windowKind,
+            guard selection != .off,
                   let snapshot,
-                  let window = snapshot.codexLimit?.window(ofKind: targetKind),
+                  let window = snapshot.codexLimit?.windows.first(where: { $0.windowDurationMins == 7 * 24 * 60 }),
                   window.hasData else {
                 return nil
             }
@@ -504,12 +505,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             .map { $0 != nil }
             .removeDuplicates()
 
-        let hasTaskCenterContent = activityMonitor.$snapshot
+        let hasTaskCenterContent = activityPresentation.$snapshot
             .map(\.hasTaskCenterContent)
             .removeDuplicates()
 
         let isTaskCenterVisible = Publishers.CombineLatest(
-            codexHookSettings.$isEnabled,
+            mainPanelSettings.$hasActivitySource,
             mainPanelSettings.$layout
         )
         .map { isHookEnabled, layout in
@@ -523,8 +524,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             hasTaskCenterContent,
             isTaskCenterVisible
         )
-        .map { isMenuVisible, hasQuotaSnapshot, hasActivity, isTaskCenterVisible in
-            isMenuVisible && hasQuotaSnapshot && hasActivity && isTaskCenterVisible
+        .map { isMenuVisible, _, hasActivity, isTaskCenterVisible in
+            isMenuVisible && hasActivity && isTaskCenterVisible
         }
         .removeDuplicates()
         .sink { [weak self] isActive in
@@ -609,9 +610,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func observeMainPanelHookState() {
         codexHookSettings.$isEnabled
-            .removeDuplicates()
-            .sink { [weak self] isEnabled in
-                self?.mainPanelSettings.updateHookEnabled(isEnabled)
+            .combineLatest(usageCenterViewModel.remoteActivity.$enabledSourceIDs)
+            .sink { [weak self] isEnabled, sourceIDs in
+                self?.mainPanelSettings.updateHookEnabled(isEnabled, hasRemote: !sourceIDs.isEmpty)
             }
             .store(in: &cancellables)
     }
@@ -1395,7 +1396,7 @@ private extension StatusItemController {
             workflowViewModel: workflowViewModel,
             codexHookSettings: codexHookSettings,
             mainPanelSettings: mainPanelSettings,
-            activityMonitor: activityMonitor,
+            activityPresentation: activityPresentation,
             keepAliveController: keepAliveController,
             menuSurfaceVisibility: menuSurfaceVisibility,
             animationState: animationState,

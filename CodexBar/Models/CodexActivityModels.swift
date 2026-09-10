@@ -30,7 +30,7 @@ nonisolated struct CodexActivityTaskSnapshot: Equatable, Identifiable {
     let isAnonymous: Bool
     let latestEvent: CodexActivityEvent
     let projectName: String?
-    let modelName: String?
+    var modelName: String?
     let effort: String?
     let toolName: String?
     let startedAt: Date?
@@ -45,7 +45,7 @@ nonisolated struct CodexActivityCompletion: Equatable, Identifiable {
     let id: UUID
     let isAnonymous: Bool
     let projectName: String?
-    let modelName: String?
+    var modelName: String?
     let effort: String?
     let completedAt: Date
     let duration: TimeInterval?
@@ -56,7 +56,7 @@ nonisolated struct CodexActivityTermination: Equatable, Identifiable {
     let id: UUID
     let isAnonymous: Bool
     let projectName: String?
-    let modelName: String?
+    var modelName: String?
     let effort: String?
     let terminatedAt: Date
     let duration: TimeInterval?
@@ -79,6 +79,7 @@ nonisolated struct CodexActivitySnapshot: Equatable {
     let recentCompletions: [CodexActivityCompletion]
     let recentTerminations: [CodexActivityTermination]
     let isCompletionHighlighted: Bool
+    var unconfirmedTasks: [CodexActivityTaskSnapshot] = []
 
     static let empty = CodexActivitySnapshot(
         waitingTasks: [],
@@ -121,7 +122,7 @@ nonisolated struct CodexActivitySnapshot: Equatable {
     }
 
     var hasTaskCenterContent: Bool {
-        hasActiveTasks || !recentCompletions.isEmpty || !recentTerminations.isEmpty
+        hasActiveTasks || !recentCompletions.isEmpty || !recentTerminations.isEmpty || !unconfirmedTasks.isEmpty
     }
 
     /// 等待批准 > 运行中 > 最近完成 > 最近终止 > 空闲; 菜单栏图标, tooltip 和活动卡片共用同一判定

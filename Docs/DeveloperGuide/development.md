@@ -126,3 +126,16 @@ helper 清理先取消并确认系统唤醒计划清零，再注销服务；失�
 本地使用 `bash Scripts/build-local.sh` 构建独立 Debug App，执行 `bash Scripts/verify-usage-center.sh` 检查采集、账号隔离、提前重置、窗口展开和睡眠取消。迁移与发布边界另有 Python 回归检查，入口见 [构建与独立发布](releasing.md)
 
 菜单手动验证应覆盖全部标签之间的切换、关闭后重开、设备展开收起及侧边详情清理。改名后的 Helper 还需在有正式签名时验证首次授权、等待/运行切换、唤醒计划清理及异常退出恢复；ad-hoc 构建通过不代表这些系统能力已验证。
+
+## 本地开发签名
+
+默认 `Scripts/build-local.sh` 使用临时签名。有可用 Apple Development 证书时，可显式使用同一身份签署主 App、框架与电源组件，并开启 hardened runtime：
+
+```bash
+CODEXBAR_SIGNING_IDENTITY="Apple Development: 你的证书名称" \
+CODEXBAR_BUILD_CONFIGURATION=Release bash Scripts/build-local.sh
+```
+
+证书从 Xcode 的 Apple Accounts 页面管理。签名失败不会回退成看似具备权限的包；主 App 仍按实际签名和后台授权状态决定防睡眠是否可用。本地开发签名不等同于 Developer ID 公证，也不自动证明公开分发场景已通过验证。
+
+本轮实时任务回归覆盖短帧读取、合并身份、标签筛选、断线状态隔离、Hook 配置保留和文件事件推送。还需在真机覆盖合盖、DarkWake、重新开盖，以及获授权构建的开启、关闭和异常退出后睡眠恢复。

@@ -34,6 +34,18 @@ struct UsageSourceEditor: View {
                 Toggle("启用此来源", isOn: $source.isEnabled)
                 Toggle("采集 Codex", isOn: $source.includesCodex)
                 Toggle("采集 Claude Code", isOn: $source.includesClaude)
+                if source.transport == .ssh || (source.transport == .local && source.includesClaude) {
+                    HStack {
+                        Text("实时任务")
+                        Spacer()
+                        Button("接入") { configureActivity(install: true) }
+                        Button("移除") { configureActivity(install: false) }
+                    }.disabled(isSaving || source.validationError != nil)
+                    Text(source.transport == .ssh
+                        ? "通过 SSH 接收任务变化, 不等待 5 分钟刷新; 合盖或睡眠后断开, 恢复联网后重连; 接入会保存当前来源并保留已有 Hook"
+                        : "实时读取本机 Claude Hook; Codex 继续使用设置中的 CodexBar Hook, 不重复接入")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if source.includesCodex {
                     LabeledContent("当前 Codex 凭据", value: viewModel.statuses[source.id]?.currentCodexAuthentication?.title ?? "尚未检测")
                     UsageDisclosure(title: "历史身份补充") {
@@ -110,5 +122,20 @@ struct UsageSourceEditor: View {
             } message: {
                 Text("接入会包装现有 statusLine 命令并追加只记录元数据的 Hook。原命令继续接收原始输入并显示原输出。移除时只恢复本程序管理的配置。")
             }
+    }
+
+    private func configureActivity(install: Bool) {
+        isSaving = true
+        Task {
+            defer { isSaving = false }
+            do {
+                guard await viewModel.save(source, token: token) else { return }
+                try await ActivityStreamClient.configure(source: source, install: install)
+                viewModel.remoteActivity.setEnabled(install, sourceID: source.id)
+                bridgeMessage = install ? "已接入实时任务, 已打开的 CLI 会话可能需要重启" : "已移除实时接入, 历史统计保持可用"
+            } catch {
+                viewModel.error = error.localizedDescription
+            }
+        }
     }
 }

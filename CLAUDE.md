@@ -100,7 +100,7 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 
 **链路三：实时任务，由 `CodexActivityMonitor` 驱动**
 
-`CodexActivityMonitor` 是菜单栏图标、活动卡片、通知、触觉反馈和防睡眠的**唯一任务状态来源**，由两个 reader 供料。
+`CodexActivityMonitor` 是本机 Codex 菜单栏图标、活动卡片、通知、触觉反馈和按任务防睡眠的**唯一任务状态来源**，由两个 reader 供料。
 
 - `HookEventTailReader`（actor）的 bootstrap 覆盖滚动 24 小时并作为单次事务发送，之后按当日文件 offset 增量 tail，同时向下游报告数据源健康状态
 - `CodexSessionLifecycleReader`（actor）增量读取 `~/.codex/sessions` 与 `archived_sessions` 下的 rollout JSONL，只提取 turn 生命周期与最近进展时间，不解码会话或工具内容
@@ -329,3 +329,9 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 ## 验证与文档
 
 构建、日志和各功能验证入口见 [开发与验证](Docs/DeveloperGuide/development.md)。不要提交发布产物、DerivedData、临时 DMG、签名文件或个人凭据。
+
+## 实时多机器补充
+
+`RemoteActivityController` 独立消费 `ActivityCollector.py` 的当前快照，覆盖 SSH Codex、SSH Claude 和本机 Claude。它通过 `ActivityPresentationModel` 复用原任务卡片和任务中心，并驱动等待、完成通知，不注入本机任务监控或电源控制。`SystemConnectionGate` 在合盖或睡眠时关闭这些连接，正式唤醒且开盖后才能恢复；SSH 还要求网络可用。详见 [用量中心实现与验证](Docs/DeveloperGuide/usage-center.md)
+
+防睡眠新增 `KeepAlive.mode`，旧安装保留按任务模式，新安装默认手动模式，主开关仍默认关闭。手动模式不依赖 Hook 或任务，时长计时也不随任务重置。Helper 身份校验、首次授权、系统设置入口及恢复流程保持原样；免费构建的合盖防睡眠仍待签名授权验证。

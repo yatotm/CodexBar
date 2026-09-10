@@ -1,4 +1,15 @@
+import Combine
 import Foundation
+
+@MainActor final class CodexActivityMonitor: ObservableObject {
+    @Published var snapshot = CodexActivitySnapshot.empty
+}
+
+@MainActor final class UsageCenterViewModel: ObservableObject {
+    @Published var sources = [UsageSource]()
+    @Published var menuScope = UsageMenuScope.all
+    let remoteActivity = RemoteActivityController()
+}
 
 nonisolated enum CodexCLIResolver {
     static var environment: [String: String] {
@@ -9,6 +20,13 @@ nonisolated enum CodexCLIResolver {
 @main
 struct UsageCommandSmoke {
     static func main() async throws {
+        verifyPresentation()
+        let streamPipe = Pipe()
+        try streamPipe.fileHandleForWriting.write(contentsOf: Data("small frame\n".utf8))
+        let partial = try ActivityStreamClient.readChunk(from: streamPipe.fileHandleForReading.fileDescriptor)
+        precondition(partial == Data("small frame\n".utf8), "长连接必须立即返回短帧, 不能等待管道填满或写端关闭")
+        try streamPipe.fileHandleForWriting.close()
+        try streamPipe.fileHandleForReading.close()
         let payload = Data(repeating: 65, count: 200000)
         let output = try await UsageCommandRunner.run(
             executable: "/usr/bin/python3",
@@ -36,5 +54,43 @@ struct UsageCommandSmoke {
             preconditionFailure("应拒绝超大响应")
         } catch is UsageCenterError {}
         print("Usage command pipe, timeout, cancellation and size tests passed")
+    }
+
+    static func verifyPresentation() {
+        let localTask = CodexActivityTaskSnapshot(
+            id: UUID(),
+            isAnonymous: false,
+            latestEvent: .promptSubmitted,
+            projectName: "local",
+            modelName: "test-model",
+            effort: nil,
+            toolName: nil,
+            startedAt: Date(),
+            stateChangedAt: Date(),
+            showsPreciseDuration: true,
+            activeSubagentCount: nil
+        )
+        let local = CodexActivitySnapshot(waitingTasks: [], runningTasks: [localTask], recentCompletions: [], recentTerminations: [], isCompletionHighlighted: false)
+        let remoteTask = RemoteActivityTask(
+            id: String(repeating: "a", count: 64),
+            provider: "codex",
+            state: "running",
+            project: "remote",
+            updatedAt: 1001,
+            startedAt: 1000,
+            modelName: "remote-model"
+        )
+        let sources = [UsageSource(id: "a", name: "machine-a", address: "a"), UsageSource(id: "b", name: "machine-b", address: "b")]
+        let tasks = ["a": [remoteTask], "b": [remoteTask]]
+        let online = ["a": "实时连接", "b": "实时连接"]
+        let all = ActivityPresentationModel.merge(local: local, tasks: tasks, states: online, enabled: ["a", "b"], sources: sources, scope: .all)
+        precondition(all.activeCount == 3 && Set(all.runningTasks.map(\.id)).count == 3, "同一会话标识在不同机器上不得覆盖")
+        precondition(all.runningTasks.contains { $0.modelName == "remote-model · machine-a" })
+        precondition(local.runningTasks[0].modelName == "test-model", "合并展示不得改写本机任务与防睡眠输入")
+        let disconnected = ActivityPresentationModel.merge(local: local, tasks: tasks, states: [:], enabled: ["a", "b"], sources: sources, scope: .all)
+        precondition(disconnected.activeCount == 1 && disconnected.unconfirmedTasks.count == 2 && disconnected.recentCompletions.isEmpty)
+        let claude = ActivityPresentationModel.merge(local: local, tasks: tasks, states: online, enabled: ["a", "b"], sources: sources, scope: .claude)
+        precondition(!claude.hasTaskCenterContent, "Claude 标签不得混入 Codex 任务")
+        print("Merged task identity, machine labels, scope filtering and disconnected-state isolation passed")
     }
 }

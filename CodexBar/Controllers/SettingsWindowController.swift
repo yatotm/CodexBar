@@ -166,9 +166,10 @@ final class SettingsWindowController: HostingWindowController {
                 willShow: { [codexCLINotificationSettings] in
                     codexCLINotificationSettings.refresh()
                 },
-                contentProvider: { [notificationSettings, codexHookSettings, codexCLINotificationSettings, autoResetSettings, keepAliveController] in
+                contentProvider: { [notificationSettings, mainPanelSettings, codexHookSettings, codexCLINotificationSettings, autoResetSettings, keepAliveController] in
                     NotificationOptionsView(
                         notificationSettings: notificationSettings,
+                        mainPanelSettings: mainPanelSettings,
                         codexHookSettings: codexHookSettings,
                         codexCLINotificationSettings: codexCLINotificationSettings,
                         autoResetSettings: autoResetSettings,
@@ -180,6 +181,7 @@ final class SettingsWindowController: HostingWindowController {
                 // 防睡眠只订这两个派生值: 订整个控制器会让任务每起停一次都白重算一次高度
                 contentChanges: Publishers.MergeMany([
                     notificationSettings.objectWillChange.eraseToAnyPublisher(),
+                    mainPanelSettings.$hasRemoteActivitySource.map { _ in () }.eraseToAnyPublisher(),
                     codexHookSettings.objectWillChange.eraseToAnyPublisher(),
                     autoResetSettings.$isEnabled
                         .map { _ in () }

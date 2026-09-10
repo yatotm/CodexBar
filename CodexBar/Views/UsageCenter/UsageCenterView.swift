@@ -103,6 +103,7 @@ struct UsageCenterView: View {
 
     @ViewBuilder private func sourceState(_ source: UsageSource) -> some View {
         let status = viewModel.statuses[source.id]
+        ActivityConnectionStatus(controller: viewModel.remoteActivity, sourceID: source.id)
         if !source.isEnabled {
             Text("已暂停").foregroundStyle(.secondary).font(.caption)
         } else if let error = status?.error {
@@ -296,6 +297,17 @@ struct UsageCenterView: View {
         case "interrupted": return "已中断"
         case "closed": return "会话已结束"
         default: return "状态未知"
+        }
+    }
+}
+
+private struct ActivityConnectionStatus: View {
+    @ObservedObject var controller: RemoteActivityController
+    let sourceID: String
+
+    var body: some View {
+        if controller.enabledSourceIDs.contains(sourceID) {
+            Text(controller.states[sourceID] ?? "未连接").font(.caption).foregroundStyle(.secondary)
         }
     }
 }

@@ -8,10 +8,14 @@ struct KeepAliveOptionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.rowSpacing) {
-            waitingApprovalRow
+            if keepAliveController.mode == .tasks {
+                waitingApprovalRow
+            }
             displayAwakeRow
             maximumDurationRow
-            activityProtectionRow
+            if keepAliveController.mode == .tasks {
+                activityProtectionRow
+            }
 
             // 台式机读不到电池, 这一行整个收起而不是置灰
             if keepAliveController.hasBattery {
