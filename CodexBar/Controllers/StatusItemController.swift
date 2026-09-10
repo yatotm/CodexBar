@@ -25,6 +25,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
     private let menuSurfaceVisibility = MenuSurfaceVisibilityState()
+    private let popoverAnimationState = MenuSurfaceAnimationState()
+    private let fallbackPanelAnimationState = MenuSurfaceAnimationState()
     private let activityCenterPresentationState = CodexActivityCenterPresentationState()
     private let heatmapDetailPanelController = HeatmapDetailPanelController()
     private let resetCreditsPanelController = ResetCreditsPanelController()
@@ -38,7 +40,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private lazy var fallbackPanelController = FallbackPanelController { [unowned self] in
-        makeMenuHostingController(usesPreferredContentSize: false)
+        makeMenuHostingController(animationState: fallbackPanelAnimationState, usesPreferredContentSize: false)
     }
 
     private lazy var settingsWindowController = SettingsWindowController(
@@ -498,8 +500,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func configurePopover() {
-        let hostingController = makeMenuHostingController(usesPreferredContentSize: true)
+        let hostingController = makeMenuHostingController(animationState: popoverAnimationState, usesPreferredContentSize: true)
 
+        popover.delegate = self
         popover.behavior = .applicationDefined
         popover.animates = false
         popover.contentViewController = hostingController
@@ -915,6 +918,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menuSurfaceState = .opening
         activeMenuSurface = .popover
 
+        popoverAnimationState.allowsAnimations = true
         menuSurfaceFadeCoordinator.prepareForFadeIn()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         completeMenuSurfaceOpen()
@@ -923,6 +927,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func openFallbackPanel(on screen: NSScreen?) {
         cancelMenuSurfaceTasks()
 
+        fallbackPanelAnimationState.allowsAnimations = true
         fallbackPanelController.prepareForDisplay(on: screen)
         menuSurfaceState = .opening
         activeMenuSurface = .fallbackPanel
@@ -1105,6 +1110,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menuSurfaceVisibility.endPresentation()
 
         guard isActiveMenuSurfaceVisible else {
+            popoverAnimationState.allowsAnimations = false
+            fallbackPanelAnimationState.allowsAnimations = false
             menuSurfaceFadeCoordinator.resetAlpha()
             menuSurfaceState = .hidden
             activeMenuSurface = .none
@@ -1327,13 +1334,16 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func closeActiveMenuSurface() {
+        // 主动关闭先清除宿主身份, 避免同步的关闭回调重入清理流程
+        activeMenuSurface = .none
         if popover.isShown {
             popover.performClose(nil)
         }
 
         fallbackPanelController.orderOut()
 
-        activeMenuSurface = .none
+        popoverAnimationState.allowsAnimations = false
+        fallbackPanelAnimationState.allowsAnimations = false
     }
 
     private enum Metrics {
@@ -1391,6 +1401,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 }
 
+extension StatusItemController: NSPopoverDelegate {
+    func popoverDidClose(_ notification: Notification) {
+        guard notification.object as? NSPopover === popover, !popover.isShown else {
+            return
+        }
+
+        popoverAnimationState.allowsAnimations = false
+        guard activeMenuSurface == .popover else {
+            return
+        }
+
+        completeMenuSurfaceClose()
+    }
+}
+
 /// 菜单侧边面板的互斥名册接口; 面板间互斥和点击区域判定统一走名册遍历
 private protocol MenuSideDetailPanel: AnyObject {
     func hide(immediate: Bool)
@@ -1402,7 +1427,7 @@ extension ResetCreditsPanelController: MenuSideDetailPanel {}
 extension ActivityCenterPanelController: MenuSideDetailPanel {}
 
 private extension StatusItemController {
-    func makeMenuHostingController(usesPreferredContentSize: Bool) -> MenuHostingController {
+    func makeMenuHostingController(animationState: MenuSurfaceAnimationState, usesPreferredContentSize: Bool) -> MenuHostingController {
         let controller = MenuHostingController()
         let rootView = CodexStatusMenuView(
             viewModel: viewModel,
@@ -1414,6 +1439,7 @@ private extension StatusItemController {
             syncSettings: syncSettings,
             keepAliveController: keepAliveController,
             menuSurfaceVisibility: menuSurfaceVisibility,
+            animationState: animationState,
             activityCenterPresentationState: activityCenterPresentationState,
             onUsageHeatmapHoverChange: { [weak self] in self?.updateHeatmapDetailPanel($0) },
             onResetCreditsTap: { [weak self] in self?.toggleResetCreditsPanel($0) },
@@ -1442,7 +1468,7 @@ private extension StatusItemController {
             }
         }
 
-        // 额度条依赖显式动画, 不能在根视图清空整棵视图的动画事务
+        // 展示中的额度条保留显式动画, 隐藏宿主由各自的 animationState 控制
         controller.install(AnyView(rootView))
         return controller
     }
