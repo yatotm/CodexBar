@@ -4,22 +4,21 @@
 
 ## Menu Bar Icon
 
-CodexBar combines its icon, a status dot, and an optional rate-limit bar to show account, task, and rate-limit status:
+The menu bar uses person badges for tasks and an optional arc for the remaining Codex 7d allowance.
 
 | Appearance | Meaning |
 | --- | --- |
-| Normal account icon | Account data is available |
-| Error account icon | You are signed out, initialization failed, or trusted rate-limit and usage data is unavailable |
-| Blue status dot | At least one task is running |
-| Orange status dot | At least one task is waiting for your approval |
-| Green status dot | A task has just finished; the highlight remains for 30 seconds |
-| Rate-limit bar beside the icon | Remaining percentage in the selected rate-limit window |
+| Person | Idle |
+| Key badge | Waiting for approval |
+| Clock badge | Running |
+| Checkmark shield | Recently completed |
+| Exclamation shield | Recently terminated |
+| Slashed person | Account unavailable while idle |
+| Quota arc | Remaining Codex 7d allowance; cached data is dimmed |
 
-When several states exist at once, waiting for approval takes priority over running, and running takes priority over recently completed.
+Waiting takes priority over running. When idle, the latest completion or termination appears for 10 seconds. Recent task history remains available for 10 minutes.
 
-Hover over the menu bar icon to see the current task state, project name, elapsed time, number of concurrent tasks, and remaining percentage in the selected rate-limit window.
-
-When rate-limit data comes from cache, the icon and progress bar become translucent to indicate that the visible data is not the latest snapshot.
+The icon combines Codex and Claude tasks across connected machines, independently of the panel tab. Its tooltip includes model, reasoning effort, machine, project and elapsed time. Active tasks remain visible when the local Codex account is unavailable.
 
 ## Layout Customization
 

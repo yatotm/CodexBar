@@ -47,11 +47,19 @@ final class KeepAliveController: ObservableObject {
 
     /// 注册不成功时操作类错误只是下游噪音, 优先展示注册问题
     var errorMessage: String? {
-        (isEnabled ? registrationErrorMessage : nil) ?? operationErrorMessage
+        (isEnabled ? helperRegistrationErrorMessage : nil) ?? operationErrorMessage
     }
 
     var helperRegistrationErrorMessage: String? {
-        registrationErrorMessage
+        helperPackageValidation.issue?.message ?? registrationErrorMessage
+    }
+
+    var helperInstallationStatus: HelperInstallationStatus {
+        HelperInstallationStatus(
+            registration: helperStatus,
+            packageIssue: helperPackageValidation.issue,
+            registrationError: registrationErrorMessage
+        )
     }
 
     /// 时长上限的状态转发给 UI, 使调用方不必知道 limiter 的存在
@@ -109,6 +117,7 @@ final class KeepAliveController: ObservableObject {
     private let helperRuntimeStatusMonitor = HelperRuntimeStatusMonitor()
     private var retryAttempt = 0
     private var helperRegistrationTask: Task<Void, Never>?
+    private let helperPackageValidation = HelperPackageValidation()
     /// 与 hasRunningTasks 同理: 只经由派生状态影响 UI, 自己不发信号
     private var isRefreshingHelper = false
     private var isAutoResetRequested = false
@@ -164,6 +173,9 @@ final class KeepAliveController: ObservableObject {
             return
         }
         isStarted = true
+        helperPackageValidation.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &cancellables)
 
         // Hook 是本功能的依赖, 不是用户意图
         // 只重新求值当前该不该防止系统睡眠, 绝不改写用户保存的开关
@@ -219,6 +231,7 @@ final class KeepAliveController: ObservableObject {
         cancellables.removeAll()
         cancelRetryTask()
         cancelHelperRegistrationTask()
+        helperPackageValidation.cancel()
         autoResetWakeScheduler.stop()
         cancelExternalObservation()
         startedRunningTaskIDs.removeAll()
@@ -269,6 +282,9 @@ final class KeepAliveController: ObservableObject {
     }
 
     private func refreshRegistrationAndSleepState() {
+        if isStarted {
+            helperPackageValidation.refresh()
+        }
         guard helperRegistrationTask == nil else {
             reconcileSleepState(trigger: .statusRefresh)
             return
@@ -565,7 +581,7 @@ final class KeepAliveController: ObservableObject {
             return
         case .notRegistered, .notFound:
             guard KeepAliveHelperConfiguration.assetsArePresent else {
-                registrationErrorMessage = KeepAliveLocalizedMessage.helperAssetsMissing
+                helperPackageValidation.reportMissingAssets()
                 return
             }
         }
@@ -627,17 +643,24 @@ final class KeepAliveController: ObservableObject {
             defer {
                 autoResetWakeScheduler.resumeAfterHelperInterruption()
             }
-            let updateResult = await replaceRegisteredHelper(service)
+            let updateError: Error?
+            do {
+                try await replaceRegisteredHelper(service)
+                updateError = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                updateError = error
+            }
 
-            guard !(updateResult.error is CancellationError),
-                  isStarted,
+            guard isStarted,
                   !Task.isCancelled else {
                 return
             }
 
             refreshHelperStatus()
             var helperWasUpdated = false
-            if updateResult.didUnregisterHelper,
+            if updateError == nil,
                helperStatus.isRegisteredOrAwaitingApproval {
                 KeepAliveHelperConfiguration.recordRegistration(
                     defaults: defaults,
@@ -654,7 +677,7 @@ final class KeepAliveController: ObservableObject {
             }
 
             if !helperWasUpdated {
-                let detail = updateResult.error?.localizedDescription ?? "readinessFailed"
+                let detail = updateError?.localizedDescription ?? "readinessFailed"
                 AppLog.keepAlive.error(
                     "Helper 注册更新失败: detail=\(detail, privacy: .public)"
                 )
@@ -665,28 +688,6 @@ final class KeepAliveController: ObservableObject {
             helperRegistrationTask = nil
             reconcileSleepState(trigger: .helperRegistered, force: true)
             reconcileAutoResetWakeSchedule()
-        }
-    }
-
-    private func registerRefreshedHelper(_ service: SMAppService) async throws {
-        await Task.yield()
-
-        var retryDelays = KeepAliveHelperConfiguration.registrationRetryDelays.makeIterator()
-        while true {
-            do {
-                try service.register()
-                return
-            } catch {
-                let status = HelperStatus(service.status)
-                if status.isRegisteredOrAwaitingApproval {
-                    return
-                }
-                guard KeepAliveHelperConfiguration.isTransientRegistrationError(error),
-                      let retryDelay = retryDelays.next() else {
-                    throw error
-                }
-                try await Task.sleep(for: retryDelay)
-            }
         }
     }
 
@@ -1506,24 +1507,17 @@ final class KeepAliveController: ObservableObject {
 }
 
 extension KeepAliveController {
-    private func replaceRegisteredHelper(_ service: SMAppService) async -> (didUnregisterHelper: Bool, error: Error?) {
-        do {
-            try Task.checkCancellation()
-            guard await autoResetWakeScheduler.cancelBeforeHelperInterruption() else {
-                throw KeepAliveError.wakeScheduleCancellationFailed
-            }
-            reconcileAutoResetWakeSchedule()
-            try Task.checkCancellation()
-            try await service.unregister()
-            mayHaveHelperLease = false
-            try Task.checkCancellation()
-            try await registerRefreshedHelper(service)
-            return (true, nil)
-        } catch is CancellationError {
-            return (false, CancellationError())
-        } catch {
-            return (false, error)
+    private func replaceRegisteredHelper(_ service: SMAppService) async throws {
+        try Task.checkCancellation()
+        guard await autoResetWakeScheduler.cancelBeforeHelperInterruption() else {
+            throw KeepAliveError.wakeScheduleCancellationFailed
         }
+        reconcileAutoResetWakeSchedule()
+        try Task.checkCancellation()
+        try await service.unregister()
+        mayHaveHelperLease = false
+        try Task.checkCancellation()
+        try await KeepAliveHelperConfiguration.registerRefreshedHelper(service)
     }
 
     func setAutoResetRequested(_ requested: Bool) {

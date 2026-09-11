@@ -215,7 +215,7 @@ Different states have different lifetimes and cannot share one cache duration:
 | app-server connection | A 1-hour reuse limit checked on requests | Later requests rebuild with the binary on disk |
 | app-server supplemental cache | Current account only | Prevents values from leaking across accounts |
 | Hook live bootstrap window | 24 hours | Covers long-running tasks that may still be active |
-| Completion highlight | 30 seconds | Short menu bar feedback |
+| Completion or termination badge | 10 seconds | Short menu bar feedback |
 | Task Center terminal history | 10 minutes | Provides recent context without occupying the UI indefinitely |
 | Terminal deduplication memory | 24 hours | Prevents late Hook or rollout data from reviving old tasks |
 | Raw Hook data and daily aggregations | 210 days | Supports long-term metrics and rebuilding |

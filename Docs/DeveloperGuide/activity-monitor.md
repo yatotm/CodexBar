@@ -296,11 +296,11 @@ subagent 的 turn ID 属于 subagent 自己，父任务只能通过共享 sessio
 等待批准 > 运行中 > 最近完成 > 最近中断 > 空闲
 ```
 
-完成状态在菜单栏保留 30 秒绿色提示。活动中心保留最近 10 分钟任务，terminal 去重记忆保留 24 小时。
+完成或终止在菜单栏显示 10 秒徽章提示，到期由菜单栏控制器恢复空闲。活动中心保留最近 10 分钟任务，terminal 去重记忆保留 24 小时。
 
 快照由以下模块消费：
 
-- 菜单栏状态点
+- 菜单栏任务徽章
 - 主面板任务卡片
 - 活动中心
 - 通知系统
@@ -320,7 +320,7 @@ monitor 每秒 poll rollout，还会按多个 deadline 自行刷新。如果每�
 
 ### 清理采用最近 deadline
 
-monitor 同时管理完成高亮、terminal grace、活动保留、历史保留、terminal 去重和保护记录过期。
+monitor 同时管理 terminal grace、活动保留、历史保留、terminal 去重和保护记录过期。
 
 它不使用固定高频 timer 扫描所有状态，而是收集所有未来 deadline，只为最近一项安排 Task。到点刷新后再计算下一项。
 

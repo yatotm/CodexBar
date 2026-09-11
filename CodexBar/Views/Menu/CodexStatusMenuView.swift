@@ -2,6 +2,8 @@ import Combine
 import SwiftUI
 
 extension EnvironmentValues {
+    // 持续动画需要显式停用, 不能只依赖 transaction 的动画禁用
+    @Entry var mainPanelAnimationsEnabled: Bool = false
     @Entry var mainPanelEntranceAnimationsEnabled: Bool = true
 }
 
@@ -64,6 +66,10 @@ struct CodexStatusMenuView: View {
                 .id(usageCenterViewModel.menuScope)
                 .id(menuSurfaceVisibility.presentationGeneration)
         }
+        .environment(
+            \.mainPanelAnimationsEnabled,
+            animationState.allowsAnimations && mainPanelSettings.areEntranceAnimationsEnabled
+        )
         .environment(
             \.mainPanelEntranceAnimationsEnabled,
             mainPanelSettings.areEntranceAnimationsEnabled

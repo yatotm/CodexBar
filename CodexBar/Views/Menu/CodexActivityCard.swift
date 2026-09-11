@@ -9,6 +9,7 @@ struct CodexActivityCard: View {
     @ObservedObject var keepAliveController: KeepAliveController
     let showsUnavailableState: Bool
     let onTaskCenterTap: (ScreenFrameProvider) -> Void
+    @Environment(\.mainPanelAnimationsEnabled) private var allowsAnimations
     @State private var frameProvider = ScreenFrameProvider()
     @State private var isHovered = false
 
@@ -90,13 +91,20 @@ struct CodexActivityCard: View {
                     .transition(.opacity)
             }
 
+            // 防睡眠只在任务运行期间生效, 所以状态挂在活动卡片上而不是单独占一行
             if showsKeepAliveBadge {
-                // 防睡眠只在任务运行期间生效, 所以状态挂在活动卡片上而不是单独占一行
-                Image(systemName: "cup.and.saucer.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.teal)
-                    .transition(.opacity)
-                    .help(keepAliveHelp)
+                // 隐藏或关闭动画效果时移除整个旋转视图, 避免保留持续渲染调度
+                Group {
+                    if allowsAnimations {
+                        RotatingKeepAliveSun()
+                    } else {
+                        Image(systemName: "sun.max.fill")
+                    }
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.teal)
+                .transition(.opacity)
+                .help(keepAliveHelp)
             }
 
             if content.otherTaskCount > 0 {
@@ -114,7 +122,7 @@ struct CodexActivityCard: View {
         }
         .animation(.codexStatus, value: showsKeepAliveBadge)
         .animation(.codexStatus, value: content.isAnonymous)
-        // 任务数变化会让 +N 增删, 咖啡杯跟着横移; 两者一起纳入动画上下文才不会跳
+        // 任务数变化会让 +N 增删, 防睡眠徽标跟着横移; 两者一起纳入动画上下文才不会跳
         .animation(.codexStatus, value: content.otherTaskCount)
         .padding(.horizontal, MenuMetrics.panelPadding)
         .frame(maxWidth: .infinity, minHeight: Metrics.height, maxHeight: Metrics.height)
@@ -139,7 +147,7 @@ struct CodexActivityCard: View {
                 for: task,
                 symbolName: "hand.raised.fill",
                 tint: .orange,
-                fallback: "activity.status.codex-waiting-for-approval",
+                fallback: "activity.status.task-waiting-for-approval",
                 detailComponents: CodexActivityDisplayFormat.waitingDetailComponents(
                     for: task,
                     now: now
@@ -156,7 +164,7 @@ struct CodexActivityCard: View {
                     now: now
                 )
             )
-        case let .completed(completion, _):
+        case let .completed(completion):
             let details = CodexActivityDisplayFormat.historyDetailComponents(
                 duration: completion.duration,
                 relativeText: CodexActivityDisplayFormat.completionRelativeText(completion.completedAt, now: now)
@@ -169,7 +177,7 @@ struct CodexActivityCard: View {
                     effort: completion.effort,
                     machineName: completion.machineName,
                     projectName: completion.projectName,
-                    fallback: "activity.status.codex-completed"
+                    fallback: "activity.status.task-completed"
                 ),
                 detail: details.joined(separator: " • "),
                 otherTaskCount: 0,
@@ -188,7 +196,7 @@ struct CodexActivityCard: View {
                     effort: termination.effort,
                     machineName: termination.machineName,
                     projectName: termination.projectName,
-                    fallback: "activity.status.codex-stopped"
+                    fallback: "activity.status.task-stopped"
                 ),
                 detail: details.joined(separator: " • "),
                 otherTaskCount: 0,
@@ -200,7 +208,7 @@ struct CodexActivityCard: View {
                 tint: .secondary,
                 title: showsUnavailableState
                     ? String(localized: "common.empty.no-data")
-                    : snapshot.unconfirmedTasks.isEmpty ? String(localized: "activity.empty.no-activity") : "任务状态待确认",
+                    : snapshot.unconfirmedTasks.isEmpty ? String(localized: "activity.empty.no-tasks") : "任务状态待确认",
                 detail: nil,
                 otherTaskCount: 0,
                 isAnonymous: false
@@ -268,6 +276,17 @@ struct CodexActivityCard: View {
 
     private enum Metrics {
         static let height: CGFloat = 58
+    }
+}
+
+private struct RotatingKeepAliveSun: View {
+    @State private var isRotating = false
+
+    var body: some View {
+        Image(systemName: "sun.max.fill")
+            .rotationEffect(.degrees(isRotating ? 360 : 0))
+            .animation(.linear(duration: 2).repeatForever(autoreverses: false), value: isRotating)
+            .onAppear { isRotating = true }
     }
 }
 

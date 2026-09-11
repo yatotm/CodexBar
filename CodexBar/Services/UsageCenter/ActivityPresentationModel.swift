@@ -6,6 +6,7 @@ import Foundation
 @MainActor
 final class ActivityPresentationModel: ObservableObject {
     @Published private(set) var snapshot = CodexActivitySnapshot.empty
+    @Published private(set) var statusItemSnapshot = CodexActivitySnapshot.empty
     private var observation: AnyCancellable?
     private var expirationTask: Task<Void, Never>?
 
@@ -34,6 +35,11 @@ final class ActivityPresentationModel: ObservableObject {
         let result = Self.merge(local: local, tasks: tasks, states: states, enabled: enabled, sources: sources, scope: scope, now: now)
         if snapshot != result {
             snapshot = result
+        }
+        // 菜单栏始终汇总全部工具, 不随面板标签隐藏仍在运行的任务
+        let statusResult = scope == .all ? result : Self.merge(local: local, tasks: tasks, states: states, enabled: enabled, sources: sources, scope: .all, now: now)
+        if statusItemSnapshot != statusResult {
+            statusItemSnapshot = statusResult
         }
         expirationTask?.cancel()
         expirationTask = nil
@@ -133,8 +139,7 @@ final class ActivityPresentationModel: ObservableObject {
             waitingTasks: waiting.sorted { $0.stateChangedAt > $1.stateChangedAt },
             runningTasks: running.sorted { $0.stateChangedAt > $1.stateChangedAt },
             recentCompletions: completions.sorted { $0.completedAt > $1.completedAt },
-            recentTerminations: terminations.sorted { $0.terminatedAt > $1.terminatedAt },
-            isCompletionHighlighted: scope != .claude && local.isCompletionHighlighted
+            recentTerminations: terminations.sorted { $0.terminatedAt > $1.terminatedAt }
         )
         result.unconfirmedTasks = unknown.sorted { $0.stateChangedAt > $1.stateChangedAt }
         return result

@@ -296,11 +296,11 @@ When several tasks and temporary states coexist, the outward snapshot uses this 
 Waiting for approval > Running > Recently completed > Recently terminated > Idle
 ```
 
-Completion remains green in the menu bar for 30 seconds. Task Center retains recent tasks for 10 minutes, while terminal deduplication memory lasts 24 hours.
+The latest completion or termination badge remains in the menu bar for 10 seconds. Task Center retains recent tasks for 10 minutes, while terminal deduplication memory lasts 24 hours.
 
 The snapshot feeds:
 
-- Menu bar status dot
+- Menu bar task badge
 - Main-panel task card
 - Task Center
 - Notification system
@@ -320,7 +320,7 @@ All lists sort by most recent time first and then display UUID string. Stable or
 
 ### Cleanup Uses the Nearest Deadline
 
-The monitor manages completion highlight, terminal grace, activity retention, history retention, terminal deduplication, and protection-record expiration.
+The monitor manages terminal grace, activity retention, history retention, terminal deduplication, and protection-record expiration.
 
 It does not scan everything on a fixed high-frequency timer. It gathers future deadlines and schedules one `Task` for the nearest. After it fires, it recalculates the next.
 

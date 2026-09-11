@@ -22,6 +22,9 @@ struct UsageCommandSmoke {
     static func main() async throws {
         verifyPresentation()
         verifyTerminalPresentation()
+        verifyStatusItemLifetime()
+        verifyTaskLayoutRestoration()
+        verifyScopeIsolation()
         let streamPipe = Pipe()
         try streamPipe.fileHandleForWriting.write(contentsOf: Data("small frame\n".utf8))
         let partial = try ActivityStreamClient.readChunk(from: streamPipe.fileHandleForReading.fileDescriptor)
@@ -55,6 +58,79 @@ struct UsageCommandSmoke {
             preconditionFailure("应拒绝超大响应")
         } catch is UsageCenterError {}
         print("Usage command pipe, timeout, cancellation and size tests passed")
+    }
+
+    static func verifyStatusItemLifetime() {
+        let completion = CodexActivityCompletion(
+            id: UUID(),
+            isAnonymous: false,
+            projectName: nil,
+            modelName: "claude-test",
+            effort: nil,
+            completedAt: Date(timeIntervalSince1970: 1000),
+            duration: 5,
+            machineName: "remote"
+        )
+        let termination = CodexActivityTermination(
+            id: UUID(),
+            isAnonymous: false,
+            projectName: nil,
+            modelName: "codex-test",
+            effort: nil,
+            terminatedAt: Date(timeIntervalSince1970: 1005),
+            duration: 6,
+            machineName: "local"
+        )
+        let state = CodexActivitySnapshot(waitingTasks: [], runningTasks: [], recentCompletions: [completion], recentTerminations: [termination])
+        guard case .terminated = state.statusItemActivity(at: Date(timeIntervalSince1970: 1014)) else {
+            preconditionFailure("菜单栏应优先显示较新的终止, 不能被旧完成遮盖")
+        }
+        guard case .idle = state.statusItemActivity(at: Date(timeIntervalSince1970: 1015)) else {
+            preconditionFailure("终态提示应在十秒后恢复空闲")
+        }
+        precondition(state.recentCompletions.count == 1 && state.recentTerminations.count == 1, "图标过期不得删除最近历史")
+    }
+
+    static func verifyTaskLayoutRestoration() {
+        let name = "CodexBar.upstream-test." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = MainPanelSettings(defaults: defaults)
+        settings.updateHookEnabled(false)
+        settings.updateHookEnabled(false, hasRemote: true)
+        precondition(settings.layout.isVisible(.activity), "只接入远程任务也应自动显示任务卡片")
+        settings.setSection(.activity, isVisible: false, undoManager: UndoManager())
+        let restored = MainPanelSettings(defaults: defaults)
+        restored.updateHookEnabled(false, hasRemote: true)
+        precondition(!restored.layout.isVisible(.activity), "重启恢复来源不得覆盖用户隐藏任务卡片的选择")
+        restored.updateHookEnabled(false)
+        restored.updateHookEnabled(true)
+        precondition(restored.layout.isVisible(.activity), "重新开启本机 Hook 应恢复任务入口")
+    }
+
+    static func verifyScopeIsolation() {
+        let local = CodexActivityMonitor()
+        let usage = UsageCenterViewModel()
+        let model = ActivityPresentationModel(local: local, usage: usage)
+        let task = CodexActivityTaskSnapshot(
+            id: UUID(),
+            isAnonymous: false,
+            latestEvent: .promptSubmitted,
+            projectName: nil,
+            modelName: "codex-test",
+            effort: nil,
+            toolName: nil,
+            startedAt: Date(),
+            stateChangedAt: Date(),
+            showsPreciseDuration: true,
+            activeSubagentCount: 0
+        )
+        local.snapshot = CodexActivitySnapshot(waitingTasks: [], runningTasks: [task], recentCompletions: [], recentTerminations: [])
+        usage.menuScope = .claude
+        precondition(
+            model.snapshot.runningTasks.isEmpty && model.statusItemSnapshot.runningTasks.count == 1,
+            "Claude 标签只筛选面板, 菜单栏仍需显示其他工具运行状态"
+        )
     }
 
     static func verifyTerminalPresentation() {
@@ -120,7 +196,7 @@ struct UsageCommandSmoke {
             showsPreciseDuration: true,
             activeSubagentCount: nil
         )
-        let local = CodexActivitySnapshot(waitingTasks: [], runningTasks: [localTask], recentCompletions: [], recentTerminations: [], isCompletionHighlighted: false)
+        let local = CodexActivitySnapshot(waitingTasks: [], runningTasks: [localTask], recentCompletions: [], recentTerminations: [])
         let remoteTask = RemoteActivityTask(
             id: String(repeating: "a", count: 64),
             provider: "codex",

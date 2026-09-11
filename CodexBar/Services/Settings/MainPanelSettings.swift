@@ -102,17 +102,21 @@ final class MainPanelSettings: ObservableObject {
         hasRemoteActivitySource = hasRemote
         let isEnabled = localEnabled || hasRemote
         hasActivitySource = isEnabled
+        let wasEnabled = isHookEnabled
         isHookEnabled = isEnabled
-        guard !isEnabled else {
-            return
+        let updatedLayout: MainPanelLayout
+        if isEnabled {
+            // 首次恢复只读取布局, 用户重新接入任务来源时才显示任务区域
+            guard wasEnabled == false else { return }
+            updatedLayout = MainPanelLayout(orderedSections: layout.orderedSections, hiddenSections: layout.hiddenSections.subtracting([.activity]))
+        } else {
+            updatedLayout = layout.disablingActivitySection()
         }
-
-        let updatedLayout = layout.disablingActivitySection()
         guard updatedLayout != layout else {
             return
         }
 
-        AppLog.settings.notice("Hook 关闭已同步主面板任务中心")
+        AppLog.settings.notice("任务来源开关已同步主面板任务中心")
         saveAndPublish(updatedLayout)
     }
 

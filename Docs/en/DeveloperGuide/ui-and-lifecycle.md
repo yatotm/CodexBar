@@ -46,30 +46,13 @@ Shutdown reverses the order, except for helper-owned system state. AppDelegate f
 
 ## Status Bar Icon
 
-The status icon combines app-server loading state, the menu bar rate-limit setting, and the task-activity snapshot.
+`StatusItemController` consumes `ActivityPresentationModel.statusItemSnapshot`, aggregating all tools and machines independently of the panel tab. Waiting takes priority over running. A one-shot timer expires the latest terminal badge after 10 seconds without removing recent history.
 
-Task-status priority is:
+`StatusItemIconView` renders person badges and the Codex 7d quota arc. Small symbol bitmaps are cached by symbol and display scale, reused during scaling and crossfades, and tinted as template images. Active-task tooltips update every minute without republishing unchanged icon state.
 
-```text
-Waiting for approval (orange) > Running (blue) > Within 30 seconds of completion (green)
-```
+The native status button toggles on `mouseUp`. Outside-click monitoring skips events from that window and includes its vertical padding and the screen edge without overlapping neighboring items.
 
-Recent termination, idle state, and expired completion highlights show no task dot. Icon output is cached by input state; inactive or unavailable states use reduced alpha.
-
-### Separating Image State from Tooltip State
-
-`StatusIconState` contains both image and tooltip inputs, but `renderState` retains only fields that change pixels:
-
-- Active-task duration changes every minute and updates only the tooltip
-- When expired rate-limit data remains visible from cache, the icon and progress indicator use reduced alpha
-- A roughly 0.18-second, 10-frame animation starts only when the indicator dot or rate-limit bar appears or disappears
-- A new render state cancels the previous animation; every frame confirms that its target is still current
-
-With no status dot or rate-limit bar, the icon remains a template image so the system colors it for light mode, dark mode, and menu bar state. Adding custom colors or a progress bar switches to explicit color rendering.
-
-The tooltip starts a 60-second timer only when a live task duration exists; it does not retain a permanent timer while idle. The app also sets `NSInitialToolTipDelay` to 500 ms so the status explanation for this small click target is easier to discover.
-
-Left-click opens the main panel. Right-click or Control-click opens the context menu.
+Settings animations stop when closed, minimized or occluded. Main-panel continuous animations follow visibility and the animation preference, separately from quota entrance animations.
 
 ## Main Panel
 

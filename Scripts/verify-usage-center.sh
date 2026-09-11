@@ -28,10 +28,20 @@ fi
     CodexBar/Services/UsageCenter/UsageCollectorClient.swift \
     CodexBar/Services/UsageCenter/RemoteActivityController.swift \
     CodexBar/Services/UsageCenter/ActivityPresentationModel.swift \
+    CodexBar/Services/Settings/MainPanelSettings.swift \
+    CodexBar/Services/Support/AppLog.swift \
     CodexBar/Models/CodexActivityModels.swift \
     CodexBar/Services/Process/ProcessTermination.swift \
     Tests/UsageCommandSmoke.swift -o "$usage_tmp/command-tests"
 "$usage_tmp/command-tests"
+
+"$usage_compiler" "${usage_flags[@]}" \
+    Shared/CodexBarHelperXPC.swift \
+    CodexBar/Models/CodexActivityModels.swift \
+    CodexBar/Services/KeepAlive/KeepAliveModels.swift \
+    CodexBar/Services/KeepAlive/KeepAliveHelperConfiguration.swift \
+    Tests/HelperPackageSmoke.swift -o "$usage_tmp/helper-tests"
+"$usage_tmp/helper-tests"
 
 "$usage_compiler" "${usage_flags[@]}" \
     CodexBar/Models/UsageCenterModels.swift \

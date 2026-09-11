@@ -337,3 +337,9 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 防睡眠新增 `KeepAlive.mode`，旧安装保留按任务模式，新安装默认手动模式，主开关仍默认关闭。手动模式不依赖 Hook 或任务，时长计时也不随任务重置。Helper 身份校验、首次授权、系统设置入口及恢复流程保持原样；Apple Development 构建已验证后台授权、模式切换与同身份更新；物理合盖仍需实测，公开临时签名构建继续保持禁用。
 
 本机日常打包使用 `bash Scripts/build-local.sh`，它会沿用 `io.github.yatotm.codexbar.build` 域的 `signingIdentity` 偏好。不要在已有开发签名的安装上无意覆盖临时签名包，临时签名无法使用电源组件。私钥只留在钥匙串，不能写入仓库。
+
+## 上游交互适配
+
+菜单栏人物徽章消费 `ActivityPresentationModel.statusItemSnapshot` 的全部来源，面板标签只筛选 `snapshot`。终态徽章 10 秒后恢复空闲，任务历史仍保留 10 分钟；额度圆弧固定显示 Codex 7d。新图标按符号和显示倍率缓存位图，不逐帧重绘符号。
+
+设置窗口的持续动画由 `SettingsWindowAnimationState` 按可见性控制；主面板持续动画同时检查展示状态和用户动画设置，额度入场动画仍独立。Helper 包校验使用后台任务与本地签名验证，临时签名包保留不可用提示，不混同为组件损坏；保持手动防睡眠和已有签名授权行为。
