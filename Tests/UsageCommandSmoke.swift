@@ -21,6 +21,7 @@ nonisolated enum CodexCLIResolver {
 struct UsageCommandSmoke {
     static func main() async throws {
         verifyPresentation()
+        verifyTerminalPresentation()
         let streamPipe = Pipe()
         try streamPipe.fileHandleForWriting.write(contentsOf: Data("small frame\n".utf8))
         let partial = try ActivityStreamClient.readChunk(from: streamPipe.fileHandleForReading.fileDescriptor)
@@ -54,6 +55,55 @@ struct UsageCommandSmoke {
             preconditionFailure("应拒绝超大响应")
         } catch is UsageCenterError {}
         print("Usage command pipe, timeout, cancellation and size tests passed")
+    }
+
+    static func verifyTerminalPresentation() {
+        let source = UsageSource(id: "remote", name: "remote", address: "remote")
+        func task(_ id: String, _ state: String, _ start: Double, _ end: Double) -> RemoteActivityTask {
+            RemoteActivityTask(
+                id: String(repeating: id, count: 64),
+                provider: "codex",
+                state: state,
+                project: "project",
+                updatedAt: end,
+                startedAt: start,
+                modelName: nil
+            )
+        }
+        let tasks = [source.id: [
+            task("a", "ended", 1000, 1000), task("b", "ended", 900, 1000),
+            task("c", "completed", 950, 1000), task("d", "ended", 10, 100),
+            task("e", "running", 900, 1000)
+        ]]
+        for scope in [UsageMenuScope.all, .codex] {
+            func merged(_ now: Double, online: Bool) -> CodexActivitySnapshot {
+                ActivityPresentationModel.merge(
+                    local: .empty,
+                    tasks: tasks,
+                    states: online ? [source.id: "实时连接"] : [:],
+                    enabled: [source.id],
+                    sources: [source],
+                    scope: scope,
+                    now: Date(timeIntervalSince1970: now)
+                )
+            }
+            let initial = merged(1001, online: true)
+            precondition(
+                initial.recentTerminations.count == 1 && initial.recentCompletions.count == 1,
+                "孤立结束和过期记录应隐藏, 真实任务即使缺模型也必须保留"
+            )
+            let offline = merged(1002, online: false)
+            precondition(
+                offline.unconfirmedTasks.count == 1 && offline.recentTerminations.count == 1,
+                "断线不得新增任务终止"
+            )
+            let expired = merged(1600, online: true)
+            precondition(
+                expired.recentTerminations.isEmpty && expired.recentCompletions.isEmpty && expired.runningTasks.count == 1,
+                "历史到期或重连后不得重新展示, 活跃任务不受影响"
+            )
+        }
+        print("Remote terminal evidence, retention and reconnect tests passed")
     }
 
     static func verifyPresentation() {

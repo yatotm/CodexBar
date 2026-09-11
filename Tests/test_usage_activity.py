@@ -46,6 +46,45 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(rows[0]["state"], "completed")
         self.assertEqual(rows[0]["startedAt"], 1000)
 
+    def test_idle_session_end_does_not_create_termination(self):
+        for provider in ("codex", "claude"):
+            self.event("SessionStart", provider=provider)
+            self.event("SessionEnd", provider=provider, now=1001)
+            self.event("SessionEnd", provider=provider, session="unobserved", now=1002)
+        self.assertEqual(activity.snapshot(self.db)["tasks"], [])
+        self.assertEqual(activity.snapshot(self.db)["revision"], 0)
+
+    def test_terminal_events_do_not_overwrite_completed_task(self):
+        self.event("UserPromptSubmit", provider="claude")
+        self.event("Stop", provider="claude", now=1020)
+        completed = activity.snapshot(self.db)
+        self.event("Stop", provider="claude", now=1030)
+        self.event("SessionEnd", provider="claude", now=1100)
+        result = activity.snapshot(self.db)
+        self.assertEqual(result["tasks"], completed["tasks"])
+        self.assertEqual(result["revision"], completed["revision"])
+
+    def test_real_termination_preserves_task_start(self):
+        for state in ("running", "waiting", "unknown"):
+            with self.subTest(state=state):
+                self.event("UserPromptSubmit")
+                with self.db:
+                    self.db.execute("UPDATE tasks SET state=?", (state,))
+                self.event("SessionEnd", now=1020)
+                task = activity.snapshot(self.db)["tasks"][0]
+                self.assertEqual(task["state"], "ended")
+                self.assertEqual(task["startedAt"], 1000)
+                self.assertEqual(task["updatedAt"], 1020)
+
+    def test_recovery_preserves_start_until_next_prompt(self):
+        self.event("UserPromptSubmit")
+        with self.db:
+            self.db.execute("UPDATE tasks SET state='unknown'")
+        self.event("PostToolUse", now=1100)
+        self.assertEqual(activity.snapshot(self.db)["tasks"][0]["startedAt"], 1000)
+        self.event("UserPromptSubmit", now=1200)
+        self.assertEqual(activity.snapshot(self.db)["tasks"][0]["startedAt"], 1200)
+
     def test_no_sensitive_payload_is_exported(self):
         self.event("UserPromptSubmit")
         payload = json.dumps(activity.snapshot(self.db))

@@ -4,6 +4,7 @@ import Foundation
 /// tail reader 的 bootstrap 回放范围与任务中心的历史保留期是同一个不变量, 必须相等
 nonisolated enum CodexActivityRetention {
     static let window: TimeInterval = 24 * 60 * 60
+    static let recentHistory: TimeInterval = 10 * 60
 }
 
 /// 活跃任务最近收到的 Hook 事件, 供活动卡片展示当前执行阶段

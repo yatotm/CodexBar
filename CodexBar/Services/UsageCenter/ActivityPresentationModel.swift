@@ -7,17 +7,47 @@ import Foundation
 final class ActivityPresentationModel: ObservableObject {
     @Published private(set) var snapshot = CodexActivitySnapshot.empty
     private var observation: AnyCancellable?
+    private var expirationTask: Task<Void, Never>?
 
     init(local: CodexActivityMonitor, usage: UsageCenterViewModel) {
         let remote = usage.remoteActivity
         observation = Publishers.CombineLatest4(local.$snapshot, remote.$tasks, remote.$states, remote.$enabledSourceIDs)
             .combineLatest(usage.$sources, usage.$menuScope)
             .sink { [weak self] values, sources, scope in
-                let result = Self.merge(local: values.0, tasks: values.1, states: values.2, enabled: values.3, sources: sources, scope: scope)
-                if self?.snapshot != result {
-                    self?.snapshot = result
-                }
+                self?.update(local: values.0, tasks: values.1, states: values.2, enabled: values.3, sources: sources, scope: scope)
             }
+    }
+
+    deinit {
+        expirationTask?.cancel()
+    }
+
+    private func update(
+        local: CodexActivitySnapshot,
+        tasks: [String: [RemoteActivityTask]],
+        states: [String: String],
+        enabled: Set<String>,
+        sources: [UsageSource],
+        scope: UsageMenuScope
+    ) {
+        let now = Date()
+        let result = Self.merge(local: local, tasks: tasks, states: states, enabled: enabled, sources: sources, scope: scope, now: now)
+        if snapshot != result {
+            snapshot = result
+        }
+        expirationTask?.cancel()
+        expirationTask = nil
+        let deadlines = tasks.values.flatMap(\.self).filter { $0.state == "completed" || $0.state == "ended" }
+            .map { Date(timeIntervalSince1970: $0.updatedAt + CodexActivityRetention.recentHistory) }
+        guard let deadline = deadlines.filter({ $0 > now }).min() else { return }
+        // 心跳不发布相同快照, 到期单次唤醒以清理历史, 不依赖后续任务事件
+        expirationTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(deadline.timeIntervalSinceNow))
+                try Task.checkCancellation()
+            } catch { return }
+            self?.update(local: local, tasks: tasks, states: states, enabled: enabled, sources: sources, scope: scope)
+        }
     }
 
     static func merge(
@@ -26,7 +56,8 @@ final class ActivityPresentationModel: ObservableObject {
         states: [String: String],
         enabled: Set<String>,
         sources: [UsageSource],
-        scope: UsageMenuScope
+        scope: UsageMenuScope,
+        now: Date = .now
     ) -> CodexActivitySnapshot {
         var waiting = [CodexActivityTaskSnapshot](), running = [CodexActivityTaskSnapshot](), unknown = [CodexActivityTaskSnapshot]()
         var completions = [CodexActivityCompletion](), terminations = [CodexActivityTermination]()
@@ -52,6 +83,11 @@ final class ActivityPresentationModel: ObservableObject {
             for task in tasks[source.id] ?? [] where scope == .all || scope.rawValue == task.provider {
                 guard task.provider == "codex" ? source.includesCodex : source.includesClaude else { continue }
                 guard task.provider != "codex" || source.transport != .local else { continue }
+                if task.state == "completed" || task.state == "ended" {
+                    guard task.updatedAt > now.timeIntervalSince1970 - CodexActivityRetention.recentHistory else { continue }
+                    // 旧采集器的孤立 SessionEnd 没有任务起点, 仅在展示层过滤
+                    guard task.state != "ended" || task.updatedAt > task.startedAt else { continue }
+                }
                 let id = taskID(source: source.id, task: task.id)
                 let model = task.modelName ?? "未知模型"
                 let machine = source.transport == .local ? "本机" : source.name

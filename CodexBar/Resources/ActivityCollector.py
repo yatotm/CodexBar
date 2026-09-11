@@ -113,11 +113,14 @@ def record(db, payload, provider, now=None):
     pid, birth = parent_identity(provider)
     with db:
         previous = db.execute("SELECT state,started,pid,birth FROM tasks WHERE id=?", (task_id,)).fetchone()
+        # 结束会话不等于终止任务, 空会话和已完成任务不能被结束事件重建或覆盖
+        if event in ("Stop", "SessionEnd") and (not previous or previous[0] not in ("running", "waiting", "unknown")):
+            return
         if event in ("SubagentStart", "SubagentStop"):
             if not previous or previous[0] not in ("running", "waiting", "unknown"):
                 return
             state = previous[0]
-        started = previous[1] if previous and previous[0] in ("running", "waiting") and event != "UserPromptSubmit" else now
+        started = previous[1] if previous and previous[0] in ("running", "waiting", "unknown") and event != "UserPromptSubmit" else now
         if previous and not pid:
             pid, birth = previous[2:]
         db.execute("INSERT OR REPLACE INTO tasks VALUES(?,?,?,?,?,?,?,?)",
