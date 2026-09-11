@@ -18,15 +18,15 @@ struct UsageCenterView: View {
                     }
                     if viewModel.dashboardFilter == viewModel.filter {
                         totals
-                        UsageDailyChart(days: viewModel.dashboard.days).padding(14).liquidGlassSurface(cornerRadius: 12)
-                        UsageBreakdownView(groups: viewModel.dashboard.groups, grouping: $viewModel.filter.grouping).padding(14).liquidGlassSurface(cornerRadius: 12)
+                        UsageDailyChart(days: viewModel.dashboard.days).padding(14).usageCenterCard()
+                        UsageBreakdownView(groups: viewModel.dashboard.groups, grouping: $viewModel.filter.grouping).padding(14).usageCenterCard()
                         if viewModel.filter.provider != "claude", viewModel.filter.authentication != "api" {
                             UsageAnalyticsView(model: viewModel.analytics)
                         }
                         UsageDisclosure(title: "额度记录") { quotaSnapshots.padding(.top, 8) }
-                            .padding(14).liquidGlassSurface(cornerRadius: 12)
+                            .padding(14).usageCenterCard()
                         UsageDisclosure(title: "最近任务") { activity.padding(.top, 8) }
-                            .padding(14).liquidGlassSurface(cornerRadius: 12)
+                            .padding(14).usageCenterCard()
                     } else if viewModel.error == nil {
                         ProgressView("正在查询统计…").frame(maxWidth: .infinity, minHeight: 180)
                     }
@@ -65,24 +65,21 @@ struct UsageCenterView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("设备").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.top, 18)
             List {
-                Button { viewModel.filter.sourceID = "" } label: {
-                    Label("全部机器", systemImage: "desktopcomputer.and.macbook").fontWeight(viewModel.filter.sourceID.isEmpty ? .semibold : .regular)
-                }.buttonStyle(.plain)
+                UsageSourceRow(
+                    title: "全部机器",
+                    symbol: "desktopcomputer.and.macbook",
+                    isSelected: viewModel.filter.sourceID.isEmpty,
+                    select: { viewModel.filter.sourceID = "" }, status: { EmptyView() }
+                )
                 ForEach(viewModel.sources) { source in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Button { viewModel.filter.sourceID = source.id } label: {
-                                Label(source.name, systemImage: source.transport == .local ? "laptopcomputer" : "server.rack")
-                                    .fontWeight(viewModel.filter.sourceID == source.id ? .semibold : .regular)
-                            }.buttonStyle(.plain)
-                            Spacer()
-                            Button { editingSource = source } label: { Image(systemName: "slider.horizontal.3") }
-                                .buttonStyle(.plain).disabled(viewModel.isRefreshing).help("编辑来源")
-                        }
-                        sourceState(source)
-                    }
-                    .padding(.vertical, 5)
-                    .listRowBackground(viewModel.filter.sourceID == source.id ? Color.accentColor.opacity(0.12) : Color.clear)
+                    UsageSourceRow(
+                        title: source.name,
+                        symbol: source.transport == .local ? "laptopcomputer" : "server.rack",
+                        isSelected: viewModel.filter.sourceID == source.id,
+                        canEdit: !viewModel.isRefreshing,
+                        select: { viewModel.filter.sourceID = source.id },
+                        edit: { editingSource = source }, status: { sourceState(source) }
+                    )
                     .contextMenu {
                         Button("编辑来源") { editingSource = source }
                             .disabled(viewModel.isRefreshing)
@@ -93,6 +90,7 @@ struct UsageCenterView: View {
                 }
             }
             .listStyle(.sidebar)
+            .environment(\.defaultMinListRowHeight, 40)
             .scrollContentBackground(.hidden)
             Button { editingSource = UsageSource() } label: {
                 Label("添加来源", systemImage: "plus")
@@ -181,7 +179,7 @@ struct UsageCenterView: View {
             }.font(.caption).foregroundStyle(.secondary)
         }
         .padding(16)
-        .liquidGlassSurface(cornerRadius: 12)
+        .usageCenterCard()
     }
 
     private func metric(_ title: String, _ value: Int64?) -> some View {
@@ -309,5 +307,73 @@ private struct ActivityConnectionStatus: View {
         if controller.enabledSourceIDs.contains(sourceID) {
             Text(controller.states[sourceID] ?? "未连接").font(.caption).foregroundStyle(.secondary)
         }
+    }
+}
+
+private struct UsageSourceRow<Status: View>: View {
+    let title: String
+    let symbol: String
+    let isSelected: Bool
+    var canEdit = true
+    let select: () -> Void
+    var edit: (() -> Void)?
+    @ViewBuilder let status: () -> Status
+    @State private var isHovered = false
+    @State private var isEditHovered = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            Button(action: select) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(title, systemImage: symbol)
+                        .fontWeight(isSelected ? .semibold : .regular)
+                        .lineLimit(1)
+                    status()
+                }
+                .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+                .padding(10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(isSelected ? "已选中" : "未选中")
+            if let edit {
+                Button(action: edit) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(isEditHovered ? Color.accentColor : .secondary)
+                        .frame(width: 30, height: 30)
+                        .background(isEditHovered ? Color.accentColor.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canEdit)
+                .onHover { isEditHovered = $0 }
+                .help("编辑 " + title)
+                .accessibilityLabel("编辑 " + title)
+                .padding(.top, 7)
+                .padding(.trailing, 6)
+            }
+        }
+        .background(
+            isSelected ? Color.accentColor.opacity(0.12) : isHovered ? Color.primary.opacity(0.055) : .clear,
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .animation(.easeOut(duration: 0.12), value: isEditHovered)
+        .listRowInsets(EdgeInsets(top: 3, leading: 4, bottom: 3, trailing: 4))
+        .listRowBackground(Color.clear)
+    }
+}
+
+extension View {
+    /// 滚动卡片只绘制底色和细边框, 避免为每张长卡片重复合成玻璃阴影
+    func usageCenterCard() -> some View {
+        background(Color(nsColor: .controlBackgroundColor).opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.07), lineWidth: 0.8)
+                    .allowsHitTesting(false)
+            }
     }
 }

@@ -54,7 +54,7 @@ struct UsagePeriodCard<Content: View>: View {
             .onHover { isHovered = $0 }
             .animation(.easeOut(duration: 0.12), value: isHovered)
             .accessibilityValue(isExpanded ? "已展开" : "已收起")
-            UsageReveal(isExpanded: isExpanded) {
+            if isExpanded {
                 content()
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -65,8 +65,11 @@ struct UsagePeriodCard<Content: View>: View {
                     }
                     .padding(.top, 5)
                     .padding(.bottom, 7)
+                    .transition(.identity)
             }
         }
+        .clipped()
+        .animation(.codexStatus, value: isExpanded)
     }
 }
 

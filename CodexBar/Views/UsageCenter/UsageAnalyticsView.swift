@@ -65,7 +65,7 @@ struct UsageAnalyticsView: View {
             }
         }
         .padding(14)
-        .liquidGlassSurface(cornerRadius: 12)
+        .usageCenterCard()
         .task { model.start() }
     }
 

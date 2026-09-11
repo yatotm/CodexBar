@@ -58,7 +58,11 @@ struct UsageDisclosure<Content: View>: View {
             }
             .buttonStyle(.plain)
             .accessibilityValue(isExpanded ? "已展开" : "已收起")
-            UsageReveal(isExpanded: isExpanded) { content().padding(.top, 8) }
+            if isExpanded {
+                content().padding(.top, 8).transition(.identity)
+            }
         }
+        .clipped()
+        .animation(.codexStatus, value: isExpanded)
     }
 }
