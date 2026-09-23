@@ -71,6 +71,8 @@ def package(app, output, signer, keychain_account=None):
             "本版未经过 Apple 公证, 首次打开若被阻止, 在系统设置 > 隐私与安全性中选择仍要打开\n"
             + power_note +
             "安装帮助: https://support.apple.com/zh-cn/102445\n"
+            "GPL 许可与署名: CodexBar.app/Contents/Resources/OpenSourceNotices.txt\n"
+            f"本版本完整源码: https://github.com/{REPOSITORY}/archive/refs/tags/fork-v{version}.zip\n"
         )
         subprocess.run(["hdiutil", "create", "-volname", "CodexBar", "-srcfolder", str(stage), "-format", "UDZO", str(dmg)], check=True)
     signing_arguments = ["--account", keychain_account] if keychain_account else ["--ed-key-file", "-"]

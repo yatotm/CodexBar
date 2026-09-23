@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10000000000000000000001 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* LICENSE */; };
 		B10000000000000000000005 /* CodexBarHelper in Embed CodexBar Helper */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* CodexBarHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		C42A52F12FDACDEC004A2B53 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C42A52F02FDACDEC004A2B53 /* Sparkle */; };
 		D10000000000000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C42A52F02FDACDEC004A2B53 /* Sparkle */; };
@@ -43,6 +44,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A10000000000000000000002 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
 		B10000000000000000000014 /* CodexBarHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = CodexBarHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 		C449FB5030203E0000ED2123 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 		C4A0FD952FD9302E000263A7 /* CodexBar Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "CodexBar Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -145,6 +147,7 @@
 				C449FB4E30203A1100ED2123 /* Shared */,
 				C449FB3A3020367500ED2123 /* CodexBarHelper */,
 				C449FB5130203E0000ED2123 /* Config */,
+				A10000000000000000000002 /* LICENSE */,
 				C4A0FD962FD9302E000263A7 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -277,6 +280,7 @@
 		C4A0FD932FD9302E000263A7 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				A10000000000000000000001 /* LICENSE in Resources */,
 			);
 		};
 		D10000000000000000000007 /* Resources */ = {

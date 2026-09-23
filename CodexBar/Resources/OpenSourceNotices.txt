@@ -1,0 +1,17 @@
+CodexBar 开源许可与署名
+
+原作：Bob（bob-zebedy）
+Copyright © 2026 Bob
+https://github.com/bob-zebedy/CodexBar
+
+本版由 yatotm 基于原作修改并独立维护，增加 Claude、多设备统计、远端任务与订阅价值估算等功能。
+Copyright © 2026 yatotm
+修改记录与日期见对应版本的 Release 说明及 Git 提交历史。
+https://github.com/yatotm/CodexBar
+
+本程序遵循 GNU General Public License v3.0，可按许可条款使用、修改和再分发，不提供担保。许可全文位于同一目录的 LICENSE 文件。
+
+对应源码：在以下页面选择与“设置 > 关于”版本号一致的 fork-v 标签，即可下载完整源码和构建脚本。更改记录位于源码中的 ReleaseNotes 目录。
+https://github.com/yatotm/CodexBar/releases
+
+Sparkle 更新组件保留自身的版权和许可，全文位于同一目录的 Sparkle-LICENSE.txt 文件，升级组件时应同步核对。
