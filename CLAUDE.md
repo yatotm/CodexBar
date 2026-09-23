@@ -169,7 +169,7 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 - XPC 请求带超时并汇进同一条重试路径；launchd 拉不起 helper 时 XPC 方法既不回复也不触发 `errorHandler`，没有它界面会显示防睡眠开着而实际没生效，日志里只剩没有配对回复的 `Helper XPC 请求已发送`
 - 超时取值放在 `CodexBarHelperIPC.requestTimeoutSeconds` 而不是控制器里，它与 `watchdogGraceSeconds` 是一对：必须更小，App 先放手 helper 才能靠 watchdog 兜底，分处两个 module 会让人改了一边不知道另一边
 - 开发期间用 `xcodebuild` 覆盖正在运行的 App bundle 可能使 launchd 注册信息与磁盘上的 helper 不一致；重启 App 后通过 `KeepAliveHelperConfiguration.registrationNeedsRefresh(defaults:)` 检查指纹并刷新注册
-- helper 回传 `none`、`external`、`codexBar` 来源与操作后的实测值；App 只能在 `codexBar` 且实测为 0 时宣称系统睡眠已恢复或补发 `IOPMSleepSystem`，`external` 和 `none` 都只释放进程内断言
+- helper 回传 `none`、`external`、`codexBar` 来源与操作后的实测值；App 只能在 `codexBar` 且实测为 0 时宣称系统睡眠设置已恢复，不主动请求系统睡眠，`external` 和 `none` 都只释放进程内断言
 - App 退出由 `applicationShouldTerminate` 返回 `terminateLater`，先取消自动重置唤醒计划，再释放防睡眠租约；两项都经 helper 回读确认后才继续退出，任一失败都会取消本次退出并恢复协调
 - `pmset` 是没有来源和引用计数的全局布尔值；CodexBar 取得所有权后如果另一个 App 也开始依赖这个 1，释放时仍会恢复为 0，系统层没有无歧义的方法判断另一个 App 的意图
 - 低电量保护由 `PowerSourceMonitor` 供数，它只报事实（有没有内置电池、电量、是否靠电池供电），不知道阈值；读数保持 `unavailable`、`unreadable`、`present` 三态，把读取失败折叠成“没有电池”会让设置项凭空消失且保护静默失效
@@ -185,10 +185,10 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 - 已经在低电量保护中时读数失败不清零，否则一次瞬时失败会绕过滞回，让防睡眠反复开关并重发通知
 - 低电量通知只在 `isActivelyPreventingSleep` 为真且来源是 `codexBar` 时排队，外部来源不说“已恢复系统睡眠”；日志无条件记并用 `action=release|none` 区分，百分比只有那一条能看到
 - 排队的通知要等 helper 恢复睡眠的 XPC 回复确认成功才发得出去，恢复失败走重试直至放弃，提前说“已恢复系统睡眠”会把用户骗去合盖然后把电耗干
-- 补发 `IOPMSleepSystem` 之前还要 `await` 到通知真的提交完成，只把提交排进下一个 MainActor job 的话同一个 job 里的补发会抢在它前面
+- 通知提交完成前保留空闲断言，`await` 返回后再释放，避免系统先进入空闲睡眠
 - 那次 `await` 之后要重认一次 `generation` 再走 `finishSleepRestore` 这一步，挂起期间可能已有新的禁用请求接管，否则会释放掉刚建立的空闲断言
 - 设置页那句低电量说明看 `isLowBatteryBlocking` 而不是 `isLowBatteryActive`，后者在没有任务时也成立，那时无话可说
-- 触发与解除用 `阈值` 与 `阈值 + 5%` 两道门槛，否则电量在阈值附近抖动会反复切 pmset，合盖时还会反复补发 `IOPMSleepSystem`
+- 触发与解除用 `阈值` 与 `阈值 + 5%` 两道门槛，否则电量在阈值附近抖动会反复切换 pmset
 - 一轮低电量通知的终点是电量回到 `阈值 + 5%` 或者用户改了阈值，由 `hasNotifiedLowBattery` 记住；只看是否接电会让适配器接触不良时每翻一次供电状态就重发一条
 - `hasNotifiedLowBattery` 只在通知真的提交成功之后才置位，打在入队处或提交前都会让没送达的那一条吃掉整轮配额，使这一轮之后真正触发的低电量再也提醒不了
 - `hasNotifiedLowBattery` 只管通知不管判定，与上面“纯条件”不冲突：电量回到解除门槛以下再跌破仍算同一轮，不会重复提醒
@@ -270,20 +270,20 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 - `MenuSurfaceDismissMonitor` 将鼠标、键盘和激活事件汇总为关闭请求，`StatusItemController.popoverDidClose` 接收 AppKit 实际关闭回调；主动关闭容器前将 `activeMenuSurface` 设为 `none`，回调只对仍为当前容器的 popover 执行完整收尾
 - `MenuSurfaceFadeCoordinator` 同时调整内容视图和窗口透明度，淡入 0.24 秒、淡出 0.18 秒，只保留一个完成任务，新动画取消旧任务
 - popover 和备用面板分别持有 `MenuSurfaceAnimationState`，展示前允许动画，淡出期间保持开启，实际关闭后禁用；根视图在禁用时设置 `transaction.animation = nil` 和 `transaction.disablesAnimations = true`，后台刷新继续执行
-- 主面板的热力图详情、重置次数和任务中心使用 `borderless nonactivating child panel`；设置窗口的主面板布局、通知、自动重置和防睡眠选项使用可获得键盘焦点的 `borderless child panel`
+- 主面板的热力图详情、重置次数和任务中心使用 `borderless nonactivating child panel`；设置窗口的主面板布局、流光、通知、自动重置和防睡眠选项使用可获得键盘焦点的 `borderless child panel`
 - 设置窗口的子面板占同一位置，展开一个必须先 `hide(immediate: true)` 收掉其余的；动作走 `SettingsOptionsPanelAction` 并带上目标 `SettingsOptionsPanel`，互斥与 `closeAll` 都只写在 `SettingsWindowController.handleOptionsAction` 一处，新增面板不会漏配对
 - 面板控制器只在首次展开时构造，收起动作走 `existingOptionsPanelController` 而不触发构造：`NSHostingController` 与动态面板订阅会常驻到 App 结束，而用户可能一次子面板都没开过
-- 四个设置子面板的顶边对齐各自设置行，anchor 由设置页的 `ScreenFrameProvider` 随展开动作传出，定位走 `SidePanelSupport.anchoredPosition` 而不是宿主底边
+- 五个设置子面板的顶边对齐各自设置行，anchor 由设置页的 `ScreenFrameProvider` 随展开动作传出，定位走 `SidePanelSupport.anchoredPosition` 而不是宿主底边
 - 设置窗口的子面板要传 `clampsToSurfaceBottom: false` 让底边可以探出窗口，否则放不下时会把整个面板上推而错开主开关行；主面板那三个面板走默认的 `true`
 - 通知和防睡眠面板的高度会动态变化，前者随音效行增删，后者随 `hasBattery` 增删低电量那一行；自动重置面板只有固定的一行；resize 时要固定顶边向下生长，直接改 size 会保持底边不动而把顶边顶离主开关行
-- 内容变化订阅要保持最小：主面板布局固定 5 行、自动重置面板固定 1 行，均不订高度变化；通知面板订 `notificationSettings` 与 `codexHookSettings` 的 `objectWillChange`，再加 `autoResetSettings.$isEnabled`、`KeepAliveController.$isLowBatteryProtectionEnabled` 与 `$isMaximumDurationEnabled`；防睡眠面板只订 `$hasBattery`；订整个防睡眠控制器会让任务每起停一次都白排一轮 resize
+- 内容变化订阅要保持最小：主面板布局固定 5 行、流光固定 7 行、自动重置面板固定 1 行，均不订高度变化；通知面板订 `notificationSettings` 与 `codexHookSettings` 的 `objectWillChange`，再加 `autoResetSettings.$isEnabled`、`KeepAliveController.$isLowBatteryProtectionEnabled` 与 `$isMaximumDurationEnabled`；防睡眠面板只订 `$hasBattery`；订整个防睡眠控制器会让任务每起停一次都白排一轮 resize
 - 置灰也会改高度：带音效的行置灰时音效子行跟着收起，所以每个置灰依赖都要有一个对应的订阅源
 - 增删行或改行的显示条件时要同步补上对应的订阅源，漏一项会让面板裁掉底部或留下空白
 - resize 的竖向夹紧走 `SidePanelSupport.clampedVertically`，与初次展开的 `position` 同一条规则，否则放不下时两边会把面板推向相反的边
 - 主面板布局入口始终可用；其他子面板入口只在开关开着且依赖就绪时出现，通知看 `NotificationSettings.canShowOptions`，自动重置要求 `AutoResetSettings.isEnabled` 且 `KeepAliveController.helperStatus == .enabled`，防睡眠看 `KeepAliveController.canShowOptions`；这些值只控制入口显隐，不回写用户保存的开关
 - 自动重置或防睡眠的子面板入口条件失效时，`AppSettingsView` 会发送对应的 `close` 动作收起已展开面板；关闭开关时对应设置行不显示状态说明
-- 四个设置子面板都只由滑杆按钮展开；单个面板的展开和条件失效收起分别使用 `toggle` 与 `close`，切换分页时使用 `closeAll`，开启主开关不自动弹出
-- 设置子面板收起时，`SidePanelSupport.orderOut` 只有在被关闭面板仍是 key window 时才把焦点还给父窗口；如果焦点已经转移到主面板或其他窗口，不得主动抢回
+- 五个设置子面板都只由滑杆按钮展开；单个面板的展开和条件失效收起分别使用 `toggle` 与 `close`，切换分页时使用 `closeAll`，开启主开关不自动弹出
+- 设置子面板展开时保留主设置窗口焦点，点击面板控件时先接管键盘，避免原生下拉菜单导致误收起；收起前结束原生编辑，保证颜色输入完成校验。`SidePanelSupport.orderOut` 只有在被关闭面板仍是 key window 时才把焦点还给父窗口；焦点已经转移时不得主动抢回
 - 侧边面板公共能力集中在 `Controllers/SidePanelSupport.swift`，重置次数、任务中心和设置子面板复用 `SidePanelDrawerPresenter`；热力图详情独立处理切边和延迟隐藏，复用 `SidePanelContentHost`、`SidePanelDrawerAnimator`、panel 工厂和定位夹紧
 - 热力图详情和共享抽屉在立即关闭或窗口已不可见时，重置动画并执行 `orderOut`、移除父子窗口关系；任务中心已结束逻辑展示时，立即关闭请求仍传递给 presenter
 - 设置窗口的子面板直接复用 `Controllers/SettingsOptionsPanelController.swift`，它在 presenter 之上补齐了装配、两套关闭观察者、顶边对齐定位和高度重算；新增设置子面板只要给它内容工厂，动态高度面板再提供内容变化来源，不要另写一层壳
@@ -294,7 +294,7 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 - 主面板的账户、任务中心、额度、Token 用量和底部状态由 `MainPanelSettings.layout` 统一保存顺序与显隐，模型始终保留至少一个区域；Hook 关闭时 `StatusItemController` 调用 `updateHookEnabled(_:)` 持久化关闭任务中心，任务中心原本是唯一可见区域时同步开启账户；设置面板只禁用任务中心开关，不能连带禁用拖拽手柄
 - 主面板布局排序由手柄上的自定义 `DragGesture` 驱动，悬浮副本跟手移动，其他行按预览顺序实时让位，松手后才通过 `setSectionOrder(_:)` 保存最终顺序；不要改回只在落点命中后换位的 `.draggable` 和 `.dropDestination`
 - 热力图详情面板跟随包含标题和方格矩阵的完整热力图区域定位，优先让两者顶边对齐；详情面板过高时通过 `SidePanelSupport.anchoredPosition` 上移到与主面板底边对齐，不能恢复为固定贴住主面板底边
-- `SettingsWindowController` 持有窗口组唯一的 `UndoManager`，设置主窗口和四个可聚焦子面板必须共享这一撤销栈，保证焦点切换后 `⌘Z` 与 `⌘⇧Z` 仍然有效；Hook 自动联动不注册为用户操作
+- `SettingsWindowController` 持有窗口组唯一的 `UndoManager`，设置主窗口和五个可聚焦子面板必须共享这一撤销栈，保证焦点切换后 `⌘Z` 与 `⌘⇧Z` 仍然有效；Hook 自动联动不注册为用户操作
 - 设置窗口高度跟随当前 tab 的完整内容，只在内容超过屏幕可见高度时允许滚动；首次构造时 SwiftUI 可能早于 `HostingWindowController.window` 赋值上报高度，`SettingsWindowController` 必须缓存最近测量并在窗口就绪后应用，不能用初始高度或延迟掩盖
 - 设置窗口（通用/高级/关于三页）和日志窗口复用 `HostingWindowController` 的行为，可以成为 key window，但不应成为 main window
 - 视觉风格统一走 `Views/Shared/LiquidGlassStyle.swift` 这一套，避免引入与系统菜单栏工具不一致的重装饰 UI
@@ -343,3 +343,5 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 菜单栏人物徽章消费 `ActivityPresentationModel.statusItemSnapshot` 的全部来源，面板标签只筛选 `snapshot`。终态徽章 10 秒后恢复空闲，任务历史仍保留 10 分钟；额度圆弧固定显示 Codex 7d。新图标按符号和显示倍率缓存位图，不逐帧重绘符号。
 
 设置窗口的持续动画由 `SettingsWindowAnimationState` 按可见性控制；主面板持续动画同时检查展示状态和用户动画设置，额度入场动画仍独立。Helper 包校验使用后台任务与本地签名验证，临时签名包保留不可用提示，不混同为组件损坏；保持手动防睡眠和已有签名授权行为。
+
+任务流光外观由 `TaskGlowSettings.appearance` 保存，新增键不改写已有开关。设置可用性同时接受本机 Codex Hook 和已启用的远端或 Claude 来源。光带只消费开启后实时到达的终态，恢复快照与延长时长不重放已过期提示；并发任务短提示仍为 3 秒，全部任务结束后的显示时间由外观设置决定。

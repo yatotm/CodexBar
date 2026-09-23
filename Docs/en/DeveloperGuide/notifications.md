@@ -177,7 +177,7 @@ Protection notifications use the system default sound and a `retryCount` of `0` 
 
 When low battery or the duration limit stops sleep prevention, `KeepAliveController` first releases its helper lease. It submits the notification only if the reply reports source `.codexBar` and `SleepDisabled=0`; other results clear the pending notice for that cycle.
 
-It submits the notification only after confirmation. The app idle assertion remains until notification submission completes, preventing a closed-lid Mac from sleeping before the notification reaches the system. The controller then releases the assertion and, if needed, issues a compensating lid-close sleep.
+The app idle assertion remains until notification submission completes, then is released, leaving sleep timing to macOS power management.
 
 ## Sounds
 

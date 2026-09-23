@@ -19,16 +19,38 @@ struct TaskGlowSettingsRow: View {
     @ObservedObject var settings: TaskGlowSettings
     @ObservedObject var codexHookSettings: CodexHookSettings
     @ObservedObject var activityPresentation: ActivityPresentationModel
+    let onOptionsAction: (SettingsOptionsPanelAction) -> Void
+    @State private var anchorProvider = ScreenFrameProvider()
+
+    private var isAvailable: Bool {
+        (codexHookSettings.isOperable && !codexHookSettings.isUpdating) || activityPresentation.hasRemoteActivitySource
+    }
+
+    private var canShowOptions: Bool {
+        settings.isEnabled && isAvailable
+    }
 
     var body: some View {
         SettingsToggleRow(
             icon: "light.max",
             title: "settings.screen-edge-indicator.title",
             isOn: Binding(
-                get: { (codexHookSettings.isOperable || activityPresentation.hasRemoteActivitySource) && settings.isEnabled },
+                get: { isAvailable && settings.isEnabled },
                 set: { settings.setEnabled($0) }
             ),
-            isEnabled: (codexHookSettings.isOperable || activityPresentation.hasRemoteActivitySource) && !codexHookSettings.isUpdating
-        )
+            isEnabled: isAvailable
+        ) {
+            SettingsOptionsButton(isAvailable: canShowOptions) {
+                onOptionsAction(.toggle(panel: .taskGlow, anchorProvider: anchorProvider))
+            }
+        }
+        .background {
+            ScreenFrameReader(provider: anchorProvider)
+        }
+        .onChange(of: canShowOptions) { _, available in
+            if !available {
+                onOptionsAction(.close(panel: .taskGlow))
+            }
+        }
     }
 }

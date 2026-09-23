@@ -54,6 +54,14 @@ UI 使用 SwiftUI 声明内容，由 AppKit Controller 管理窗口。
 
 设置窗口关闭、最小化或被遮挡时停止持续动画，重新展示后按当前状态恢复。主面板持续动画同时受可见性与动画设置控制；额度条的入场动画仍沿用独立门禁。
 
+## 任务流光
+
+`TaskGlowController` 消费 `ActivityPresentationModel` 的全设备展示流，不参与通知或电源判定。本机 Codex Hook 可用，或存在已接入的远端、Claude 来源时可启用。外观配置与现有开关独立保存，旧设置保留原默认颜色、标准速度、100% 亮度和 10 秒结束时长。
+
+`TaskGlowSettings.appearance` 提供颜色、速度、亮度和结束时长。各屏幕共用运动时钟，改速保留当前周期进度。外观改变直接更新现有图层，不重建任务服务；配置子面板按需创建。
+
+结束提示只接受开启后的实时事件，恢复快照不触发。并发任务结束短提示为 3 秒；全部结束后按所选时长显示，期限从事件结束时间起算，不改变菜单栏图标的 10 秒期限或任务历史保留期。已过期提示不会因延长时长重新出现，睡眠或会话切换期间撤下光带。
+
 ## 主面板
 
 主面板优先使用 `NSPopover`，`behavior` 设为 `applicationDefined`，`animates` 设为 `false`
@@ -176,15 +184,16 @@ fallback panel 在展示前根据 SwiftUI fitting size 和目标屏幕可见区�
 
 首次构造窗口时，SwiftUI 可能在 `HostingWindowController` 保存 `window` 之前就上报页面高度。`SettingsWindowController` 会先缓存最近一次有效测量，并在窗口就绪后应用；否则唯一一次高度回调会被丢弃，窗口停留在初始尺寸，直到切换 tab 再次触发测量。
 
-主面板布局、通知、自动重置和防睡眠的二级设置面板按需创建。控制器一旦创建就会长期持有内容及必要的高度变化订阅，如果 App 启动时预建所有面板，从未使用的 UI 也会一直参与更新。
+主面板布局、流光、通知、自动重置和防睡眠的二级设置面板按需创建。控制器一旦创建就会长期持有内容及必要的高度变化订阅，如果 App 启动时预建所有面板，从未使用的 UI 也会一直参与更新。
 
-这四个设置子面板包含交互控件，因此使用可获得键盘焦点的 `KeyableBorderlessPanel`。主面板的热力图、Reset Credits 和活动中心详情使用不会激活的 `NonactivatingSidePanel`。收起设置子面板时，`SidePanelSupport.orderOut` 只在该子面板仍是 key window 时恢复父窗口焦点；如果焦点已经主动转移到主面板或其他窗口，则不能再抢回，否则新打开的交互表面可能因失焦立即关闭。
+这些设置子面板使用可获得键盘焦点的 `KeyableBorderlessPanel`。展开时保留主设置窗口焦点，点击面板控件时先取得键盘焦点，避免原生下拉菜单触发误收起；收起前结束原生编辑，保证颜色输入完成校验。主面板的热力图、Reset Credits 和活动中心详情使用不会激活的 `NonactivatingSidePanel`。收起设置子面板时，`SidePanelSupport.orderOut` 只在该子面板仍是 key window 时恢复父窗口焦点；如果焦点已经主动转移到主面板或其他窗口，则不能再抢回，否则新打开的交互表面可能因失焦立即关闭。
 
 自动重置与防睡眠从关闭切换为开启时，`AppSettingsView` 使用 `HelperFeatureConfirmation` 显示统一确认框。确认框按 `KeepAliveController.HelperStatus` 组合 Helper 提示与对应功能说明，用户确认后才调用设置对象写入开启状态。已开启设置行在 `.requiresApproval` 状态显示 `打开系统设置` 按钮。
 
 二级设置入口使用各自的可用性结论：
 
 - 主面板布局入口始终可用
+- 流光入口要求开关开启，且本机 Hook 可用或存在已接入的远端、Claude 来源
 - 通知读取 `NotificationSettings.canShowOptions`
 - 自动重置要求 `AutoResetSettings.isEnabled` 且 `KeepAliveController.helperStatus == .enabled`
 - 防睡眠读取 `KeepAliveController.canShowOptions`
@@ -195,7 +204,7 @@ fallback panel 在展示前根据 SwiftUI fitting size 和目标屏幕可见区�
 
 布局排序使用手柄上的自定义 `DragGesture`。拖动项通过悬浮副本跟随指针，其他行在跨过半行距离时按视图内预览顺序实时让位，松手后才调用 `setSectionOrder(_:)` 一次性持久化最终顺序。
 
-`SettingsWindowController` 持有这一窗口组唯一的 `UndoManager`。设置主窗口通过 `AuxiliaryHostingWindow` 暴露它，四个设置子面板展示时从父窗口取得同一实例，因此焦点位于设置主窗口或任一子面板时，`⌘Z` 和 `⌘⇧Z` 都作用于同一份布局历史。Hook 状态变化引起的任务中心自动关闭不进入用户撤销历史。
+`SettingsWindowController` 持有这一窗口组唯一的 `UndoManager`。设置主窗口通过 `AuxiliaryHostingWindow` 暴露它，各设置子面板展示时从父窗口取得同一实例，因此焦点位于设置主窗口或任一子面板时，`⌘Z` 和 `⌘⇧Z` 都作用于同一份布局历史。Hook 状态变化引起的任务中心自动关闭不进入用户撤销历史。
 
 ### 代理配置对话框
 
@@ -264,7 +273,7 @@ app-server 状态默认每 60 秒检查刷新。主面板打开后约 160 ms 调
 - 从通知点击激活 App 并打开面板
 - 设置窗口首次打开、关闭和再次打开时焦点正确
 - 冷启动后首次打开设置时通用页直接使用完整内容高度；切换三个 tab 时窗口高度自适应，屏幕空间充足时均不显示滚动条
-- 主面板布局、通知、自动重置和防睡眠子面板互斥，顶边对齐对应设置行，内容变化后高度正确
+- 主面板布局、流光、通知、自动重置和防睡眠子面板互斥，顶边对齐对应设置行，内容变化后高度正确
 - 设置子面板展开时从菜单栏打开主面板，主面板保持打开，设置子面板收起且不把焦点抢回设置窗口
 - 主面板区域拖动时悬浮行跟随指针，跨过半行后其他行实时让位，松手后平滑落位并只保存最终顺序；拖拽和显隐操作可以通过 `⌘Z` 逐步撤销并通过 `⌘⇧Z` 重做，焦点在设置主窗口或任一设置子面板时均有效；重启后保持配置，最后一个可见区域无法关闭；Hook 关闭时任务中心自动关闭、开关置灰但仍可拖动，任务中心为唯一可见区域时账户自动开启，自动联动不进入用户撤销历史
 - 上下文菜单打开设置或日志时没有焦点丢失

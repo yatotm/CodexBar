@@ -21,6 +21,23 @@ Click the options button to drag sections into order or toggle visibility, keepi
 
 Disabling Hook turns off Tasks; enable it manually after re-enabling Hook. If Tasks was the only visible section, Account is enabled automatically.
 
+### Task Glow
+
+Enable Task Glow under `Settings > General` to show activity along the top of each display. It is off by default and previews once when enabled. It includes local and remote Codex and Claude tasks regardless of the main-panel tab, and requires an available task source.
+
+Click the options button after enabling it:
+
+| Option | Default | Choices |
+| --- | --- | --- |
+| Running, waiting, completed, terminated colors | Cyan, orange, green, red | Six-digit Display P3 hex colors; clear a field to restore its default |
+| Animation Speed | Standard | Slower, Standard, Faster |
+| Brightness | 100% | 20%–100% |
+| End Duration | 10 seconds | 3, 5, 10, 15, 30, 60 seconds |
+
+An ending appears for 3 seconds while other tasks remain active. When all tasks have ended, the selected duration is measured from the actual end time. Task history, notifications, and sleep prevention are unchanged.
+
+System sleep, display sleep, and session switching hide the glow. Reconnection does not replay historical endings, and increasing the duration does not revive an expired indicator. Color fields validate when editing ends; invalid values revert to defaults. Disabling the feature retains its appearance settings.
+
 ### Menu Bar Quota Indicator
 
 The indicator always uses the Codex 7d window. Only its visibility is configurable. Faded data indicates cached quota.

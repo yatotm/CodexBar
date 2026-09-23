@@ -54,6 +54,14 @@ The native status button toggles on `mouseUp`. Outside-click monitoring skips ev
 
 Settings animations stop when closed, minimized or occluded. Main-panel continuous animations follow visibility and the animation preference, separately from quota entrance animations.
 
+## Task Glow
+
+`TaskGlowController` consumes the all-device stream from `ActivityPresentationModel`, independently of notifications and power control. An operative local Codex Hook or an enabled remote/Claude source makes the feature available. Appearance keys preserve the existing switch and original default colors, standard speed, 100% brightness, and 10-second end duration.
+
+`TaskGlowSettings.appearance` supplies colors, speed, brightness, and end duration. All displays share a motion clock; speed changes preserve cycle progress. Appearance updates modify existing layers without rebuilding task services. The options panel is created only when opened.
+
+Only live terminal events received after enabling the feature create ending indicators. Restored snapshots do not replay history. Concurrent endings show for 3 seconds; once all tasks end, the configured duration is measured from the event's end time. The menu-bar icon's 10-second expiry and task-history retention remain unchanged. Extending the duration does not revive expired indicators. Sleep and session switching hide the glow.
+
 ## Main Panel
 
 The main panel prefers an `NSPopover` with `behavior` set to `applicationDefined` and `animates` set to `false`.
@@ -176,15 +184,16 @@ Settings-window height follows the complete content of the current tab while pin
 
 During initial construction, SwiftUI may report the page height before `HostingWindowController` stores `window`. `SettingsWindowController` caches the latest valid measurement and applies it once the window is ready. Otherwise, the only height callback can be discarded, leaving the window at its initial size until a tab switch triggers another measurement.
 
-Secondary panels for main-panel layout, notifications, Automatic Reset, and sleep prevention are created on demand. Once created, a controller retains its content and any required content-height subscriptions for its lifetime. Prebuilding every panel at app launch would keep unused UI participating in updates.
+Secondary panels for main-panel layout, Task Glow, notifications, Automatic Reset, and sleep prevention are created on demand. Once created, a controller retains its content and any required content-height subscriptions for its lifetime. Prebuilding every panel at app launch would keep unused UI participating in updates.
 
-These four settings child panels contain interactive controls, so they use a keyable `KeyableBorderlessPanel`. The main panel's Heatmap, Reset Credits, and Task Center details use a nonactivating `NonactivatingSidePanel`. When a settings child panel closes, `SidePanelSupport.orderOut` restores focus to its parent only if that child panel is still the key window. If focus has already moved intentionally to the main panel or another window, it must not be taken back, or the newly opened interaction surface may close immediately after losing focus.
+These settings child panels use a keyable `KeyableBorderlessPanel`. Opening preserves focus in Settings. A mouse press inside the panel first gives it keyboard focus so native popup menus do not cause an unintended dismissal. Closing ends native editing so color validation finishes before dismissal. The main panel's Heatmap, Reset Credits, and Task Center details use a nonactivating `NonactivatingSidePanel`. When a settings child panel closes, `SidePanelSupport.orderOut` restores focus to its parent only if that child panel is still the key window. If focus has already moved intentionally to the main panel or another window, it must not be taken back, or the newly opened interaction surface may close immediately after losing focus.
 
 When Automatic Reset or Prevent System Sleep changes from off to on, `AppSettingsView` presents a shared confirmation through `HelperFeatureConfirmation`. It combines guidance from `KeepAliveController.HelperStatus` with the feature description and writes enabled state only after user confirmation. An enabled settings row in `.requiresApproval` shows `Open System Settings`.
 
 Each secondary-settings entry uses its own availability decision:
 
 - Main Panel Layout is always available
+- Task Glow requires its switch and either an operative local Hook or an enabled remote/Claude source
 - Notifications reads `NotificationSettings.canShowOptions`
 - Automatic Reset requires `AutoResetSettings.isEnabled` and `KeepAliveController.helperStatus == .enabled`
 - Sleep prevention reads `KeepAliveController.canShowOptions`
@@ -195,7 +204,7 @@ When a condition becomes false, Settings sends the corresponding `close` action 
 
 Layout sorting uses a custom `DragGesture` on the handle. A floating copy follows the pointer, other rows move when it crosses half a row, and releasing calls `setSectionOrder(_:)` once to persist the final order.
 
-`SettingsWindowController` owns the only `UndoManager` for this window group. The Settings window exposes it through `AuxiliaryHostingWindow`, and each of the four settings child panels obtains the same instance from its parent when shown. `Command-Z` and `Command-Shift-Z` therefore operate on one layout history while focus is in either the Settings window or any child panel. Automatic Task Center changes caused by Hook state do not enter the user's undo history.
+`SettingsWindowController` owns the only `UndoManager` for this window group. The Settings window exposes it through `AuxiliaryHostingWindow`, and each settings child panel obtains the same instance from its parent when shown. `Command-Z` and `Command-Shift-Z` therefore operate on one layout history while focus is in either the Settings window or any child panel. Automatic Task Center changes caused by Hook state do not enter the user's undo history.
 
 ### Proxy Configuration Dialog
 

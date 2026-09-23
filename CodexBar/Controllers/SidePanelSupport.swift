@@ -24,6 +24,15 @@ final class KeyableBorderlessPanel: NSPanel {
         sharedUndoManager ?? super.undoManager
     }
 
+    override func sendEvent(_ event: NSEvent) {
+        // 点击原生下拉控件时先接管焦点, 避免菜单追踪期间被当成设置窗口组失焦
+        if !isKeyWindow, event.type == .leftMouseDown || event.type == .rightMouseDown {
+            makeFirstResponder(self)
+            makeKey()
+        }
+        super.sendEvent(event)
+    }
+
     @IBAction func undo(_: Any?) {
         undoManager?.undo()
     }

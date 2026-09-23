@@ -48,13 +48,14 @@ CodexBar is a macOS 15+ menu bar app for Codex quotas and task status, plus Code
 - The main panel shows the current task, project, model, reasoning effort, and elapsed time
 - Task Center brings concurrent, recently completed, and recently terminated tasks together
 - Receive alerts for completed tasks, approval requests, and stalled tasks
+- Optional task glow covers local and remote Codex and Claude, with configurable colors, speed, brightness, and end duration
 
 ### Let long-running tasks finish
 
-- Prevent system sleep only while eligible Codex tasks are active
+- Keep awake manually or while eligible local Codex tasks are active
 - Optionally stay awake while waiting for approval or keep the display awake as well
 - Set a keep-awake time limit, low-battery protection, and stalled task protection
-- Restore normal system sleep automatically when tasks finish or a protection rule is triggered
+- Restore macOS power management when sleep prevention ends, without explicitly putting the Mac to sleep
 
 ### Fit naturally into macOS
 

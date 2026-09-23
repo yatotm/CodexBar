@@ -1,18 +1,18 @@
 # Prevent System Sleep
 
-The fork also provides a manual keep-awake mode in builds with an authorized power service. Remote tasks do not control Mac sleep. The unsigned public build still requires further signing and authorization validation for lid-closed operation.
+Builds with an authorized power service provide Manual and Follow Tasks modes. Follow Tasks uses local Codex activity; remote and Claude tasks do not control Mac sleep. Ad-hoc signed builds cannot use the power service.
 
 [简体中文](../../UserGuide/sleep-prevention.md) | English
 
-CodexBar can keep your Mac awake while tasks run and restore sleep when tasks finish or a protection condition takes effect.
+CodexBar can keep your Mac awake manually or while eligible local Codex tasks run. Disabling the feature, finishing tasks, or triggering protection releases sleep prevention and restores macOS power policy; the app does not explicitly put the Mac to sleep.
 
 ## Enable and Activate
 
-1. Enable CodexBar Hook in `Settings > Advanced`
-2. Enable `Prevent System Sleep` and confirm
+1. In `Settings > Advanced > Prevent System Sleep`, select Manual or Follow Tasks; Follow Tasks also requires CodexBar Hook
+2. Confirm enabling sleep prevention
 3. If background approval is required, click `Open System Settings` and allow CodexBar to run in the background
 
-Sleep prevention requires CodexBar to be running, Hook and its background service to be available, and an eligible task to exist. Low battery or the duration limit stops it; when conditions recover, task state determines whether it resumes. The coffee cup in the main panel indicates that sleep prevention is active.
+Sleep prevention requires CodexBar and its authorized background service to be running. Follow Tasks also requires a working Hook and an eligible local Codex task. Low battery or the duration limit stops it; when conditions recover, task state determines whether it resumes. The coffee cup in the main panel indicates that sleep prevention is active.
 
 Anonymous tasks and tasks hidden by Stalled Task Protection do not prevent sleep.
 
