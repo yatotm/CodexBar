@@ -166,7 +166,163 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(task["eventName"], "SubagentStop")
         self.event("Stop", provider="claude", now=1002)
         activity.reconcile(self.db, now=1004)
+        self.assertEqual(activity.snapshot(self.db)["tasks"][0]["state"], "running")
+        activity.record(self.db, dict(hook_event_name="SubagentStop", session_id="session", agent_id="two"), "claude", 1005)
+        activity.reconcile(self.db, now=1007)
         self.assertEqual(activity.snapshot(self.db)["tasks"][0]["activeSubagentCount"], 0)
+
+    def test_claude_background_agents_outlive_parent_reply(self):
+        self.emit("UserPromptSubmit", model="claude-opus-5-5")
+        self.emit("SubagentStart", 1001, agent_id="background")
+        self.emit("Stop", 1010)
+        activity.reconcile(self.db, now=1013)
+        self.assertEqual(self.task()["state"], "running")
+        self.assertEqual(self.task()["activeSubagentCount"], 1)
+        self.emit("PreToolUse", 1015, agent_id="background", tool_name="Bash")
+        self.assertEqual(self.task()["eventName"], "PreToolUse")
+        self.assertEqual(self.task()["modelName"], "claude-opus-5-5")
+        self.emit("SubagentStop", 1020, agent_id="background")
+        activity.reconcile(self.db, now=1022)
+        self.assertEqual(self.task()["state"], "completed")
+        self.assertEqual(self.task()["updatedAt"], 1020)
+        self.assertEqual(self.task()["startedAt"], 1000)
+
+    def test_claude_new_prompt_preserves_running_background_agents(self):
+        self.emit("UserPromptSubmit")
+        self.emit("SubagentStart", 1001, agent_id="background")
+        self.emit("PermissionRequest", 1002, agent_id="background", tool_name="Edit", tool_use_id="edit")
+        self.emit("Stop", 1003)
+        self.emit("UserPromptSubmit", 1005)
+        self.assertEqual(self.task()["state"], "waiting")
+        self.assertEqual(self.task()["activeSubagentCount"], 1)
+        self.assertEqual(self.task()["stateChangedAt"], 1002)
+        self.assertEqual(self.task()["startedAt"], 1000)
+        self.emit("PostToolUse", 1006, agent_id="background", tool_use_id="edit")
+        self.emit("SubagentStop", 1007, agent_id="background")
+        activity.reconcile(self.db, now=1010)
+        self.assertEqual(self.task()["state"], "running")
+        self.emit("Stop", 1011)
+        activity.reconcile(self.db, now=1013)
+        self.assertEqual(self.task()["state"], "completed")
+
+    def test_claude_stop_registry_recovers_unobserved_background_agents(self):
+        self.emit("UserPromptSubmit")
+        self.emit("Stop", 1005, background_tasks=[
+            dict(id="one", type="subagent", status="running", description="private-description"),
+            dict(id="two", type="subagent", status="running"),
+            dict(id="shell", type="shell", status="running", command="private-command")])
+        activity.reconcile(self.db, now=1008)
+        self.assertEqual(self.task()["state"], "running")
+        self.assertEqual(self.task()["activeSubagentCount"], 2)
+        self.emit("SubagentStop", 1010, agent_id="one", background_tasks=[dict(id="two", type="subagent", status="running")])
+        self.assertEqual(self.task()["activeSubagentCount"], 1)
+        self.emit("SubagentStop", 1011, agent_id="two", background_tasks=[])
+        activity.reconcile(self.db, now=1013)
+        self.assertEqual(self.task()["state"], "completed")
+        raw=self.db.execute('SELECT payload FROM details').fetchone()[0]
+        self.assertNotIn("private-description", raw)
+        self.assertNotIn("private-command", raw)
+
+    def test_claude_subagent_stop_registry_recovers_legacy_premature_completion(self):
+        self.emit("UserPromptSubmit")
+        self.emit("Stop", 1005)
+        activity.reconcile(self.db, now=1007)
+        self.assertEqual(self.task()["state"], "completed")
+        self.emit("SubagentStop", 1010, agent_id="finished", background_tasks=[dict(id="still-running", type="subagent", status="running")])
+        self.assertEqual(self.task()["state"], "running")
+        self.assertEqual(self.task()["activeSubagentCount"], 1)
+        self.emit("PreToolUse", 1011, agent_id="still-running", tool_name="Edit")
+        self.assertEqual(self.task()["toolName"], "Edit")
+        self.emit("SubagentStop", 1012, agent_id="still-running", background_tasks=[])
+        activity.reconcile(self.db, now=1014)
+        self.assertEqual(self.task()["state"], "completed")
+        self.assertEqual(self.task()["updatedAt"], 1012)
+
+    def test_claude_effort_object_and_transcript_metadata(self):
+        self.emit("UserPromptSubmit", model="claude-opus-5-5", effort={"level":"max"})
+        self.assertEqual(self.task()["effort"], "max")
+        home=Path(self.temp.name)/"claude"
+        transcript=home/"projects/test/session.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text(json.dumps(dict(type="assistant",effort="high",perTurnEffort="xhigh",
+                                             message=dict(model="claude-opus-5-5",content="private")))+"\n")
+        with patch.dict(os.environ,{"CLAUDE_CONFIG_DIR":str(home)}):
+            self.emit("PreToolUse",1001,transcript_path=str(transcript))
+        self.assertEqual(self.task()["effort"], "xhigh")
+
+    def test_claude_empty_registry_resolves_missing_child_stop_and_approval(self):
+        self.emit("UserPromptSubmit")
+        self.emit("SubagentStart", 1001, agent_id="child")
+        self.emit("PermissionRequest", 1002, agent_id="child", tool_use_id="call", tool_name="Bash")
+        self.emit("Stop", 1003, background_tasks=[])
+        self.assertEqual(self.task()["state"], "running")
+        self.assertEqual(self.task()["activeSubagentCount"], 0)
+        activity.reconcile(self.db, now=1005)
+        self.assertEqual(self.task()["state"], "completed")
+
+    def test_claude_unknown_registry_shape_keeps_known_child(self):
+        self.emit("UserPromptSubmit")
+        self.emit("SubagentStart", 1001, agent_id="child")
+        for registry in (None, {}, [None], [dict(type="subagent")], [dict(type="new-agent-kind")]):
+            self.emit("Stop", 1002, background_tasks=registry)
+            activity.reconcile(self.db, now=1005)
+            self.assertEqual(self.task()["state"], "running")
+            self.assertEqual(self.task()["activeSubagentCount"], 1)
+
+    def test_claude_late_registry_does_not_reintroduce_finished_child(self):
+        self.emit("UserPromptSubmit")
+        self.emit("SubagentStart", 1001, agent_id="a")
+        self.emit("SubagentStart", 1002, agent_id="b")
+        self.emit("Stop", 1003)
+        self.emit("SubagentStop", 1004, agent_id="a")
+        self.emit("SubagentStop", 1005, agent_id="b", background_tasks=[dict(id="a", type="subagent", status="running")])
+        activity.reconcile(self.db, now=1007)
+        self.assertEqual(self.task()["state"], "completed")
+        self.assertEqual(self.task()["activeSubagentCount"], 0)
+        self.emit("SubagentStart", 1008, agent_id="a")
+        self.assertEqual(self.task()["state"], "running")
+        self.assertEqual(self.task()["activeSubagentCount"], 1)
+        self.emit("Stop", 1009, background_tasks=[dict(id="a", type="subagent", status="running")])
+        activity.reconcile(self.db, now=1012)
+        self.assertEqual(self.task()["state"], "running")
+        self.assertEqual(self.task()["activeSubagentCount"], 1)
+
+    def test_claude_session_exit_clears_background_children(self):
+        self.emit("UserPromptSubmit")
+        self.emit("SubagentStart", 1001, agent_id="child")
+        self.emit("Stop", 1002)
+        self.emit("SessionEnd", 1003)
+        activity.reconcile(self.db, now=1006)
+        self.assertEqual(self.task()["state"], "ended")
+        self.assertEqual(self.task()["activeSubagentCount"], 0)
+
+    def test_claude_registry_on_orphan_stop_does_not_create_work(self):
+        background=[dict(id="child", type="subagent", status="running")]
+        self.emit("Stop", background_tasks=background)
+        self.emit("SubagentStop", agent_id="old", background_tasks=background)
+        self.assertEqual(activity.snapshot(self.db)["tasks"], [])
+
+    def test_claude_child_progress_does_not_replace_main_effort(self):
+        self.emit("UserPromptSubmit", model="claude-opus-5-5", effort={"level":"max"})
+        self.emit("SubagentStart", 1001, agent_id="child")
+        self.emit("PreToolUse", 1002, agent_id="child", effort={"level":"low"}, model="claude-haiku-test")
+        self.assertEqual(self.task()["effort"], "max")
+        self.assertEqual(self.task()["modelName"], "claude-opus-5-5")
+
+    def test_claude_internal_agent_stop_does_not_override_tool_progress(self):
+        self.emit("UserPromptSubmit")
+        self.emit("SubagentStart", 1001, agent_id="child")
+        self.emit("Stop", 1002)
+        self.emit("PreToolUse", 1003, agent_id="child", tool_name="Bash")
+        before=activity.snapshot(self.db)
+        self.emit("SubagentStop", 1004, agent_id="prompt-suggestion", agent_type="",
+                  background_tasks=[dict(id="child", type="subagent", status="running")])
+        after=activity.snapshot(self.db)
+        self.assertEqual(after["tasks"],before["tasks"])
+        self.assertEqual(after["revision"],before["revision"])
+        self.emit("SubagentStop", 1005, agent_id="child", agent_type="", background_tasks=[])
+        activity.reconcile(self.db,now=1007)
+        self.assertEqual(self.task()["state"],"completed")
 
     def test_old_protocol_without_details_remains_readable(self):
         self.event("UserPromptSubmit")

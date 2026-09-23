@@ -4,6 +4,25 @@ import Foundation
 struct UsageAnalyticsSmoke {
     static func main() throws {
         let decoder = JSONDecoder()
+        let currentPrices = try decoder.decode(UsagePriceBook.self, from: Data(contentsOf: URL(fileURLWithPath: "CodexBar/Resources/UsagePrices.json")))
+        let newModels = AnalyticsDay(
+            date: "2026-09-23", tokens: .init(input: 3000000, cached: 3000000, output: 3000000),
+            models: [
+                .init(model: "gpt-6-astra", speed: "standard", weight: 500),
+                .init(model: "gpt-6-sol", speed: "standard", weight: 100),
+                .init(model: "gpt-6-luna", speed: "standard", weight: 5)
+            ]
+        )
+        let newEstimates = UsageModelAllocation.estimate(day: newModels, prices: currentPrices)!
+        precondition(newEstimates.allSatisfy { $0.tokens == .init(input: 1000000, cached: 1000000, output: 1000000) }, "新模型混合用量必须按单价还原并守恒")
+        let sol = newEstimates.first { $0.model == "gpt-6-sol" }!
+        precondition(abs(sol.dollars - 12.2) < 0.000001 && sol.credits == 305, "Sol 使用独立于旧代模型的官方单价")
+        precondition(currentPrices.rate(for: "gpt-5.6-sol")?.input == 4, "新增模型不能改写旧模型历史单价")
+        precondition(currentPrices.rate(for: "gpt-6-sol-2026-09-22")?.model == "gpt-6-sol")
+        precondition(currentPrices.rate(for: "gpt-6-unknown") == nil, "未知型号不能套用同系列价格")
+        for model in ["gpt-6-sol", "gpt-6-luna"] {
+            precondition(UsageModelAllocation.multiplier(model: .init(model: model, speed: "fast", weight: 1), prices: currentPrices) == 2.5)
+        }
         let now = ISO8601DateFormatter().date(from: "2026-08-03T12:00:00Z")!
         let reset = now.addingTimeInterval(6 * 86400).timeIntervalSince1970
         let usage = Data("{\"account_id\":\"account-1\",\"email\":\"user@example.test\",\"rate_limit\":{\"primary_window\":{\"used_percent\":0,\"limit_window_seconds\":604800,\"reset_at\":\(reset)},\"secondary_window\":null}}".utf8)

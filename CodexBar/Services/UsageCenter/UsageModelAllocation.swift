@@ -11,7 +11,7 @@ nonisolated enum UsageModelAllocation {
             if rate.model.hasPrefix("gpt-5.4") {
                 return 2
             }
-            if rate.model == "gpt-6-astra" || rate.model.hasPrefix("gpt-5.6") || rate.model == "gpt-5.5" {
+            if ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"].contains(rate.model) || rate.model.hasPrefix("gpt-5.6") || rate.model == "gpt-5.5" {
                 return 2.5
             }
             return nil

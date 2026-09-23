@@ -114,6 +114,26 @@ def load_details(db, task_id, updated):
     return value if value.get("observedAt") == updated else {}
 
 
+def background_agents(payload):
+    tasks = payload.get("background_tasks")
+    if not isinstance(tasks, list) or len(tasks) > 1000:
+        return None
+    result = set()
+    for task in tasks:
+        if not isinstance(task, dict) or not isinstance(task.get("type"), str):
+            return None
+        if task["type"] in ("shell", "monitor", "workflow", "cloud session", "MCP task"):
+            continue
+        if task["type"] != "subagent":
+            return None
+        agent = identifier(task.get("id"))
+        if not agent or not isinstance(task.get("status"), str):
+            return None
+        if task["status"] not in ("completed", "failed", "killed", "cancelled"):
+            result.add(agent)
+    return result
+
+
 def record(db, payload, provider, now=None):
     event = payload.get("hook_event_name")
     session = payload.get("session_id")
@@ -144,6 +164,7 @@ def record(db, payload, provider, now=None):
     pid, birth = parent_identity(provider)
     terminal = event in ("Stop", "StopFailure", "SessionEnd", "Interrupt")
     subagent_event = event in ("SubagentStart", "SubagentStop")
+    background = background_agents(payload) if provider == "claude" and event in ("Stop", "SubagentStop") else None
     with db:
         # 并发 Hook 先获得写锁再读取旧状态, 避免相互覆盖审批和轮次
         db.execute("BEGIN IMMEDIATE")
@@ -151,10 +172,32 @@ def record(db, payload, provider, now=None):
         details = load_details(db, task_id, previous[4]) if previous else {}
         if previous and now < previous[4]:
             return
-        if terminal and (not previous or previous[0] not in ("running", "waiting", "unknown")):
+        closed_agents = details.get("closedAgents", [])
+        if provider == "claude" and event == "SubagentStart" and agent:
+            closed_agents = [value for value in closed_agents if value != agent]
+        if background is not None:
+            background.difference_update(closed_agents)
+        # 官方后台注册表可以恢复旧采集器提前清空的子任务, 孤立终态仍不创建任务
+        recovering_children = provider == "claude" and previous and previous[0] == "completed" and (
+            bool(background - {agent}) if background is not None else event == "SubagentStart" and agent is not None)
+        if recovering_children:
+            details["pendingStop"] = previous[4]
+        known_agents = {row[0] for row in db.execute("SELECT agent FROM agents WHERE parent=?", (task_id,))} if provider == "claude" else set()
+        untracked_stop = provider == "claude" and event == "SubagentStop" and agent not in known_agents
+        # 提示建议等内部 Agent 只有 Stop, 注册表没有新信息时不覆盖真实任务阶段
+        if untracked_stop and (background is None or (background <= known_agents and not recovering_children)):
             return
-        if subagent_event and (not previous or previous[0] not in ("running", "waiting", "unknown")):
+        if terminal and (not previous or (previous[0] not in ("running", "waiting", "unknown") and not recovering_children)):
             return
+        if subagent_event and (not previous or (previous[0] not in ("running", "waiting", "unknown") and not recovering_children)):
+            return
+        if background is not None and previous:
+            if event == "Stop" and not agent:
+                db.execute("DELETE FROM agents WHERE parent=?", (task_id,))
+            known = {row[0] for row in db.execute("SELECT agent FROM agents WHERE parent=?", (task_id,))}
+            additions = sorted(background - known)[:max(0, 1000 - len(known))]
+            db.executemany("INSERT OR IGNORE INTO agents VALUES(?,?)", ((task_id, value) for value in additions))
+            details["activeSubagentCount"] = db.execute("SELECT COUNT(*) FROM agents WHERE parent=?", (task_id,)).fetchone()[0]
         old_turn = details.get("turnKey")
         root_turn = identifier(metadata.get("rootTurn"))
         if agent and root_turn and old_turn and root_turn != old_turn:
@@ -169,8 +212,15 @@ def record(db, payload, provider, now=None):
             ended = details.get("endedTurns", [])
             if old_turn and old_turn != turn:
                 ended = (ended + [old_turn])[-16:]
-            details = {"turnKey": turn, "endedTurns": ended, "activeSubagentCount": 0}
-            db.execute("DELETE FROM agents WHERE parent=?", (task_id,))
+            if provider == "claude":
+                # 后台子 Agent 可以跨越主会话的多次输入, 保留它们自己的审批与起点
+                active = {row[0] for row in db.execute("SELECT agent FROM agents WHERE parent=?", (task_id,))}
+                retained = {key: {owner: value for owner, value in details.get(key, {}).items() if owner in active}
+                            for key in ("waits", "reviewers", "waitStarted")}
+                details = {"turnKey": turn, "endedTurns": ended, "activeSubagentCount": len(active), **retained}
+            else:
+                details = {"turnKey": turn, "endedTurns": ended, "activeSubagentCount": 0}
+                db.execute("DELETE FROM agents WHERE parent=?", (task_id,))
         elif turn and not old_turn and not agent:
             details["turnKey"] = turn
         # 子任务事件必须先关联本轮, 迟到事件不能复活上一轮或结束主任务
@@ -178,7 +228,7 @@ def record(db, payload, provider, now=None):
             if not db.execute("SELECT 1 FROM agents WHERE parent=? AND agent=?", (task_id, agent)).fetchone():
                 if provider == "codex" and previous and root_turn and root_turn == old_turn:
                     db.execute("INSERT OR IGNORE INTO agents VALUES(?,?)", (task_id, agent))
-                else:
+                elif not (provider == "claude" and event == "SubagentStop" and background is not None):
                     return
         if agent and event == "SubagentStart":
             if db.execute("SELECT COUNT(*) FROM agents WHERE parent=?", (task_id,)).fetchone()[0] < 1000:
@@ -190,6 +240,11 @@ def record(db, payload, provider, now=None):
         waits = details.get("waits", {})
         if previous and previous[0] == "waiting" and "waits" not in details:
             waits = {"main": {"unknown": None}}
+        if provider == "claude" and background is not None:
+            active = {row[0] for row in db.execute("SELECT agent FROM agents WHERE parent=?", (task_id,))}
+            waits = {owner: value for owner, value in waits.items() if owner == "main" or owner in active}
+        if provider == "claude" and event == "Stop" and not agent:
+            waits.pop("main", None)
         tool_id = identifier(payload.get("tool_use_id") or payload.get("call_id")) or "unknown"
         tool = payload.get("tool_name")
         tool = tool if isinstance(tool, str) and 0 < len(tool) <= 120 and tool.isprintable() else None
@@ -208,7 +263,8 @@ def record(db, payload, provider, now=None):
                 if not waits[owner]:
                     waits.pop(owner)
         state = "waiting" if any(provider == "claude" or reviewers.get(key) == "user" for key in waits) else "unknown" if waits else "running"
-        started = previous[1] if previous and event != "UserPromptSubmit" else now
+        has_children = provider == "claude" and db.execute("SELECT 1 FROM agents WHERE parent=? LIMIT 1", (task_id,)).fetchone()
+        started = previous[1] if previous and (event != "UserPromptSubmit" or has_children) else now
         if previous and (agent or not pid):
             pid, birth = previous[2:4]
         if path and not agent:
@@ -218,10 +274,12 @@ def record(db, payload, provider, now=None):
             details["effort"] = effort
         if agent and (terminal or event == "SubagentStop" or (event == "PostToolUseFailure" and payload.get("is_interrupt") is True)):
             db.execute("DELETE FROM agents WHERE parent=? AND agent=?", (task_id, agent))
+            if provider == "claude" and agent in known_agents:
+                closed_agents = ([value for value in closed_agents if value != agent] + [agent])[-1000:]
             waits.pop(owner, None)
             state = "waiting" if any(provider == "claude" or reviewers.get(key) == "user" for key in waits) else "unknown" if waits else "running"
             event = "SubagentStop"
-        elif event == "SessionEnd" and (provider == "codex" or details.get("pendingStop") is not None):
+        elif event == "SessionEnd" and (provider == "codex" or (details.get("pendingStop") is not None and not has_children)):
             details.setdefault("pendingStop", now)
             details["sessionEnded"] = True
         elif event in ("SessionEnd", "Interrupt", "StopFailure") or (event == "PostToolUseFailure" and payload.get("is_interrupt") is True):
@@ -249,9 +307,17 @@ def record(db, payload, provider, now=None):
             changed_at, tool = min(known_waits, key=lambda item: item[0])
         elif not previous or state != previous[0]:
             changed_at = now
+        if untracked_stop:
+            event = "SubagentStart" if recovering_children else details.get("eventName", "SubagentStart")
+            tool = details.get("toolName")
         details.update(observedAt=now, eventName="PermissionRequest" if waits else event,
                        toolName=tool, waits=waits, reviewers=reviewers, waitStarted=wait_started,
                        stateChangedAt=changed_at)
+        if provider == "claude":
+            if closed_agents:
+                details["closedAgents"] = closed_agents
+            else:
+                details.pop("closedAgents", None)
         if details.get("activeSubagentCount") is not None:
             details["activeSubagentCount"] = db.execute("SELECT COUNT(*) FROM agents WHERE parent=?", (task_id,)).fetchone()[0]
         db.execute("INSERT OR REPLACE INTO tasks VALUES(?,?,?,?,?,?,?,?)", (task_id, provider, state, project, now, started, pid, birth))
@@ -351,7 +417,9 @@ def reconcile(db, now=None):
         if pending is not None and scanned < 8:
             scanned += 1
             details["terminalCheckedAt"] = now
-            terminal = ("completed", pending) if provider == "claude" and now - pending >= 2 else codex_terminal(details, started, now) if provider == "codex" else None
+            child_count = db.execute("SELECT COUNT(*) FROM agents WHERE parent=?", (task_id,)).fetchone()[0] if provider == "claude" else 0
+            completed_at = max(pending, updated) if provider == "claude" and details.get("eventName") == "SubagentStop" else pending
+            terminal = (("completed", completed_at) if child_count == 0 and now - completed_at >= 2 else None) if provider == "claude" else codex_terminal(details, started, now)
             if terminal:
                 next_state, terminal_at = terminal
                 details.pop("pendingStop", None)
@@ -362,13 +430,17 @@ def reconcile(db, now=None):
                 if details.get("turnKey"):
                     details["endedTurns"] = (details.get("endedTurns", []) + [details["turnKey"]])[-16:]
                 details["observedAt"] = terminal_at
-            elif now - pending >= 10:
+            elif now - pending >= 10 and provider == "codex":
                 next_state = "ended" if details.get("sessionEnded") else "unknown"
                 if next_state == "ended":
                     details.pop("pendingStop", None)
                     terminal_at = pending
                     details["observedAt"] = terminal_at
         elif state in ("running", "waiting") and pending is None:
+            identity = process_identity(pid) if pid else None
+            if (pid and (not identity or identity[1] != birth)) or (not pid and now - updated > 600):
+                next_state = "unknown"
+        if provider == "claude" and pending is not None and next_state == state:
             identity = process_identity(pid) if pid else None
             if (pid and (not identity or identity[1] != birth)) or (not pid and now - updated > 600):
                 next_state = "unknown"
@@ -416,7 +488,11 @@ def current_details(payload, updated):
         return {}
     result = {key: details[key] for key in ("eventName", "toolName", "activeSubagentCount", "effort", "stateChangedAt") if key in details}
     if details.get("pendingStop") is not None:
-        result["eventName"] = "Stop"
+        if (details.get("activeSubagentCount") or 0) > 0:
+            if result.get("eventName") == "Stop":
+                result["eventName"] = "SubagentStart"
+        else:
+            result["eventName"] = "Stop"
     return result
 
 
@@ -465,7 +541,9 @@ def partial_object(text, offset=0, depth=0):
 def model_metadata(payload, provider):
     def valid(value):
         return value if isinstance(value, str) and 0 < len(value) <= 100 and value.isprintable() else None
-    result = {"model": valid(payload.get("model")), "effort": valid(payload.get("effort")),
+    def effort(value):
+        return valid(value.get("level")) if isinstance(value, dict) else valid(value)
+    result = {"model": valid(payload.get("model")), "effort": effort(payload.get("effort")),
               "reviewer": payload.get("approval_reviewer")}
     transcript = transcript_path(payload, provider)
     if not transcript:
@@ -501,7 +579,10 @@ def model_metadata(payload, provider):
                 if provider == "codex" and payload.get("turn_id") and detail.get("turn_id") != payload["turn_id"]:
                     continue
                 result["model"] = result["model"] or valid(detail.get("model"))
-                result["effort"] = valid(detail.get("effort")) or result["effort"]
+                if provider == "claude":
+                    result["effort"] = result["effort"] or effort(value.get("perTurnEffort")) or effort(value.get("effort")) or effort(detail.get("effort"))
+                else:
+                    result["effort"] = effort(detail.get("effort")) or result["effort"]
                 result["reviewer"] = detail.get("approvals_reviewer", result["reviewer"])
                 result["rootTurn"] = valid(detail.get("root_turn_id"))
                 break
