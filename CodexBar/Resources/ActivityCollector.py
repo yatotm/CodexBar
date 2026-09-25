@@ -98,6 +98,19 @@ def identifier(value):
     return None
 
 
+def permission_input_key(payload):
+    tool = payload.get("tool_name")
+    arguments = payload.get("tool_input")
+    if not isinstance(tool, str) or not isinstance(arguments, dict):
+        return None
+    try:
+        # Claude 审批事件可能没有调用 ID, 仅保存参数指纹以关联同一 Agent 的工具结果
+        encoded = json.dumps([tool, arguments], sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError):
+        return None
+    return "input:" + hashlib.sha256(encoded.encode()).hexdigest()
+
+
 def transcript_path(payload, provider):
     value = payload.get("transcript_path")
     if not isinstance(value, str):
@@ -245,7 +258,11 @@ def record(db, payload, provider, now=None):
             waits = {owner: value for owner, value in waits.items() if owner == "main" or owner in active}
         if provider == "claude" and event == "Stop" and not agent:
             waits.pop("main", None)
-        tool_id = identifier(payload.get("tool_use_id") or payload.get("call_id")) or "unknown"
+        tool_id = identifier(payload.get("tool_use_id") or payload.get("call_id"))
+        input_key = permission_input_key(payload) if provider == "claude" else None
+        if event == "PermissionRequest" and tool_id is None:
+            tool_id = input_key
+        tool_id = tool_id or "unknown"
         tool = payload.get("tool_name")
         tool = tool if isinstance(tool, str) and 0 < len(tool) <= 120 and tool.isprintable() else None
         reviewers = details.get("reviewers", {})
@@ -259,7 +276,15 @@ def record(db, payload, provider, now=None):
                 waits.setdefault(owner, {})[tool_id] = tool
         elif event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
             if owner in waits:
+                identified = tool_id in waits[owner]
                 waits[owner].pop(tool_id, None)
+                if provider == "claude" and event in ("PostToolUse", "PostToolUseFailure"):
+                    matched_input = input_key in waits[owner] if input_key else False
+                    if matched_input and not identified:
+                        waits[owner].pop(input_key, None)
+                    # 旧版本只保存了 unknown, 用同一 Agent 的同名工具完成事件解除遗留等待
+                    if not identified and not matched_input and tool and waits[owner].get("unknown") == tool:
+                        waits[owner].pop("unknown", None)
                 if not waits[owner]:
                     waits.pop(owner)
         state = "waiting" if any(provider == "claude" or reviewers.get(key) == "user" for key in waits) else "unknown" if waits else "running"

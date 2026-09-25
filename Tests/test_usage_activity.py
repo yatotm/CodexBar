@@ -372,6 +372,67 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(self.task()["state"], "running")
         self.assertEqual(self.task()["modelName"], "parent-model")
 
+    def test_claude_approval_without_call_id_resolves_by_input_after_tool_finishes(self):
+        self.emit("UserPromptSubmit")
+        self.emit("SubagentStart", 1001, agent_id="child")
+        arguments = {"command": "PRIVATE_COMMAND", "timeout": 100}
+        self.emit("PermissionRequest", 1002, agent_id="child", tool_name="Bash", tool_input=arguments)
+        self.emit("Stop", 1003)
+        self.assertEqual(self.task()["state"], "waiting")
+        self.emit("PostToolUse", 1004, agent_id="child", tool_name="Bash", tool_use_id="call",
+                  tool_input={"timeout": 100, "command": "PRIVATE_COMMAND"})
+        self.assertEqual(self.task()["state"], "running")
+        self.assertEqual(self.task()["activeSubagentCount"], 1)
+        activity.reconcile(self.db, now=1010)
+        self.assertEqual(self.task()["state"], "running")
+        payload = self.db.execute("SELECT payload FROM details").fetchone()[0]
+        self.assertNotIn("PRIVATE_COMMAND", payload)
+        self.assertNotIn("PRIVATE_COMMAND", json.dumps(activity.snapshot(self.db)))
+
+    def test_missing_call_id_does_not_clear_other_agent_or_parallel_tool(self):
+        self.emit("UserPromptSubmit")
+        self.emit("SubagentStart", 1001, agent_id="a")
+        self.emit("SubagentStart", 1002, agent_id="b")
+        self.emit("PermissionRequest", 1003, agent_id="a", tool_name="Bash", tool_input={"command": "first"})
+        self.emit("PermissionRequest", 1004, agent_id="a", tool_name="Bash", tool_input={"command": "second"})
+        self.emit("PermissionRequest", 1005, agent_id="b", tool_name="Bash", tool_input={"command": "first"})
+        self.emit("PreToolUse", 1006, agent_id="a", tool_name="Bash", tool_use_id="first", tool_input={"command": "first"})
+        self.assertEqual(self.task()["stateChangedAt"], 1003)
+        self.emit("PostToolUse", 1007, agent_id="a", tool_name="Bash", tool_use_id="unrelated", tool_input={"command": "other"})
+        self.assertEqual(self.task()["stateChangedAt"], 1003)
+        self.emit("PostToolUse", 1008, agent_id="a", tool_name="Bash", tool_use_id="first", tool_input={"command": "first"})
+        self.assertEqual(self.task()["stateChangedAt"], 1004)
+        self.emit("PostToolUseFailure", 1009, agent_id="a", tool_name="Bash", tool_use_id="second", tool_input={"command": "second"})
+        self.assertEqual(self.task()["state"], "waiting")
+        self.assertEqual(self.task()["stateChangedAt"], 1005)
+        self.emit("PostToolUse", 1010, agent_id="b", tool_name="Bash", tool_use_id="third", tool_input={"command": "first"})
+        self.assertEqual(self.task()["state"], "running")
+
+    def test_legacy_unknown_approval_only_clears_on_unmatched_completion_of_same_tool_and_owner(self):
+        self.emit("UserPromptSubmit")
+        self.emit("SubagentStart", 1001, agent_id="child")
+        self.emit("PermissionRequest", 1002, agent_id="child", tool_name="Bash")
+        self.emit("PermissionRequest", 1003, agent_id="child", tool_name="Bash", tool_use_id="known")
+        self.emit("Stop", 1004)
+        self.emit("PostToolUse", 1005, agent_id="child", tool_name="Bash", tool_use_id="known")
+        self.assertEqual(self.task()["state"], "waiting")
+        self.emit("PostToolUse", 1006, tool_name="Bash", tool_use_id="parent-call")
+        self.emit("PostToolUse", 1007, agent_id="child", tool_name="Read", tool_use_id="other-tool")
+        self.assertEqual(self.task()["state"], "waiting")
+        self.emit("PostToolUse", 1008, agent_id="child", tool_name="Bash", tool_use_id="legacy-call")
+        self.assertEqual(self.task()["state"], "running")
+        self.assertEqual(self.task()["activeSubagentCount"], 1)
+
+    def test_identified_completion_does_not_clear_same_input_unidentified_approval(self):
+        self.emit("UserPromptSubmit")
+        arguments = {"command": "same"}
+        self.emit("PermissionRequest", 1001, tool_name="Bash", tool_input=arguments)
+        self.emit("PermissionRequest", 1002, tool_name="Bash", tool_input=arguments, tool_use_id="known")
+        self.emit("PostToolUse", 1003, tool_name="Bash", tool_input=arguments, tool_use_id="known")
+        self.assertEqual(self.task()["state"], "waiting")
+        self.emit("PostToolUse", 1004, tool_name="Bash", tool_input=arguments, tool_use_id="unknown-to-hook")
+        self.assertEqual(self.task()["state"], "running")
+
     def test_subagent_stop_and_interrupt_do_not_end_parent(self):
         for terminal in ("Stop", "StopFailure", "PostToolUseFailure"):
             self.emit("UserPromptSubmit")

@@ -4,6 +4,7 @@ import Foundation
 struct UsageCenterSmoke {
     static func main() async throws {
         checkMenuScopesAndDates()
+        checkClaudeQuotaSelection()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = UsageCenterStore(directory: directory)
@@ -57,6 +58,27 @@ struct UsageCenterSmoke {
         dashboard = try await store.dashboard(filter: UsageFilter())
         precondition(dashboard.totals.tokens == 30, "移除来源应同步清理本机贡献")
         print("UsageCenter store smoke tests passed")
+    }
+
+    private static func checkClaudeQuotaSelection() {
+        let now: Double = 2000000000
+        func quota(_ observed: Double, reset: Double?, provider: String = "claude") -> UsageQuotaObservation {
+            UsageQuotaObservation(provider: provider, observedAt: observed, windows: [.init(name: "5h", usedPercent: 23, resetsAt: reset)])
+        }
+        let native = quota(now - 20, reset: now + 3600)
+        let cache = quota(now - 5, reset: nil)
+        precondition(native.isPreferred(over: cache, at: now), "较新但不完整的机器缓存不得遮住已知重置时间")
+        precondition(!cache.isPreferred(over: native, at: now))
+        let next = quota(now - 1, reset: now + 18000)
+        precondition(next.isPreferred(over: native, at: now), "新的完整窗口必须替换旧窗口")
+        let expired = quota(now - 20, reset: now - 1)
+        precondition(expired.isPreferred(over: cache, at: now), "结束前的无时间缓存不能让过期用量重新出现")
+        precondition(quota(now, reset: nil).isPreferred(over: expired, at: now), "过期后允许回退新观察")
+        let stale = quota(now - 18001, reset: now + 3600)
+        precondition(cache.isPreferred(over: stale, at: now), "陈旧记录不能凭未来截止时间永久占据优先级")
+        precondition(quota(now, reset: nil, provider: "codex").isPreferred(
+            over: quota(now - 20, reset: now + 3600, provider: "codex"), at: now
+        ), "Codex 继续按观察时间选择")
     }
 
     private static func checkMenuScopesAndDates() {

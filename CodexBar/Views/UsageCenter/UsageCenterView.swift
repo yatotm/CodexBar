@@ -206,7 +206,7 @@ struct UsageCenterView: View {
     private var quotaSnapshots: some View {
         VStack(alignment: .leading, spacing: 12) {
             let entries = visibleQuotas
-            Text("同账号各工具的最新记录置顶, 较早记录以灰色显示。额度不相加, 没有新观察时不推算。")
+            Text("当前采用的额度记录置顶, 其他记录以灰色显示; Claude 优先显示有效且带 5h 重置时间的完整记录, 额度不相加")
                 .font(.caption).foregroundStyle(.secondary)
             ForEach(entries) { entry in
                 let latest = entries.first(where: { $0.quota.provider == entry.quota.provider })?.id == entry.id
@@ -228,8 +228,9 @@ struct UsageCenterView: View {
                 }
             }
         }
+        let now = Date().timeIntervalSince1970
         let newest = Dictionary(grouping: entries, by: { $0.quota.provider }).mapValues {
-            $0.max { $0.quota.observedAt < $1.quota.observedAt }?.id
+            $0.max { $1.quota.isPreferred(over: $0.quota, at: now) }?.id
         }
         return entries.sorted { lhs, rhs in
             let lhsLatest = newest[lhs.quota.provider] == lhs.id

@@ -55,6 +55,16 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
+def claude_quota_priority(quota, now):
+    observed = quota.get("observedAt", 0)
+    window = next((w for w in quota.get("windows", []) if w.get("name") == "5h"), {})
+    reset = window.get("resetsAt") or 0
+    complete = 0 <= now - observed < 5 * 3600 and reset > now
+    # 已知窗口结束后, 过期之前的无时间缓存不能让旧用量重新出现
+    evidence = max(observed, reset) if 0 < reset <= now else observed
+    return complete, evidence, observed
+
+
 def state_directory():
     root = pathlib.Path(os.environ.get("XDG_STATE_HOME", str(pathlib.Path.home() / ".local/state")))
     return root / "codexbar-usage"
@@ -210,8 +220,18 @@ class Collector:
                     label = str(minutes // 60) + "h"
                 sanitized.append({"name": text(label, 40), "usedPercent": float(used),
                                   "resetsAt": number(reset) or None})
-        if sanitized and observed_at >= self.quotas.get(provider, {}).get("observedAt", 0):
-            self.quotas[provider] = {"provider": provider, "observedAt": observed_at, "windows": sanitized}
+        if not sanitized:
+            return
+        observation = {"provider": provider, "observedAt": observed_at, "windows": sanitized}
+        previous = self.quotas.get(provider, {})
+        if provider == "claude":
+            # 有效的 5h 完整快照优先, 用量与时间始终保留在同一份观察中
+            now = time.time()
+            replace = claude_quota_priority(observation, now) >= claude_quota_priority(previous, now)
+        else:
+            replace = observed_at >= previous.get("observedAt", 0)
+        if replace:
+            self.quotas[provider] = observation
 
     def codex(self, row, state, date):
         payload = row.get("payload")

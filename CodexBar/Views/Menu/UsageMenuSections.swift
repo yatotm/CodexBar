@@ -98,7 +98,7 @@ struct ClaudeMenuQuotaView: View {
         }
         .padding(MenuMetrics.panelPadding)
         .liquidGlassSurface(cornerRadius: MenuMetrics.panelCornerRadius)
-        .help("只读各机器已有额度缓存, 显示最新记录; 缺少重置时间时显示 --, 不推算新窗口用量")
+        .help("只读本地额度数据, 优先显示有效且带 5h 重置时间的完整记录; 缺少时间时显示 --, 不推算新窗口用量")
     }
 
     private func window(named name: String, kind: QuotaWindowKind, minutes: Int) -> QuotaWindow {

@@ -92,6 +92,46 @@ class CollectorTests(unittest.TestCase):
         value = collector.timestamp("2026-09-09T04:16:26.569515188+00:00")
         self.assertEqual(value, dt.datetime(2026, 9, 9, 4, 16, 26, 569515, tzinfo=dt.timezone.utc))
 
+    def test_native_claude_reset_survives_newer_incomplete_cache_and_incremental_scan(self):
+        now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+        reset = now + 3600
+        cache = self.claude / "ccline/.api_usage_cache.json"
+        cache.parent.mkdir()
+        cache.write_text(json.dumps({"five_hour_utilization": 50, "seven_day_utilization": 10,
+            "resets_at": dt.datetime.fromtimestamp(now + 6 * 86400, dt.timezone.utc).isoformat(),
+            "cached_at": dt.datetime.fromtimestamp(now - 5, dt.timezone.utc).isoformat()}))
+        self.write([{"type": "codexbar_signal", "event": "statusline", "session": "a" * 64,
+            "timestamp": dt.datetime.fromtimestamp(now - 10, dt.timezone.utc).isoformat(),
+            "rateLimits": {"five_hour": {"used_percentage": 23, "resets_at": reset},
+                           "seven_day": {"used_percentage": 9, "resets_at": now + 6 * 86400}}}],
+            self.claude / "codexbar-usage/signals/native.jsonl")
+        for _ in range(2):
+            quota = self.scan().quotas["claude"]
+            self.assertEqual(quota["observedAt"], now - 10)
+            self.assertEqual(quota["windows"][0], {"name": "5h", "usedPercent": 23, "resetsAt": reset})
+            self.assertEqual(quota["windows"][1]["usedPercent"], 9)
+        self.assertEqual(set(quota), {"provider", "observedAt", "windows"})
+
+    def test_expired_native_window_only_yields_to_data_observed_after_reset(self):
+        now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+        value = collector.Collector(self.db, self.codex, self.claude, ["claude"])
+        value.observe_quota("claude", {"five_hour": {"used_percentage": 80, "resets_at": now - 1}}, now - 30)
+        value.observe_quota("claude", {"five_hour": {"used_percentage": 90}}, now - 10)
+        self.assertEqual(value.quotas["claude"]["windows"][0]["resetsAt"], now - 1)
+        value.observe_quota("claude", {"five_hour": {"used_percentage": 0}}, now)
+        self.assertIsNone(value.quotas["claude"]["windows"][0]["resetsAt"])
+        self.assertEqual(value.quotas["claude"]["observedAt"], now)
+
+    def test_new_native_window_replaces_previous_complete_snapshot(self):
+        now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+        value = collector.Collector(self.db, self.codex, self.claude, ["claude"])
+        value.observe_quota("claude", {"five_hour": {"used_percentage": 80, "resets_at": now + 100}}, now - 20)
+        value.observe_quota("claude", {"five_hour": {"used_percentage": 1, "resets_at": now + 18000}}, now - 1)
+        self.assertEqual(value.quotas["claude"]["windows"][0], {"name": "5h", "usedPercent": 1, "resetsAt": now + 18000})
+        value.observe_quota("codex", {"five_hour": {"used_percentage": 80, "resets_at": now + 100}}, now - 20)
+        value.observe_quota("codex", {"five_hour": {"used_percentage": 90}}, now - 1)
+        self.assertIsNone(value.quotas["codex"]["windows"][0]["resetsAt"])
+
     def test_current_codex_authentication_exports_only_the_mode(self):
         auth = self.codex / "auth.json"
         auth.write_text(json.dumps({"auth_mode": "chatgpt", "tokens": {"access_token": "PRIVATE_CREDENTIAL"}}))
@@ -260,6 +300,7 @@ class CollectorTests(unittest.TestCase):
         self.scan()
         quotas = json.loads(self.db.get("quotas"))
         self.assertEqual(quotas[0]["windows"][0]["usedPercent"], 23)
+        self.assertEqual(quotas[0]["windows"][0]["resetsAt"], 2000000000)
         collector.configure_claude(self.claude, uninstall=True)
         self.assertEqual(json.loads(settings.read_text()), original)
 

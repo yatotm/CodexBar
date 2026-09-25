@@ -269,9 +269,10 @@ final class UsageCenterViewModel: ObservableObject {
 
     var latestClaudeQuota: UsageQuotaObservation? {
         var latest: UsageQuotaObservation?
+        let now = Date().timeIntervalSince1970
         for source in sources where UsageMenuScope.claude.includes(source) {
             for quota in statuses[source.id]?.quotas ?? [] where quota.provider == "claude" {
-                if quota.observedAt > (latest?.observedAt ?? 0) {
+                if latest.map({ quota.isPreferred(over: $0, at: now) }) ?? true {
                     latest = quota
                 }
             }

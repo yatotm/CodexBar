@@ -42,7 +42,7 @@ struct UsageSourceEditor: View {
                         Button("移除") { configureActivity(install: false) }
                     }.disabled(isSaving || source.validationError != nil)
                     Text(source.transport == .ssh
-                        ? "通过 SSH 接收任务变化, 不等待 5 分钟刷新; 合盖或睡眠后断开, 恢复联网后重连; 接入会保存当前来源并保留已有 Hook"
+                        ? "通过 SSH 接收任务变化, 不等待 5 分钟刷新; 合盖且无工作显示器或系统睡眠时暂停, 恢复使用且联网后重连; 接入会保留已有 Hook"
                         : "实时读取本机 Claude Hook; Codex 继续使用设置中的 CodexBar Hook, 不重复接入")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -57,7 +57,7 @@ struct UsageSourceEditor: View {
                     }
                 }
                 if source.includesClaude {
-                    Text("现有会话和额度缓存会自动读取, 无需点击接入。补充记录用于保存今后的权限请求、任务状态和官方状态栏提供的额度, 会调整 Claude 的 statusLine 与 Hook。")
+                    Text("历史会话和已有额度缓存会自动读取. 启用补充记录后, 可被动接收 Claude 原生 5h 和 7d 额度与重置时间, 并记录权限事件; 保留现有状态栏输出, CodexBar 不请求 Anthropic 接口")
                         .font(.caption).foregroundStyle(.secondary)
                     if source.transport != .https {
                         HStack {

@@ -171,6 +171,33 @@ nonisolated struct UsageQuotaObservation: Codable, Identifiable {
                     && ($0.resetsAt == nil || ($0.resetsAt?.isFinite == true && $0.resetsAt! > 0))
             }
     }
+
+    func isPreferred(over other: UsageQuotaObservation, at now: Double) -> Bool {
+        if provider == "claude", other.provider == "claude" {
+            let complete = hasCurrentFiveHourReset(at: now)
+            let otherComplete = other.hasCurrentFiveHourReset(at: now)
+            if complete != otherComplete {
+                return complete
+            }
+            let evidence = fiveHourEvidenceTime(at: now)
+            let otherEvidence = other.fiveHourEvidenceTime(at: now)
+            if evidence != otherEvidence {
+                return evidence > otherEvidence
+            }
+        }
+        return observedAt > other.observedAt
+    }
+
+    private func hasCurrentFiveHourReset(at now: Double) -> Bool {
+        let age = now - observedAt
+        return age >= 0 && age < 5 * 3600 && (windows.first { $0.name == "5h" }?.resetsAt ?? 0) > now
+    }
+
+    private func fiveHourEvidenceTime(at now: Double) -> Double {
+        guard let reset = windows.first(where: { $0.name == "5h" })?.resetsAt, reset > 0, reset <= now else { return observedAt }
+        // 窗口结束是明确证据, 不能被结束前的无时间缓存替换
+        return max(observedAt, reset)
+    }
 }
 
 nonisolated struct UsageEnvelope: Decodable {
