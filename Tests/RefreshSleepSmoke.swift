@@ -3,17 +3,7 @@ import Foundation
 @main
 struct RefreshSleepSmoke {
     static func main() async throws {
-        for sleeping in [false, true] {
-            for closed in [false, true] {
-                for network in [false, true] {
-                    precondition(
-                        SystemConnectionGate.allowsConnection(isSleeping: sleeping, lidClosed: closed, hasNetwork: network)
-                            == (!sleeping && !closed && network),
-                        "合盖 DarkWake 和网络变化不得越过连接门槛"
-                    )
-                }
-            }
-        }
+        verifyDisplayPolicy()
         let coordinator = RefreshTaskCoordinator()
         var requests = 0
         var commits = 0
@@ -61,5 +51,41 @@ struct RefreshSleepSmoke {
         try await Task.sleep(for: .milliseconds(20))
         precondition(requests == 2 && commits == 1 && !refreshing, "正式唤醒后恢复正常刷新")
         print("Refresh suspension, background wake attempts, cancelled results and resume tests passed")
+    }
+
+    private static func verifyDisplayPolicy() {
+        let displays: [(name: String, builtin: Bool, active: Bool, asleep: Bool, mirrored: Bool, expected: Bool)] = [
+            ("内屏仍被枚举不能放行合盖", true, true, false, false, false),
+            ("外接屏独立工作", false, true, false, false, true),
+            ("虚拟屏作为唯一屏幕工作", false, true, false, false, true),
+            ("硬件镜像副屏未标为 active", false, false, false, true, true),
+            ("外接屏已熄灭", false, true, true, false, false),
+            ("镜像屏已熄灭", false, false, true, true, false),
+            ("仅注册但未工作的虚拟屏", false, false, false, false, false)
+        ]
+        for display in displays {
+            precondition(SystemConnectionGate.isAwakeExternalDisplay(
+                isBuiltin: display.builtin, isActive: display.active,
+                isAsleep: display.asleep, isMirrored: display.mirrored
+            ) == display.expected, display.name)
+        }
+        let cases: [(name: String, sleeping: Bool, closed: Bool, screensSleeping: Bool, external: Bool, expected: Bool)] = [
+            ("开盖保留原有刷新行为", false, false, false, false, true),
+            ("开盖熄屏保留原有刷新行为", false, false, true, false, true),
+            ("合盖且没有外部工作屏幕", false, true, false, false, false),
+            ("合盖后外接或虚拟屏继续工作", false, true, false, true, true),
+            ("外接屏全部熄灭", false, true, true, true, false),
+            ("系统睡眠优先于显示器枚举结果", true, true, false, true, false),
+            ("开盖时系统睡眠仍暂停", true, false, false, true, false),
+            ("DarkWake 保留屏幕睡眠门槛", false, true, true, true, false)
+        ]
+        for scenario in cases {
+            let localAllowed = SystemConnectionGate.allowsLocalActivity(
+                isSleeping: scenario.sleeping, lidClosed: scenario.closed,
+                areDisplaysSleeping: scenario.screensSleeping,
+                hasAwakeExternalDisplay: scenario.external
+            )
+            precondition(localAllowed == scenario.expected, scenario.name)
+        }
     }
 }

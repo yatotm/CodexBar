@@ -332,7 +332,7 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 
 ## 实时多机器补充
 
-`RemoteActivityController` 独立消费 `ActivityCollector.py` 的当前快照，覆盖 SSH Codex、SSH Claude 和本机 Claude。它通过 `ActivityPresentationModel` 复用原任务卡片和任务中心，并驱动等待、完成通知，不注入本机任务监控或电源控制。`SystemConnectionGate` 在合盖或睡眠时关闭这些连接，正式唤醒且开盖后才能恢复；SSH 还要求网络可用。详见 [用量中心实现与验证](Docs/DeveloperGuide/usage-center.md)
+`RemoteActivityController` 独立消费 `ActivityCollector.py` 的当前快照，覆盖 SSH Codex、SSH Claude 和本机 Claude。它通过 `ActivityPresentationModel` 复用原任务卡片和任务中心，并驱动等待、完成通知，不注入本机任务监控或电源控制。`SystemConnectionGate` 在系统睡眠或合盖且无工作中的外部显示器时关闭连接；外接物理屏、虚拟屏和硬件镜像屏按系统显示状态统一判断。睡眠后必须等显示器唤醒才能恢复合盖采集，DarkWake 不清除这个门槛；SSH 还要求网络可用。详见 [用量中心实现与验证](Docs/DeveloperGuide/usage-center.md)
 
 防睡眠新增 `KeepAlive.mode`，旧安装保留按任务模式，新安装默认手动模式，主开关仍默认关闭。手动模式不依赖 Hook 或任务，时长计时也不随任务重置。Helper 身份校验、首次授权、系统设置入口及恢复流程保持原样；Apple Development 构建已验证后台授权、模式切换与同身份更新；物理合盖仍需实测，公开临时签名构建继续保持禁用。
 
