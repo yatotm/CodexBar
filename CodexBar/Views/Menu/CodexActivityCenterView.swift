@@ -281,7 +281,7 @@ struct CodexActivityCenterView: View {
             isAnonymous: task.isAnonymous,
             detail: taskDetail(task, now: now, isWaiting: isWaiting),
             tokenUsage: task.tokenUsage,
-            effect: isWaiting ? .ionizing(taskID: task.id) : .shimmer
+            effect: isWaiting ? .ionizing(taskID: task.id) : .shimmer(taskID: task.id, event: task.latestEvent, toolName: task.toolName)
         )
     }
 

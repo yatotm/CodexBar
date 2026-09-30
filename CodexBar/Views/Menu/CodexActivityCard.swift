@@ -339,7 +339,7 @@ struct CodexActivityCard: View {
     private var statusTextEffect: CodexActivityStatusText.Effect {
         guard allowsAnimations else { return .none }
         switch snapshot.primaryActivity {
-        case .running: return .shimmer
+        case let .running(task): return .shimmer(taskID: task.id, event: task.latestEvent, toolName: task.toolName)
         case let .waiting(task): return .ionizing(taskID: task.id)
         case .completed, .terminated, .idle: return .none
         }
@@ -359,7 +359,7 @@ private struct RotatingKeepAliveSun: View {
     var body: some View {
         Image(systemName: "sun.max.fill")
             .rotationEffect(.degrees(isRotating ? 360 : 0))
-            .animation(.linear(duration: 2).repeatForever(autoreverses: false), value: isRotating)
+            .animation(.linear(duration: 2), value: isRotating)
             .onAppear { isRotating = true }
     }
 }

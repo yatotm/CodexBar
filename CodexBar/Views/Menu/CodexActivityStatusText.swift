@@ -1,39 +1,44 @@
+import AppKit
+import Combine
 import SwiftUI
 
 struct CodexActivityStatusText: View {
     enum Effect: Equatable {
         case none
-        case shimmer
+        case shimmer(taskID: UUID, event: CodexActivityEvent, toolName: String?)
         case ionizing(taskID: UUID)
     }
 
     let text: String
     let tint: Color
     let effect: Effect
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isInViewport = true
+
+    private var visibleEffect: Effect {
+        reduceMotion || !isInViewport ? .none : effect
+    }
 
     var body: some View {
         Text(text)
             .foregroundStyle(tint)
             .overlay {
-                if effect == .shimmer {
-                    ActivityStatusShimmer()
-                        .mask {
-                            Text(text)
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                        }
+                if case .shimmer = visibleEffect {
+                    ActivityStatusShimmer(text: text, phase: visibleEffect)
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
             }
             .font(.caption2)
             .lineLimit(1)
             .truncationMode(.tail)
             .anchorPreference(key: ActivityIonizationSourceKey.self, value: .bounds) { bounds in
-                if case let .ionizing(taskID) = effect {
+                if case let .ionizing(taskID) = visibleEffect {
                     return [ActivityIonizationSource(taskID: taskID, bounds: bounds)]
                 }
                 return []
             }
+            .onScrollVisibilityChange(threshold: 0.01) { isInViewport = $0 }
     }
 }
 
@@ -97,9 +102,27 @@ private struct ActivityIonizationSourceKey: PreferenceKey {
 private struct ActivityIonizationParticles: View {
     let emitters: [ActivityIonizationEmitter]
     @State private var startedAt = Date()
+    @State private var isPlaying = true
 
     var body: some View {
         // 面板共用一条粒子时间线, 发射源为空时由宿主移除; 不受任务行和滚动容器裁剪
+        Group {
+            if isPlaying {
+                particles
+            }
+        }
+        .task(id: emitters.map(\.seed).sorted()) {
+            startedAt = Date()
+            isPlaying = true
+            do {
+                try await Task.sleep(for: .seconds(3))
+                try Task.checkCancellation()
+                isPlaying = false
+            } catch {}
+        }
+    }
+
+    private var particles: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
             let elapsed = timeline.date.timeIntervalSince(startedAt)
             Canvas { context, _ in
@@ -134,25 +157,164 @@ private enum ActivityIonizationNoise {
     }
 }
 
-private struct ActivityStatusShimmer: View {
-    @State private var startedAt = Date()
+private struct ActivityStatusShimmer: NSViewRepresentable {
+    let text: String
+    let phase: CodexActivityStatusText.Effect
 
-    var body: some View {
-        // 动画只覆盖文字的绘制区域, 不参与排版; 隐藏时移除整个时间线
-        GeometryReader { geometry in
-            TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
-                let elapsed = timeline.date.timeIntervalSince(startedAt)
-                let progress = elapsed.truncatingRemainder(dividingBy: 2.2) / 2.2
-                let width = geometry.size.width * 0.4
+    func makeNSView(context _: Context) -> ActivityStatusShimmerView {
+        ActivityStatusShimmerView()
+    }
 
-                LinearGradient(
-                    colors: [.clear, .white, .clear],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: width)
-                .offset(x: (geometry.size.width + width) * progress - width)
-            }
+    func updateNSView(_ view: ActivityStatusShimmerView, context _: Context) {
+        view.update(text: text, phase: phase)
+    }
+
+    static func dismantleNSView(_ view: ActivityStatusShimmerView, coordinator _: ()) {
+        view.stop()
+    }
+}
+
+/// 文字遮罩仅在内容或尺寸变化时重建, 扫光由合成器移动独立的小图层
+final class ActivityStatusShimmerView: NSView {
+    private let maskedLayer = CALayer()
+    private let textMask = CALayer()
+    private let gradient = CAGradientLayer()
+    private var windowObservation: AnyCancellable?
+    private var text = ""
+    private var phase: CodexActivityStatusText.Effect?
+    private var renderedMask: MaskKey?
+    private var animationStartedAt: CFTimeInterval?
+
+    private struct MaskKey: Equatable {
+        let text: String
+        let size: CGSize
+        let scale: CGFloat
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        layer?.addSublayer(maskedLayer)
+        maskedLayer.mask = textMask
+        maskedLayer.addSublayer(gradient)
+        gradient.colors = [NSColor.clear.cgColor, NSColor.white.cgColor, NSColor.clear.cgColor]
+        gradient.startPoint = CGPoint(x: 0, y: 0.5)
+        gradient.endPoint = CGPoint(x: 1, y: 0.5)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    override func hitTest(_: NSPoint) -> NSView? {
+        nil
+    }
+
+    func update(text: String, phase: CodexActivityStatusText.Effect) {
+        if self.phase != phase {
+            stop()
+            self.phase = phase
         }
+        self.text = text
+        refreshAnimation()
+    }
+
+    override func layout() {
+        super.layout()
+        refreshAnimation()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        windowObservation = nil
+        if let window {
+            windowObservation = NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: window)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated { self?.refreshAnimation() }
+                }
+        }
+        refreshAnimation()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        refreshAnimation()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        refreshAnimation()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        refreshAnimation()
+    }
+
+    func stop() {
+        gradient.removeAnimation(forKey: "sweep")
+        maskedLayer.isHidden = true
+        animationStartedAt = nil
+    }
+
+    private func refreshAnimation() {
+        updateAnimation(isVisible: window?.occlusionState.contains(.visible) == true
+            && !isHiddenOrHasHiddenAncestor && !visibleRect.isEmpty)
+    }
+
+    func updateAnimation(isVisible: Bool, now: CFTimeInterval = CACurrentMediaTime()) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        guard isVisible, !text.isEmpty, bounds.width > 0, bounds.height > 0 else {
+            stop()
+            return
+        }
+        // 经过时间和 Token 更新不能重播已结束的扫光, 新阶段或重新显示时才重置
+        if let animationStartedAt, now - animationStartedAt >= 4.4 {
+            gradient.removeAnimation(forKey: "sweep")
+            maskedLayer.isHidden = true
+            return
+        }
+
+        let key = MaskKey(text: text, size: bounds.size, scale: window?.backingScaleFactor ?? 1)
+        if renderedMask != key {
+            let renderer = ImageRenderer(content: Text(text)
+                .font(.caption2)
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(width: key.size.width, height: key.size.height, alignment: .leading))
+            renderer.scale = key.scale
+            guard let image = renderer.cgImage else {
+                stop()
+                return
+            }
+            if renderedMask?.size != key.size {
+                gradient.removeAnimation(forKey: "sweep")
+            }
+            renderedMask = key
+            maskedLayer.frame = bounds
+            textMask.frame = maskedLayer.bounds
+            textMask.contentsScale = key.scale
+            textMask.contents = image
+            gradient.frame = CGRect(x: 0, y: 0, width: bounds.width * 0.4, height: bounds.height)
+            gradient.transform = CATransform3DMakeTranslation(bounds.width, 0, 0)
+        }
+
+        maskedLayer.isHidden = false
+        guard gradient.animation(forKey: "sweep") == nil else { return }
+        let animation = CABasicAnimation(keyPath: "transform.translation.x")
+        animation.fromValue = -gradient.bounds.width
+        animation.toValue = bounds.width
+        animation.duration = 2.2
+        animation.repeatCount = 2
+        animation.timingFunction = CAMediaTimingFunction(name: .linear)
+        animation.preferredFrameRateRange = CAFrameRateRange(minimum: 20, maximum: 30, preferred: 30)
+        let start = animationStartedAt ?? now
+        animationStartedAt = start
+        animation.beginTime = gradient.convertTime(start, from: nil)
+        gradient.add(animation, forKey: "sweep")
     }
 }
