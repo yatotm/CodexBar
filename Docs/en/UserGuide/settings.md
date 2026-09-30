@@ -110,3 +110,6 @@ Usage Details opens separate source, refresh, account-history, and valuation con
 ## Task glow
 
 Task glow is optional and off by default. Enable it in Settings > General to show running, approval, completion and termination feedback along the top of each display. It uses combined Codex and Claude activity from local and enabled remote sources, independently of the panel tab. A single preview plays when enabled. The overlay is removed during system sleep, display sleep and user-session switching.
+
+
+Double-click a task-glow color swatch to preview that state. Closing the appearance panel restores live activity. Real completion hints keep their remaining display time while a preview is playing. Data rebuild results now appear in a dialog after the operation finishes.

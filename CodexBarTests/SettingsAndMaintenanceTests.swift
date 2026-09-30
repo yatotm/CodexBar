@@ -8,7 +8,7 @@ struct SettingsAndMaintenanceTests {
         defer { preferences.remove() }
         let settings = TaskGlowSettings(defaults: preferences.defaults)
         var previews = 0
-        let observation = settings.previewRequests.sink { previews += 1 }
+        let observation = settings.previewRequests.sink { _ in previews += 1 }
         defer { observation.cancel() }
         #expect(!settings.isEnabled)
         settings.setEnabled(true)

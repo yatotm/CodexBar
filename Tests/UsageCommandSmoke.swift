@@ -30,6 +30,7 @@ struct UsageCommandSmoke {
         verifyTaskLayoutRestoration()
         verifyScopeIsolation()
         verifyLiveTerminalBoundaries()
+        try verifyRemoteTokenUsage()
         let streamPipe = Pipe()
         try streamPipe.fileHandleForWriting.write(contentsOf: Data("small frame\n".utf8))
         let partial = try ActivityStreamClient.readChunk(from: streamPipe.fileHandleForReading.fileDescriptor)
@@ -63,6 +64,32 @@ struct UsageCommandSmoke {
             preconditionFailure("应拒绝超大响应")
         } catch is UsageCenterError {}
         print("Usage command pipe, timeout, cancellation and size tests passed")
+    }
+
+    static func verifyRemoteTokenUsage() throws {
+        for provider in ["codex", "claude"] {
+            let row = """
+            {"id":"\(String(repeating: "a", count: 64))","provider":"\(provider)","state":"running",
+            "project":"p","startedAt":1,"updatedAt":20,"modelName":"m"}
+            """
+            let legacy = try JSONDecoder().decode(RemoteActivityTask.self, from: Data(row.utf8))
+            precondition(legacy.tokenUsage == nil, "旧采集器缺少用量时不能补成零")
+            var current = legacy
+            current.tokenUsage = CodexTokenUsage(
+                inputTokens: 100, cachedInputTokens: 50, cacheWriteInputTokens: 10,
+                outputTokens: 20, reasoningOutputTokens: nil, totalTokens: 120
+            )
+            let source = UsageSource(id: "remote", name: "remote", address: "remote", includesClaude: true)
+            let merged = ActivityPresentationModel.merge(
+                local: .empty, tasks: [source.id: [current]], states: [source.id: "实时连接"],
+                enabled: [source.id], sources: [source], scope: .all, now: Date(timeIntervalSince1970: 21)
+            )
+            precondition(merged.runningTasks.first?.tokenUsage == current.tokenUsage)
+            precondition(merged.runningTasks.first?.machineName == source.name)
+            let encoded = try JSONEncoder().encode(current.tokenUsage)
+            let decoded = try JSONDecoder().decode(CodexTokenUsage.self, from: encoded)
+            precondition(decoded.isValid && decoded.reasoningOutputTokens == nil)
+        }
     }
 
     static func verifyLiveTerminalBoundaries() {

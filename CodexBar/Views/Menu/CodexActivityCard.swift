@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Hook 开启时常驻的固定高度活动摘要, 使用菜单面板共享的逐秒时间
-/// 在卡片内部观察 activityPresentation 与逐秒时间, 让 1Hz 失效范围只覆盖本卡片而不是整个菜单树
-/// keepAliveController 同理, 它的 helperStatus 等字段与菜单树无关却会无条件发信号
+/// Hook 开启时显示的活动摘要, 使用主面板共享的时间
+/// 活动和防睡眠状态由卡片自行观察, 避免刷新整个菜单树
 struct CodexActivityCard: View {
     @ObservedObject var activityPresentation: ActivityPresentationModel
     @ObservedObject var presentationState: CodexActivityCenterPresentationState
@@ -25,8 +24,7 @@ struct CodexActivityCard: View {
         presentationState.isPresented
     }
 
-    /// 额度数据不可用时卡片整体退到"暂无数据", 徽标属于活动信息, 必须跟着一起收
-    /// 否则会出现"暂无数据"配上防睡眠徽标的自相矛盾画面
+    /// 卡片显示"暂无数据"时一并隐藏防睡眠徽标, 保持状态一致
     private var showsKeepAliveBadge: Bool {
         keepAliveController.isActivelyPreventingSleep && !showsUnavailableState
     }
@@ -40,20 +38,18 @@ struct CodexActivityCard: View {
         }
     }
 
+    // MARK: - 卡片布局
+
     var body: some View {
-        Group {
-            if snapshot.hasTaskCenterContent {
-                Button {
-                    onTaskCenterTap(frameProvider)
-                } label: {
-                    card(now: timelineDate)
-                }
-                .buttonStyle(ActivityCardButtonStyle())
-                .contentShape(Rectangle())
-            } else {
-                card(now: timelineDate)
-            }
+        // 保留同一张卡片的视图身份, 空闲时只禁用交互, 避免打断内容和高度过渡
+        Button {
+            onTaskCenterTap(frameProvider)
+        } label: {
+            card(now: timelineDate)
         }
+        .buttonStyle(ActivityCardButtonStyle())
+        .disabled(!snapshot.hasTaskCenterContent)
+        .contentShape(Rectangle())
         .background {
             ScreenFrameReader(provider: frameProvider)
         }
@@ -62,7 +58,40 @@ struct CodexActivityCard: View {
 
     private func card(now: Date) -> some View {
         let content = content(at: now)
-        return HStack(spacing: 10) {
+        return VStack(alignment: .leading, spacing: 0) {
+            statusRow(content)
+                .frame(height: Metrics.height)
+
+            if let usage = content.tokenUsage {
+                VStack(spacing: 8) {
+                    LiquidGlassDivider()
+                    tokenUsageMetrics(usage)
+                }
+                .frame(height: Metrics.usageHeight - Metrics.height, alignment: .top)
+                .transition(.identity)
+            }
+        }
+        .padding(.horizontal, MenuMetrics.panelPadding)
+        .frame(maxWidth: .infinity)
+        .frame(height: content.tokenUsage == nil ? Metrics.height : Metrics.usageHeight, alignment: .top)
+        .clipped()
+        .activityStatusParticles(cornerRadius: MenuMetrics.panelCornerRadius)
+        .liquidGlassSurface(cornerRadius: MenuMetrics.panelCornerRadius)
+        .overlay {
+            RoundedRectangle(cornerRadius: MenuMetrics.panelCornerRadius, style: .continuous)
+                .strokeBorder(
+                    isTaskCenterPresented
+                        ? Color.accentColor.opacity(0.55)
+                        : Color.primary.opacity(isHovered && snapshot.hasTaskCenterContent ? 0.14 : 0),
+                    lineWidth: 1
+                )
+                .animation(.codexStatus, value: isHovered)
+                .animation(.codexStatus, value: isTaskCenterPresented)
+        }
+    }
+
+    private func statusRow(_ content: ActivityCardContent) -> some View {
+        HStack(spacing: 10) {
             Image(systemName: content.symbolName)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(content.tint)
@@ -76,11 +105,11 @@ struct CodexActivityCard: View {
                     .truncationMode(.middle)
 
                 if let detail = content.detail {
-                    Text(detail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    CodexActivityStatusText(
+                        text: detail,
+                        tint: content.tint,
+                        effect: statusTextEffect
+                    )
                 }
             }
 
@@ -122,23 +151,53 @@ struct CodexActivityCard: View {
         }
         .animation(.codexStatus, value: showsKeepAliveBadge)
         .animation(.codexStatus, value: content.isAnonymous)
-        // 任务数变化会让 +N 增删, 防睡眠徽标跟着横移; 两者一起纳入动画上下文才不会跳
+        // 任务数变化会让 +N 增删, 防睡眠徽标跟着横移; 动画只作用于状态行
         .animation(.codexStatus, value: content.otherTaskCount)
-        .padding(.horizontal, MenuMetrics.panelPadding)
-        .frame(maxWidth: .infinity, minHeight: Metrics.height, maxHeight: Metrics.height)
-        .liquidGlassSurface(cornerRadius: MenuMetrics.panelCornerRadius)
-        .overlay {
-            RoundedRectangle(cornerRadius: MenuMetrics.panelCornerRadius, style: .continuous)
-                .strokeBorder(
-                    isTaskCenterPresented
-                        ? Color.accentColor.opacity(0.55)
-                        : Color.primary.opacity(isHovered && snapshot.hasTaskCenterContent ? 0.14 : 0),
-                    lineWidth: 1
-                )
-                .animation(.codexStatus, value: isHovered)
-                .animation(.codexStatus, value: isTaskCenterPresented)
-        }
     }
+
+    private func tokenUsageMetrics(_ usage: CodexTokenUsage) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            tokenMetric("activity.tokens.total", tokens: usage.totalTokens)
+            tokenMetric("activity.tokens.input", tokens: usage.inputTokens)
+            tokenMetric("activity.tokens.output", tokens: usage.outputTokens)
+            tokenMetric("activity.tokens.cached-input", tokens: usage.cachedInputTokens)
+            tokenMetric("activity.tokens.cache-write-input", tokens: usage.cacheWriteInputTokens)
+            VStack(spacing: 3) {
+                Text("activity.tokens.cache-hit-rate")
+                    .font(.caption2)
+                    .foregroundStyle(Color.codexSecondaryLabel)
+                    .minimumScaleFactor(0.65)
+                Text(usage.cacheHitRate.map { $0.formatted(.percent.precision(.fractionLength(0 ... 1))) } ?? "—")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(Color.codexLabel)
+                    .contentTransition(.numericText(value: usage.cacheHitRate ?? 0))
+            }
+            .frame(minWidth: 0, maxWidth: .infinity)
+            tokenMetric("activity.tokens.reasoning-output", tokens: usage.reasoningOutputTokens)
+        }
+        .lineLimit(1)
+        .animation(.codexStatus, value: usage)
+        .accessibilityElement(children: .combine)
+        .help("已记录主任务及子 Agent 的用量; 输入包含缓存, 推理包含在输出中; 未提供的字段显示 —")
+    }
+
+    private func tokenMetric(_ title: LocalizedStringKey, tokens: Int64?) -> some View {
+        VStack(spacing: 3) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(Color.codexSecondaryLabel)
+                .minimumScaleFactor(0.65)
+            if let tokens {
+                TokenCountText(tokens: Int(clamping: tokens), font: .caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(Color.codexLabel)
+            } else {
+                Text("—").font(.caption2).foregroundStyle(Color.codexSecondaryLabel)
+            }
+        }
+        .frame(minWidth: 0, maxWidth: .infinity)
+    }
+
+    // MARK: - 展示内容
 
     private func content(at now: Date) -> ActivityCardContent {
         switch snapshot.primaryActivity {
@@ -181,7 +240,8 @@ struct CodexActivityCard: View {
                 ),
                 detail: details.joined(separator: " • "),
                 otherTaskCount: 0,
-                isAnonymous: completion.isAnonymous
+                isAnonymous: completion.isAnonymous,
+                tokenUsage: completion.tokenUsage
             )
         case let .terminated(termination):
             let details = CodexActivityDisplayFormat.historyDetailComponents(
@@ -190,7 +250,7 @@ struct CodexActivityCard: View {
             )
             return ActivityCardContent(
                 symbolName: "xmark.circle.fill",
-                tint: .secondary,
+                tint: .red,
                 title: activityTitle(
                     modelName: termination.modelName,
                     effort: termination.effort,
@@ -200,7 +260,8 @@ struct CodexActivityCard: View {
                 ),
                 detail: details.joined(separator: " • "),
                 otherTaskCount: 0,
-                isAnonymous: termination.isAnonymous
+                isAnonymous: termination.isAnonymous,
+                tokenUsage: termination.tokenUsage
             )
         case .idle:
             return ActivityCardContent(
@@ -236,7 +297,8 @@ struct CodexActivityCard: View {
             ),
             detail: details.joined(separator: " • "),
             otherTaskCount: otherTaskCount,
-            isAnonymous: task.isAnonymous
+            isAnonymous: task.isAnonymous,
+            tokenUsage: task.tokenUsage
         )
     }
 
@@ -274,10 +336,22 @@ struct CodexActivityCard: View {
         max(0, snapshot.activeCount - 1)
     }
 
+    private var statusTextEffect: CodexActivityStatusText.Effect {
+        guard allowsAnimations else { return .none }
+        switch snapshot.primaryActivity {
+        case .running: return .shimmer
+        case let .waiting(task): return .ionizing(taskID: task.id)
+        case .completed, .terminated, .idle: return .none
+        }
+    }
+
     private enum Metrics {
         static let height: CGFloat = 58
+        static let usageHeight: CGFloat = 108
     }
 }
+
+// MARK: - 动画
 
 private struct RotatingKeepAliveSun: View {
     @State private var isRotating = false
@@ -290,7 +364,9 @@ private struct RotatingKeepAliveSun: View {
     }
 }
 
-/// 卡片自行处理 hover/选中描边, 按钮样式不再修改 label 的前景色或透明度
+// MARK: - 辅助视图与展示模型
+
+/// 悬停和选中效果由卡片绘制, 按钮样式保留原有颜色和透明度
 private struct ActivityCardButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -304,12 +380,13 @@ private struct ActivityCardContent {
     let detail: String?
     let otherTaskCount: Int
     let isAnonymous: Bool
+    var tokenUsage: CodexTokenUsage?
 }
 
 struct CodexActivityAnonymousIcon: View {
     var body: some View {
         Image(systemName: "person.crop.circle.dashed")
-            // 虚线圆形 symbol 留白较多, 13 pt 与 11 pt 咖啡图标的视觉面积更接近
+            // 虚线圆形 symbol 留白较多, 适当放大以接近相邻状态图标的视觉面积
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(Color.orange)
             .help("activity.anonymous.keep-awake-exclusion")

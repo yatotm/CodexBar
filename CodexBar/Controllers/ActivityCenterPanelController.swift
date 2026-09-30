@@ -7,6 +7,7 @@ import SwiftUI
 final class ActivityCenterPanelController {
     private let activityPresentation: ActivityPresentationModel
     private let presentationState: CodexActivityCenterPresentationState
+    private let mainPanelSettings: MainPanelSettings
     private let contentHost = SidePanelContentHost<CodexActivityCenterView>(
         initialSize: CodexActivityCenterView.initialPanelSize,
         ignoresMouseEvents: false,
@@ -19,7 +20,6 @@ final class ActivityCenterPanelController {
     private var cancellables = Set<AnyCancellable>()
     private var presentationTask: Task<Void, Never>?
     private var panelUpdateTask: Task<Void, Never>?
-    private var panelUpdateGeneration = 0
     private lazy var presenter = SidePanelDrawerPresenter(
         animationKey: Metrics.drawerTransformAnimationKey,
         contentViewProvider: { [weak self] in
@@ -29,10 +29,12 @@ final class ActivityCenterPanelController {
 
     init(
         activityPresentation: ActivityPresentationModel,
-        presentationState: CodexActivityCenterPresentationState
+        presentationState: CodexActivityCenterPresentationState,
+        mainPanelSettings: MainPanelSettings
     ) {
         self.activityPresentation = activityPresentation
         self.presentationState = presentationState
+        self.mainPanelSettings = mainPanelSettings
 
         activityPresentation.$snapshot
             .dropFirst()
@@ -218,7 +220,6 @@ final class ActivityCenterPanelController {
 
     private func schedulePanelUpdate(hasContent: Bool) {
         cancelScheduledPanelUpdate()
-        let generation = panelUpdateGeneration
         panelUpdateTask = Task { @MainActor [weak self] in
             if hasContent {
                 await Task.yield()
@@ -226,8 +227,7 @@ final class ActivityCenterPanelController {
                 try? await Task.sleep(for: .seconds(Metrics.contentUpdateDuration))
             }
 
-            guard let self, !Task.isCancelled,
-                  generation == panelUpdateGeneration else {
+            guard let self, !Task.isCancelled else {
                 return
             }
             let snapshot = activityPresentation.snapshot
@@ -245,7 +245,6 @@ final class ActivityCenterPanelController {
     }
 
     private func cancelScheduledPanelUpdate() {
-        panelUpdateGeneration += 1
         panelUpdateTask?.cancel()
         panelUpdateTask = nil
     }
@@ -254,7 +253,8 @@ final class ActivityCenterPanelController {
         contentHost.updateContent(
             CodexActivityCenterView(
                 activityPresentation: activityPresentation,
-                presentationState: presentationState
+                presentationState: presentationState,
+                mainPanelSettings: mainPanelSettings
             ),
             size: panelSize
         )

@@ -212,6 +212,8 @@ def record(db, payload, provider, now=None):
             db.executemany("INSERT OR IGNORE INTO agents VALUES(?,?)", ((task_id, value) for value in additions))
             details["activeSubagentCount"] = db.execute("SELECT COUNT(*) FROM agents WHERE parent=?", (task_id,)).fetchone()[0]
         old_turn = details.get("turnKey")
+        token_paths = details.get("tokenPaths", [])
+        token_agents = details.get("tokenAgents", [])
         root_turn = identifier(metadata.get("rootTurn"))
         if agent and root_turn and old_turn and root_turn != old_turn:
             return
@@ -290,6 +292,37 @@ def record(db, payload, provider, now=None):
         state = "waiting" if any(provider == "claude" or reviewers.get(key) == "user" for key in waits) else "unknown" if waits else "running"
         has_children = provider == "claude" and db.execute("SELECT 1 FROM agents WHERE parent=? LIMIT 1", (task_id,)).fetchone()
         started = previous[1] if previous and (event != "UserPromptSubmit" or has_children) else now
+        if not previous or started != previous[1]:
+            token_paths = []
+            token_agents = []
+        else:
+            known = {row[0] for row in db.execute("SELECT agent FROM agents WHERE parent=?", (task_id,))}
+            token_agents = sorted(set(token_agents) | known | (set(closed_agents) if provider == "claude" else set()))[:128]
+        if agent and agent not in token_agents and len(token_agents) < 128:
+            token_agents.append(agent)
+        token_path = path
+        if provider == "claude" and agent:
+            token_path = transcript_path({"transcript_path": payload.get("agent_transcript_path")}, provider)
+            raw_agent = payload.get("agent_id")
+            if token_path is None and path and isinstance(raw_agent, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", raw_agent):
+                parent = Path(path)
+                token_path = str(parent.parent / parent.stem / "subagents" / ("agent-" + raw_agent + ".jsonl"))
+        if token_path and token_path not in token_paths and len(token_paths) < 128:
+            token_paths.append(token_path)
+        if provider == "claude":
+            root_path = path if not agent else details.get("transcriptPath")
+            if root_path and len(token_paths) < len(token_agents) + 1:
+                parent = Path(root_path)
+                known = set(token_agents)
+                for index, candidate in enumerate((parent.parent / parent.stem / "subagents").glob("agent-*.jsonl")):
+                    if index >= 2000:
+                        break
+                    if identifier(candidate.stem[6:]) in known:
+                        child_path = transcript_path({"transcript_path": str(candidate)}, provider)
+                        if child_path and child_path not in token_paths and len(token_paths) < 128:
+                            token_paths.append(child_path)
+        details["tokenPaths"] = token_paths
+        details["tokenAgents"] = token_agents
         if previous and (agent or not pid):
             pid, birth = previous[2:4]
         if path and not agent:
@@ -493,15 +526,17 @@ def pending_stop_delay(frame):
     return 1 if any(t.get("eventName") == "Stop" and t["state"] in ("running", "waiting", "unknown") and now - t["updatedAt"] < 10 for t in frame["tasks"]) else 60
 
 
-def snapshot(db):
+def snapshot(db, token_reader=None):
     with db:
         db.execute("BEGIN")
         epoch, revision = db.execute("SELECT epoch,revision FROM meta").fetchone()
         rows = db.execute("SELECT t.id,t.provider,t.state,t.project,t.updated,t.started,m.model,d.payload "
                           "FROM tasks t LEFT JOIN models m ON m.id=t.id LEFT JOIN details d ON d.id=t.id ORDER BY t.updated DESC LIMIT 500").fetchall()
-    return dict(schema=SCHEMA, epoch=epoch, revision=revision, sentAt=time.time(),
-                tasks=[{**dict(zip(("id", "provider", "state", "project", "updatedAt", "startedAt", "modelName"), row[:7])),
-                        **current_details(row[7], row[4])} for row in rows])
+    tasks = [{**dict(zip(("id", "provider", "state", "project", "updatedAt", "startedAt", "modelName"), row[:7])),
+              **current_details(row[7], row[4])} for row in rows]
+    if token_reader is not None:
+        token_reader.enrich(tasks, rows)
+    return dict(schema=SCHEMA, epoch=epoch, revision=revision, sentAt=time.time(), tasks=tasks)
 
 
 def current_details(payload, updated):
@@ -622,6 +657,195 @@ def model_name(payload, provider):
     return model_metadata(payload, provider).get("model")
 
 
+class ActivityTokenReader:
+    """只在现有事件和心跳时增量读取数字, 不写入统计账本或任务状态"""
+    byte_limit = 8 * 1024 * 1024
+    line_limit = 2 * 1024 * 1024
+    fields = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "total_tokens")
+
+    def __init__(self):
+        self.cursors = {}
+        self.rotation = 0
+
+    @staticmethod
+    def valid(usage):
+        if not isinstance(usage, dict):
+            return False
+        values = [usage.get(key) for key in ActivityTokenReader.fields]
+        if any(type(value) is not int or not 0 <= value <= 2**63 - 1 for value in values):
+            return False
+        inp, cached, written, out, total = values
+        reasoning = usage.get("reasoning_output_tokens")
+        return cached + written <= inp and inp + out == total and (
+            reasoning is None or type(reasoning) is int and 0 <= reasoning <= out)
+
+    def enrich(self, tasks, rows):
+        now = time.time()
+        sources = []
+        expected_sources = {}
+        for task, row in zip(tasks, rows):
+            if task["state"] not in ("running", "waiting", "unknown") and now - task["updatedAt"] > 600:
+                continue
+            details = json.loads(row[7]) if row[7] else {}
+            if details.get("observedAt") != task["updatedAt"]:
+                continue
+            paths = details.get("tokenPaths", []) or [details.get("transcriptPath")]
+            expected_agents = max(len(details.get("tokenAgents", [])), details.get("activeSubagentCount") or 0)
+            if len(paths) < expected_agents + 1:
+                continue
+            expected_sources[task["id"]] = len(paths)
+            for path in paths[:128]:
+                if isinstance(path, str):
+                    sources.append((task, details, path))
+        # 同时跟踪的来源有界, 超出预算的任务暂不显示用量
+        sources = sources[:128]
+        retained = {(task["id"], task["startedAt"], path) for task, _, path in sources}
+        self.cursors = {key: value for key, value in self.cursors.items() if key in retained}
+        if not sources:
+            return
+        start = self.rotation % len(sources)
+        self.rotation = start + 1
+        budget = self.byte_limit
+        for task, details, path in sources[start:] + sources[:start]:
+            key = (task["id"], task["startedAt"], path)
+            budget -= self.read(key, task, details, budget)
+        by_task = {}
+        for task, _, path in sources:
+            cursor = self.cursors.get((task["id"], task["startedAt"], path))
+            by_task.setdefault(task["id"], []).append(cursor)
+        for task in tasks:
+            cursors = by_task.get(task["id"], [])
+            if not cursors or len(cursors) != expected_sources.get(task["id"]) or any(not cursor or not cursor["complete"] or cursor["invalid"] for cursor in cursors):
+                continue
+            records = {}
+            for cursor in cursors:
+                for key, value in cursor["records"].items():
+                    if key not in records or value[0] >= records[key][0]:
+                        records[key] = value
+            if not records:
+                continue
+            usages = [value[1] for value in records.values()]
+            total = {field: sum(usage[field] for usage in usages) for field in self.fields}
+            if all(usage.get("reasoning_output_tokens") is not None for usage in usages):
+                total["reasoning_output_tokens"] = sum(usage["reasoning_output_tokens"] for usage in usages)
+            if self.valid(total):
+                task["tokenUsage"] = total
+
+    def read(self, key, task, details, budget):
+        path = key[2]
+        consumed = 0
+        try:
+            with open(path, "rb") as source:
+                stat = os.fstat(source.fileno())
+                cursor = self.cursors.get(key)
+                identity = (stat.st_dev, stat.st_ino)
+                if cursor is None or cursor["identity"] != identity or stat.st_size < cursor["offset"]:
+                    # Codex 提供轮次累计值, 可直接从尾部读取; Claude 需覆盖任务开始时间
+                    offset = max(0, stat.st_size - self.byte_limit)
+                    cursor = dict(identity=identity, offset=offset, lower=offset, partial=b"", skip=offset > 0,
+                                  records={}, invalid=False, covered=offset == 0, complete=False)
+                    self.cursors[key] = cursor
+                if budget <= 0:
+                    cursor["complete"] = cursor["complete"] and cursor["offset"] == stat.st_size
+                    return 0
+                cursor["complete"] = False
+                source.seek(cursor["offset"])
+                data = source.read(min(budget, stat.st_size - cursor["offset"]))
+                consumed += len(data)
+                cursor["offset"] += len(data)
+                data = cursor["partial"] + data
+                lines = data.split(b"\n")
+                cursor["partial"] = lines.pop()
+                if cursor["skip"] and lines:
+                    skipped = lines.pop(0)
+                    cursor["lower"] += len(skipped) + 1
+                    cursor["skip"] = False
+                if len(cursor["partial"]) > self.line_limit:
+                    cursor["partial"] = b""
+                    cursor["skip"] = True
+                    cursor["invalid"] = True
+                for line in lines:
+                    self.consume(line, task, details, cursor)
+                if task["provider"] == "claude" and not cursor["covered"] and consumed < budget:
+                    lower = max(0, cursor["lower"] - (budget - consumed))
+                    source.seek(lower)
+                    history = source.read(cursor["lower"] - lower)
+                    consumed += len(history)
+                    # lower 始终位于行边界, 本轮丢弃的首行由下一轮向前补齐
+                    complete = history.split(b"\n")
+                    if lower > 0:
+                        prefix = complete.pop(0)
+                        lower += len(prefix) + 1
+                    for line in complete[:-1]:
+                        self.consume(line, task, details, cursor)
+                    if lower == cursor["lower"]:
+                        cursor["invalid"] = True
+                    cursor["lower"] = lower
+                    cursor["covered"] = cursor["covered"] or lower == 0
+                cursor["complete"] = cursor["offset"] == stat.st_size and not cursor["partial"] and not cursor["skip"] and (
+                    task["provider"] == "codex" or cursor["covered"])
+        except (OSError, ValueError):
+            if key in self.cursors:
+                self.cursors[key]["complete"] = False
+        return consumed
+
+    def consume(self, line, task, details, cursor):
+        if not line:
+            return
+        if len(line) > self.line_limit:
+            cursor["invalid"] = True
+            return
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                return
+            at = event_time(row.get("timestamp"))
+            if at is None:
+                return
+            if at < task["startedAt"]:
+                cursor["covered"] = True
+            if task["provider"] == "codex":
+                value = row.get("payload")
+                if row.get("type") != "token_usage_record" or not isinstance(value, dict):
+                    return
+                session = value.get("session_id")
+                if not isinstance(session, str) or hashlib.sha256(("codex\0" + session).encode()).hexdigest() != task["id"]:
+                    return
+                if identifier(value.get("root_turn_id")) != details.get("turnKey") or not value.get("response_id"):
+                    return
+                thread, turn = identifier(value.get("thread_id")), identifier(value.get("turn_id"))
+                if not thread or not turn:
+                    return
+                identity = (thread, turn)
+                usage = value.get("turn_token_usage")
+            else:
+                if at < task["startedAt"] or task["state"] in ("completed", "ended") and at > task["updatedAt"] + 2:
+                    return
+                message = row.get("message")
+                if row.get("type") != "assistant" or not isinstance(message, dict) or not isinstance(message.get("usage"), dict):
+                    return
+                identity = identifier(message.get("id"))
+                if not identity:
+                    return
+                raw = message["usage"]
+                names = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")
+                values = [raw.get(name, 0) for name in names]
+                if any(type(value) is not int or value < 0 for value in values):
+                    cursor["invalid"] = True
+                    return
+                inp, cached, written, out = values
+                usage = dict(input_tokens=inp + cached + written, cached_input_tokens=cached,
+                             cache_write_input_tokens=written, output_tokens=out, total_tokens=inp + cached + written + out)
+            if not self.valid(usage) or identity not in cursor["records"] and sum(len(value["records"]) for value in self.cursors.values()) >= 20000:
+                cursor["invalid"] = True
+                return
+            old = cursor["records"].get(identity)
+            if old is None or at >= old[0]:
+                cursor["records"][identity] = (at, {key: value for key, value in usage.items() if key in self.fields or key == "reasoning_output_tokens"})
+        except (ValueError, TypeError, AttributeError):
+            cursor["invalid"] = True
+
+
 class ChangeWatcher:
     def __init__(self, root):
         self.queue = None
@@ -661,6 +885,7 @@ class ChangeWatcher:
 
 def stream(root, db):
     watcher = ChangeWatcher(root)
+    token_reader = ActivityTokenReader()
     try:
         revision = None
         heartbeat = 0.0
@@ -671,7 +896,7 @@ def stream(root, db):
             if now >= next_reconcile:
                 reconcile(db)
                 next_reconcile = now + 60
-            frame = snapshot(db)
+            frame = snapshot(db, token_reader)
             next_reconcile = min(next_reconcile, now + pending_stop_delay(frame))
             if frame["revision"] != revision or now >= heartbeat:
                 data = json.dumps(frame, separators=(",", ":")).encode() + b"\n"

@@ -32,6 +32,7 @@ fi
     CodexBar/Services/Settings/MainPanelSettings.swift \
     CodexBar/Services/Support/AppLog.swift \
     CodexBar/Models/CodexActivityModels.swift \
+    CodexBar/Models/CodexTokenUsage.swift \
     CodexBar/Services/Process/ProcessTermination.swift \
     Tests/UsageCommandSmoke.swift -o "$usage_tmp/command-tests"
 "$usage_tmp/command-tests"
@@ -39,6 +40,7 @@ fi
 "$usage_compiler" "${usage_flags[@]}" \
     Shared/CodexBarHelperXPC.swift \
     CodexBar/Models/CodexActivityModels.swift \
+    CodexBar/Models/CodexTokenUsage.swift \
     CodexBar/Services/KeepAlive/KeepAliveModels.swift \
     CodexBar/Services/KeepAlive/KeepAliveHelperConfiguration.swift \
     Tests/HelperPackageSmoke.swift -o "$usage_tmp/helper-tests"

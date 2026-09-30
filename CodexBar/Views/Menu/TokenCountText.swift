@@ -31,12 +31,28 @@ struct TokenCountText: View {
             }
         } else {
             Text(parts.text)
+                .contentTransition(.numericText(value: Double(tokens)))
         }
     }
 }
 
+struct CodexTokenUsageText: View {
+    let usage: CodexTokenUsage
+
+    var body: some View {
+        HStack(spacing: 3) {
+            TokenCountText(tokens: Int(usage.totalTokens), font: .caption2.monospacedDigit())
+            Text(verbatim: "tokens")
+                .font(.caption2)
+        }
+        .foregroundStyle(.secondary)
+        .fixedSize()
+        .help("已记录主任务与子 Agent: 输入 \(usage.inputTokens.formatted()), 输出 \(usage.outputTokens.formatted()), 缓存读取 \(usage.cachedInputTokens.formatted()), 缓存写入 \(usage.cacheWriteInputTokens.formatted()); 输入包含缓存")
+    }
+}
+
 /// 1K 以下显示完整整数, 1K 起使用 K/M/B
-private enum TokenCountFormatter {
+enum TokenCountFormatter {
     static func parts(from tokens: Int) -> TokenCountParts {
         switch tokens {
         case 1000000000...:

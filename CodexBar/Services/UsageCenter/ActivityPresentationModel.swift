@@ -146,7 +146,7 @@ final class ActivityPresentationModel: ObservableObject {
                     id: id, isAnonymous: false, latestEvent: latestEvent(task),
                     projectName: task.project.isEmpty ? nil : task.project, modelName: model, effort: task.effort, toolName: task.toolName,
                     startedAt: Date(timeIntervalSince1970: task.startedAt), stateChangedAt: task.stateChangedAt.map { Date(timeIntervalSince1970: $0) } ?? updated,
-                    showsPreciseDuration: true, activeSubagentCount: task.activeSubagentCount, machineName: machine
+                    showsPreciseDuration: true, activeSubagentCount: task.activeSubagentCount, machineName: machine, tokenUsage: task.tokenUsage
                 )
                 if (task.isActive && states[source.id] != "实时连接") || task.state == "unknown" {
                     unknown.append(row)
@@ -162,7 +162,7 @@ final class ActivityPresentationModel: ObservableObject {
                             modelName: model,
                             effort: task.effort,
                             completedAt: updated,
-                            duration: task.updatedAt - task.startedAt, machineName: machine
+                            duration: task.updatedAt - task.startedAt, machineName: machine, tokenUsage: task.tokenUsage
                         ))
                     case "ended":
                         terminations.append(.init(
@@ -172,7 +172,7 @@ final class ActivityPresentationModel: ObservableObject {
                             modelName: model,
                             effort: task.effort,
                             terminatedAt: updated,
-                            duration: task.updatedAt - task.startedAt, machineName: machine
+                            duration: task.updatedAt - task.startedAt, machineName: machine, tokenUsage: task.tokenUsage
                         ))
                     default: break
                     }

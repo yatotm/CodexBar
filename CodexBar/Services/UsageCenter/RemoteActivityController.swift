@@ -14,6 +14,7 @@ nonisolated struct RemoteActivityTask: Decodable, Identifiable, Equatable, Senda
     var eventName: String?
     var toolName: String?
     var activeSubagentCount: Int?
+    var tokenUsage: CodexTokenUsage?
 
     var isActive: Bool {
         state == "running" || state == "waiting"
@@ -48,6 +49,7 @@ nonisolated struct RemoteActivityFrame: Decodable, Sendable {
                     && ($0.effort?.count ?? 0) <= 40 && ($0.toolName?.count ?? 0) <= 120 && (0 ... 1000).contains($0.activeSubagentCount ?? 0)
                     && $0.startedAt > 0 && $0.updatedAt >= $0.startedAt
                     && ($0.stateChangedAt.map(\.isFinite) ?? true)
+                    && ($0.tokenUsage?.isValid ?? true)
             }
     }
 }
@@ -210,7 +212,7 @@ nonisolated enum ActivityStreamClient {
                     throw UsageCenterError(message: "实时状态协议无效")
                 }
                 // 同一版本的保活帧只确认连接健康, 不反复刷新整个菜单
-                if lastFrame?.revision != frame.revision {
+                if lastFrame?.revision != frame.revision || lastFrame?.tasks != frame.tasks {
                     await receive(frame)
                 }
                 lastFrame = frame

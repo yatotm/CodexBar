@@ -133,3 +133,10 @@ Back to the [User Guide](README.md)
 ## Fork behavior
 
 The All, Codex, and Claude tabs select the menu scope. Device details start collapsed; refresh and Usage Details remain accessible. Claude quotas use the newest available passive record across configured account-matched devices. Both providers replay quota bars when opening the menu or switching tabs. The separate Usage Center filter does not change the menu scope.
+
+
+### Task tokens and detail effects
+
+The task card shows recorded tokens from the current task and linked subagents. The task center keeps the total beside each status line. Input includes cache reads and writes; missing data stays unavailable, including Claude reasoning tokens when not reported separately. Running text shimmers and approval waits show particles only while the panel is visible and animations are enabled.
+
+Heatmap details separate activity metrics from device-log tokens. The Codex page keeps official account totals, local Hook metrics, and collected device logs clearly labeled; these values are not added together.

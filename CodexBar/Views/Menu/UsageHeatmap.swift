@@ -208,7 +208,7 @@ struct UsageSummaryView: View {
                 alignmentScreenFrame: heatmapScreenFrame,
                 preferredSide: UsageHeatmap.Metrics.preferredDetailSide(for: $0.column),
                 peakTokens: peakTokens,
-                recordedDay: showsWorkflow ? nil : recordedDays[$0.day.id]
+                recordedDay: recordedDays[$0.day.id]
             )
         }
     }
@@ -611,17 +611,17 @@ struct UsageHeatmapDayDetailView: View {
 
     static func panelSize(showsWorkflow: Bool) -> CGSize {
         CGSize(
-            width: Metrics.panelWidth,
+            width: showsWorkflow ? 380 : Metrics.panelWidth,
             height: showsWorkflow ? Metrics.workflowPanelHeight : Metrics.tokenPanelHeight
         )
     }
 
     @ViewBuilder
     private var detailContent: some View {
-        if let day = context.recordedDay {
-            recordedContent(day)
-        } else if context.showsWorkflow {
+        if context.showsWorkflow {
             workflowContent
+        } else if let day = context.recordedDay {
+            recordedContent(day)
         } else {
             tokenOnlyContent
         }
@@ -631,18 +631,56 @@ struct UsageHeatmapDayDetailView: View {
         VStack(alignment: .leading, spacing: Metrics.sectionSpacing) {
             header
             LiquidGlassDivider().opacity(0.72)
-            VStack(alignment: .leading, spacing: Metrics.metricSpacing) {
-                ForEach(Array(recordedRows(day).enumerated()), id: \.offset) { _, row in
-                    metricRowLayout {
-                        metricDot(tint: row.tint)
-                        Text(row.label).foregroundStyle(.secondary)
-                        Spacer(minLength: 8)
-                        Text(row.value).lineLimit(1).minimumScaleFactor(0.65)
-                    }
+            tokenIntensityStrip
+            detailColumns(activity: recordedRows(day), usage: day)
+        }
+        .help("设备日志按 UTC 统计; 输入不含已单列的缓存, 缺失的权限和推理用量显示未知")
+    }
+
+    private func detailColumns(activity: [RecordedMetricRow], usage: UsageDay?) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            metricColumn(context.showsWorkflow ? "本机 Hook" : "任务统计", rows: activity)
+            Rectangle().fill(Color.primary.opacity(0.08)).frame(width: 1)
+            metricColumn("设备日志 Token", rows: tokenRows(usage))
+        }
+        .frame(height: 162)
+    }
+
+    private func metricColumn(_ title: String, rows: [RecordedMetricRow]) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.metricSpacing) {
+            Text(title).font(.caption2.weight(.semibold)).foregroundStyle(Color.codexSecondaryLabel)
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                metricRowLayout {
+                    metricDot(tint: row.tint)
+                    Text(row.label).foregroundStyle(.secondary).fixedSize()
+                    Spacer(minLength: 4)
+                    Text(row.value).foregroundStyle(Color.codexLabel).monospacedDigit()
+                        .lineLimit(1).minimumScaleFactor(0.65)
+                        .contentTransition(.numericText())
                 }
+                .help("\(row.label): \(row.value)")
             }
         }
-        .help("设备日志按 UTC 统计; 主要模型按 Token 排名, 会话包含子会话, 缺少权限事件时显示未知")
+        .frame(minWidth: 0, maxWidth: .infinity)
+    }
+
+    private func tokenRows(_ day: UsageDay?) -> [RecordedMetricRow] {
+        let metrics = day?.metrics
+        func tokens(_ value: Int64?) -> String {
+            value.map { TokenCountFormatter.parts(from: Int(clamping: $0)).text } ?? "未知"
+        }
+        let input = metrics.map { $0.tokens - $0.output }
+        let cacheRate = input.flatMap { total in
+            total > 0 ? Double(metrics?.cacheRead ?? 0) / Double(total) : nil
+        }
+        return [
+            RecordedMetricRow(label: "合计", value: tokens(day?.tokens), tint: .blue),
+            RecordedMetricRow(label: "输入", value: tokens(metrics?.input), tint: .indigo),
+            RecordedMetricRow(label: "输出", value: tokens(metrics?.output), tint: .orange),
+            RecordedMetricRow(label: "缓存读取", value: tokens(metrics?.cacheRead), tint: .green),
+            RecordedMetricRow(label: "缓存写入", value: tokens(metrics?.cacheWrite), tint: .purple),
+            RecordedMetricRow(label: "缓存占比", value: cacheRate.map { $0.formatted(.percent.precision(.fractionLength(0 ... 1))) } ?? "—", tint: .teal)
+        ]
     }
 
     private struct RecordedMetricRow {
@@ -656,9 +694,6 @@ struct UsageHeatmapDayDetailView: View {
         func count(_ value: Int64?) -> String {
             value?.formatted() ?? "未知"
         }
-        let input = (metrics?.tokens ?? 0) - (metrics?.output ?? 0)
-        let cache = input > 0 && (metrics?.cacheRead ?? 0) <= input
-            ? "\(Int(100 * Double(metrics?.cacheRead ?? 0) / Double(input)))%" : "--"
         return [
             RecordedMetricRow(label: "主要模型", value: day.topModel ?? "未知", tint: .cyan),
             RecordedMetricRow(label: "会话总数", value: count(metrics?.sessions), tint: .green),
@@ -666,8 +701,7 @@ struct UsageHeatmapDayDetailView: View {
             RecordedMetricRow(label: "工具调用", value: count(metrics?.tools), tint: .orange),
             RecordedMetricRow(label: "子智能体", value: count(metrics?.subagents), tint: .indigo),
             RecordedMetricRow(label: "上下文压缩", value: count(metrics?.compactions), tint: .purple),
-            RecordedMetricRow(label: "已记录权限请求", value: count((metrics?.permissions ?? 0) > 0 ? metrics?.permissions : nil), tint: .red),
-            RecordedMetricRow(label: "缓存读取占比", value: cache, tint: .blue)
+            RecordedMetricRow(label: "权限请求", value: count((metrics?.permissions ?? 0) > 0 ? metrics?.permissions : nil), tint: .red)
         ]
     }
 
@@ -680,7 +714,7 @@ struct UsageHeatmapDayDetailView: View {
 
             Spacer(minLength: 8)
 
-            if context.recordedDay != nil {
+            if context.recordedDay != nil, !context.showsWorkflow {
                 Text("日志").font(.caption2).foregroundStyle(.tertiary)
             }
 
@@ -691,19 +725,15 @@ struct UsageHeatmapDayDetailView: View {
     private var workflowContent: some View {
         VStack(alignment: .leading, spacing: Metrics.sectionSpacing) {
             header
-
-            LiquidGlassDivider()
-                .opacity(0.72)
-
-            VStack(alignment: .leading, spacing: Metrics.metricSpacing) {
-                tokenIntensityMetricRow
-                mostUsedModelMetricRow
-
-                ForEach(workflowMetricRows) { row in
-                    metricRow(row)
-                }
-            }
+            LiquidGlassDivider().opacity(0.72)
+            tokenIntensityStrip
+            detailColumns(
+                activity: [RecordedMetricRow(label: "主要模型", value: context.day.workflow.mostUsedModel ?? "未知", tint: .cyan)]
+                    + workflowMetricRows.map { RecordedMetricRow(label: $0.label, value: $0.value.formatted(), tint: $0.tint) },
+                usage: context.recordedDay
+            )
         }
+        .help("顶部为官方账号用量; 左侧为本机 Hook, 右侧为已采集设备日志, 两者不相加")
     }
 
     private var tokenOnlyContent: some View {
@@ -727,30 +757,6 @@ struct UsageHeatmapDayDetailView: View {
 
             tokenIntensityStrip
                 .frame(width: Metrics.tokenIntensityStripWidth)
-        }
-    }
-
-    private var tokenIntensityMetricRow: some View {
-        metricRowLayout {
-            tokenIntensityDot
-            Text("usage.heatmap.intensity")
-                .foregroundStyle(.secondary)
-                .frame(width: Metrics.metricLabelWidth, alignment: .leading)
-
-            tokenIntensityStrip
-                .frame(width: Metrics.tokenIntensityStripWidth)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        }
-    }
-
-    private var mostUsedModelMetricRow: some View {
-        metricRowLayout {
-            metricDot(tint: .cyan)
-            Text("usage.heatmap.top-model")
-                .foregroundStyle(.secondary)
-                .frame(width: Metrics.metricLabelWidth, alignment: .leading)
-
-            fittingModelValue(context.day.workflow.mostUsedModel ?? "--")
         }
     }
 
@@ -826,7 +832,7 @@ struct UsageHeatmapDayDetailView: View {
 
     private var tokenText: some View {
         HeatmapTokenText(
-            tokenState: context.recordedDay.map { .available(Int(clamping: $0.tokens)) } ?? context.day.tokenState,
+            tokenState: !context.showsWorkflow ? context.recordedDay.map { .available(Int(clamping: $0.tokens)) } ?? context.day.tokenState : context.day.tokenState,
             font: tokenFont,
             numericWidth: Metrics.tokenMinimumWidth,
             unitWidth: Metrics.tokenUnitWidth
@@ -870,51 +876,9 @@ struct UsageHeatmapDayDetailView: View {
             return Color.blue.opacity(colorScheme == .dark ? 0.14 : 0.10)
         }
 
-        let opacity = colorScheme == .dark ? 0.42 + Double(index) * 0.10 : 0.34 + Double(index) * 0.09
+        let position = Double(index) / Double(Metrics.tokenIntensitySegmentCount - 1)
+        let opacity = colorScheme == .dark ? 0.42 + position * 0.40 : 0.34 + position * 0.36
         return Color.blue.opacity(min(opacity, 0.88))
-    }
-
-    private func metricRow(_ row: WorkflowMetricRow) -> some View {
-        metricRowLayout {
-            metricDot(tint: row.tint)
-            Text(row.label)
-                .foregroundStyle(.secondary)
-                .frame(width: Metrics.metricLabelWidth, alignment: .leading)
-
-            fittingMetricValue("\(row.value)", comparison: Double(row.value))
-        }
-    }
-
-    private func fittingMetricValue(_ value: String, comparison: Double) -> some View {
-        fittingValueContent(value)
-            .contentTransition(.numericText(value: comparison))
-            .layoutPriority(1)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-    }
-
-    private func fittingModelValue(_ value: String) -> some View {
-        fittingValueContent(value)
-            .layoutPriority(1)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-    }
-
-    private func fittingValueContent(_ value: String) -> some View {
-        ViewThatFits(in: .horizontal) {
-            metricValueText(value)
-                .fixedSize(horizontal: true, vertical: false)
-
-            metricValueText(value)
-                .minimumScaleFactor(Metrics.metricValueMinimumScale)
-                .allowsTightening(true)
-        }
-    }
-
-    private func metricValueText(_ value: String) -> some View {
-        Text(value)
-            .foregroundStyle(Color.codexLabel)
-            .fontWeight(.semibold)
-            .monospacedDigit()
-            .lineLimit(1)
     }
 
     private struct WorkflowMetricRow: Identifiable {
@@ -929,7 +893,7 @@ struct UsageHeatmapDayDetailView: View {
 
     private enum Metrics {
         static let panelWidth: CGFloat = 212
-        static let workflowPanelHeight: CGFloat = 208
+        static let workflowPanelHeight: CGFloat = 232
         static let tokenPanelHeight: CGFloat = 84
         static let sectionSpacing: CGFloat = 8
         static let horizontalPadding: CGFloat = 12
@@ -944,7 +908,7 @@ struct UsageHeatmapDayDetailView: View {
         static let metricLabelWidth: CGFloat = 72
         static let metricValueMinimumScale: CGFloat = 0.60
         static let workflowFontSize: CGFloat = 11
-        static let tokenIntensitySegmentCount = 5
+        static let tokenIntensitySegmentCount = 10
         static let tokenIntensitySegmentSpacing: CGFloat = 3
         static let tokenIntensityStripWidth: CGFloat = 74
         static let tokenIntensityStripHeight: CGFloat = 5

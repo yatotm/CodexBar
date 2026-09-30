@@ -801,6 +801,118 @@
         }
       }
     },
+    "activity.tokens.cache-hit-rate" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cache-H"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缓存命中率"
+          }
+        }
+      }
+    },
+    "activity.tokens.cache-write-input" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cache-W"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缓存写入"
+          }
+        }
+      }
+    },
+    "activity.tokens.cached-input" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cached"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缓存命中"
+          }
+        }
+      }
+    },
+    "activity.tokens.input" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Input"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入总计"
+          }
+        }
+      }
+    },
+    "activity.tokens.output" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Output"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输出总计"
+          }
+        }
+      }
+    },
+    "activity.tokens.reasoning-output" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reasoning"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推理输出"
+          }
+        }
+      }
+    },
+    "activity.tokens.total" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Total"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总计"
+          }
+        }
+      }
+    },
     "app.action.quit" : {
       "localizations" : {
         "en" : {
@@ -4945,6 +5057,22 @@
         }
       }
     },
+    "task-glow.color.preview-help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Double-click to preview effect"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "双击预览效果"
+          }
+        }
+      }
+    },
     "task-glow.color.running" : {
       "localizations" : {
         "en" : {
@@ -5462,13 +5590,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recalculate %@ from local Hook events.\nReplace this device's cloud data for those dates during the next sync."
+            "value" : "Recalculate %@ from local Hook events.\nReplace only the local summaries for those dates; keep raw logs and the multi-device usage database."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "将从本机原始 Hook 事件重新统计 %@\n并在下次同步时替换当前设备对应日期的云端数据"
+            "value" : "将从本机原始 Hook 事件重新统计 %@\n仅替换对应日期的本机汇总, 保留原始日志和多机器用量数据库"
           }
         }
       }
@@ -5517,6 +5645,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有可重建的本地数据"
+          }
+        }
+      }
+    },
+    "workflow.rebuild.result.completed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rebuild Complete"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重建完成"
+          }
+        }
+      }
+    },
+    "workflow.rebuild.result.failed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rebuild Failed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重建失败"
           }
         }
       }

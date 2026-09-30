@@ -345,3 +345,6 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 设置窗口的持续动画由 `SettingsWindowAnimationState` 按可见性控制；主面板持续动画同时检查展示状态和用户动画设置，额度入场动画仍独立。Helper 包校验使用后台任务与本地签名验证，临时签名包保留不可用提示，不混同为组件损坏；保持手动防睡眠和已有签名授权行为。
 
 任务流光外观由 `TaskGlowSettings.appearance` 保存，新增键不改写已有开关。设置可用性同时接受本机 Codex Hook 和已启用的远端或 Claude 来源。光带只消费开启后实时到达的终态，恢复快照与延长时长不重放已过期提示；并发任务短提示仍为 3 秒，全部任务结束后的显示时间由外观设置决定。
+
+
+任务 Token 使用现有实时链路，不新增历史库。`CodexTokenUsage` 的输入包含缓存，推理字段可缺失；本机 Codex 读取明确归属的轮次累计，远端采集器只在事件和保活时读取数字。实时协议新增可选 `tokenUsage`，旧端缺失时不填零，数据库与 Hook 聚合 schema 保持不变。主面板保留顶部固定的 AppKit 尺寸动画，不叠加逐帧 SwiftUI 高度动画；流光预览恢复剩余时长，并保留全部机器的实时事件门槛。

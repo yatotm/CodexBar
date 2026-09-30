@@ -42,6 +42,7 @@ nonisolated struct CodexActivityTaskSnapshot: Equatable, Identifiable {
     /// nil 表示 Hook 字段不足, 无法可靠统计; 0 表示已确认当前没有活跃子 Agent
     let activeSubagentCount: Int?
     var machineName: String?
+    var tokenUsage: CodexTokenUsage?
 }
 
 /// 最近确认结束的任务; 完成只表示一轮任务结束, 不代表执行成功
@@ -54,6 +55,7 @@ nonisolated struct CodexActivityCompletion: Equatable, Identifiable {
     let completedAt: Date
     let duration: TimeInterval?
     var machineName: String?
+    var tokenUsage: CodexTokenUsage?
 }
 
 /// 本轮确认的终态和快照一起发布, 历史恢复只发布快照
@@ -91,6 +93,7 @@ nonisolated struct CodexActivityTermination: Equatable, Identifiable {
     let terminatedAt: Date
     let duration: TimeInterval?
     var machineName: String?
+    var tokenUsage: CodexTokenUsage?
 }
 
 /// 实时越过静默阈值时交给通知服务的最小信息, 不包含原始 session 或 turn ID
@@ -205,6 +208,15 @@ nonisolated enum CodexPrimaryActivity: Equatable {
     case completed(CodexActivityCompletion)
     case terminated(CodexActivityTermination)
     case idle
+
+    var tokenUsage: CodexTokenUsage? {
+        switch self {
+        case let .completed(task): task.tokenUsage
+        case let .terminated(task): task.tokenUsage
+        case let .waiting(task), let .running(task): task.tokenUsage
+        case .idle: nil
+        }
+    }
 }
 
 /// 只有 live Hook 或 session 生命周期会发布 transition, bootstrap 永远不会触发历史通知

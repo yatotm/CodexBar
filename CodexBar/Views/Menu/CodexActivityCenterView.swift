@@ -47,6 +47,7 @@ struct CodexActivityCenterPanelContext {
 struct CodexActivityCenterView: View {
     @ObservedObject var activityPresentation: ActivityPresentationModel
     @ObservedObject var presentationState: CodexActivityCenterPresentationState
+    @ObservedObject var mainPanelSettings: MainPanelSettings
 
     var body: some View {
         content(now: presentationState.timelineDate)
@@ -55,6 +56,7 @@ struct CodexActivityCenterView: View {
                 maxHeight: .infinity,
                 alignment: .topLeading
             )
+            .activityStatusParticles(cornerRadius: Metrics.cornerRadius)
             .sidePanelChrome(cornerRadius: Metrics.cornerRadius)
     }
 
@@ -150,6 +152,7 @@ struct CodexActivityCenterView: View {
                 .padding(.vertical, Metrics.verticalPadding)
             }
             .scrollIndicators(.never)
+            .activityStatusParticleViewport()
         }
     }
 
@@ -276,7 +279,9 @@ struct CodexActivityCenterView: View {
             modelName: CodexActivityDisplayFormat.modelMetadata(modelName: task.modelName, effort: task.effort, machineName: task.machineName),
             effort: nil,
             isAnonymous: task.isAnonymous,
-            detail: taskDetail(task, now: now, isWaiting: isWaiting)
+            detail: taskDetail(task, now: now, isWaiting: isWaiting),
+            tokenUsage: task.tokenUsage,
+            effect: isWaiting ? .ionizing(taskID: task.id) : .shimmer
         )
     }
 
@@ -294,7 +299,8 @@ struct CodexActivityCenterView: View {
                     completion.completedAt,
                     now: now
                 )
-            )
+            ),
+            tokenUsage: completion.tokenUsage
         )
     }
 
@@ -312,7 +318,8 @@ struct CodexActivityCenterView: View {
                     termination.terminatedAt,
                     now: now
                 )
-            )
+            ),
+            tokenUsage: termination.tokenUsage
         )
     }
 
@@ -323,7 +330,9 @@ struct CodexActivityCenterView: View {
         modelName: String?,
         effort: String?,
         isAnonymous: Bool,
-        detail: String
+        detail: String,
+        tokenUsage: CodexTokenUsage? = nil,
+        effect: CodexActivityStatusText.Effect = .none
     ) -> some View {
         HStack(alignment: .top, spacing: 9) {
             if isAnonymous {
@@ -343,11 +352,17 @@ struct CodexActivityCenterView: View {
                     effort: effort
                 )
 
-                Text(detail)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                HStack(spacing: 6) {
+                    CodexActivityStatusText(
+                        text: detail,
+                        tint: tint,
+                        effect: presentationState.isPresented && mainPanelSettings.areEntranceAnimationsEnabled ? effect : .none
+                    )
+                    if let tokenUsage {
+                        Spacer(minLength: 0)
+                        CodexTokenUsageText(usage: tokenUsage)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -111,8 +111,9 @@ struct LiquidGlassDivider: View {
                 LinearGradient(
                     colors: [
                         .clear,
-                        .white.opacity(0.36),
-                        .primary.opacity(0.08),
+                        Color(hex: 0x8799AE).opacity(0.3),
+                        Color(hex: 0xE3EBF4).opacity(0.36),
+                        Color(hex: 0xA9B9CB).opacity(0.3),
                         .clear
                     ],
                     startPoint: .leading,
