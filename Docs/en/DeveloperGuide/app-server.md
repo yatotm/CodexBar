@@ -33,12 +33,14 @@ This division lets Settings reuse the same app-server session to read and write 
 
 ## Locating Codex CLI
 
-[`CodexCLIResolver.swift`](../../../CodexBar/Services/CodexCLI/CodexCLIResolver.swift) first searches the process `PATH` for global `codex`, then checks bundled paths:
+[`CodexCLIResolver.swift`](../../../CodexBar/Services/CodexCLI/CodexCLIResolver.swift) first searches the process `PATH` for global `codex`, then checks `ChatGPT.app` and the legacy `Codex.app` name. Within each app, it first reads `entrypoint` from `Contents/Resources/codex-cli/codex-package.json`, relative to the `codex-cli` directory. If no valid executable is found, it falls back to the legacy path:
 
 ```text
 /Applications/ChatGPT.app/Contents/Resources/codex
 /Applications/Codex.app/Contents/Resources/codex
 ```
+
+Manifest reads are limited to 64 KiB, and entrypoints must stay inside the CLI package directory. A `PATH` symlink to a bundled CLI remains a bundled source. Global CLI priority and the user's source selection are preserved.
 
 A menu bar app launched from Finder may lack the complete `PATH` of an interactive shell, so the resolver also adds common installation directories:
 

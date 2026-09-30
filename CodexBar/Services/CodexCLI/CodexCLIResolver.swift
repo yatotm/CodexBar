@@ -89,11 +89,15 @@ nonisolated struct CodexCLIInstallations: Equatable {
 
 /// 解析真实用户环境下的 Codex 可执行文件, 避免使用 Xcode/container 的 HOME
 nonisolated enum CodexCLIResolver {
-    static let bundledExecutablePaths = [
-        "/Applications/ChatGPT.app/Contents/Resources/codex",
-        "/Applications/Codex.app/Contents/Resources/codex"
+    static let bundledResourceURLs = [
+        URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources", isDirectory: true),
+        URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources", isDirectory: true)
     ]
     static let environment = appServerEnvironment()
+
+    private struct PackageManifest: Decodable {
+        let entrypoint: String
+    }
 
     /// 从已解析的安装信息派生命令, 避免重复扫描 PATH
     static func command(
@@ -131,7 +135,13 @@ nonisolated enum CodexCLIResolver {
         return value?.isEmpty == false ? value : nil
     }
 
-    static func resolveInstallations(environment: [String: String] = environment) -> CodexCLIInstallations {
+    static func resolveInstallations(
+        environment: [String: String] = environment,
+        bundledResourceURLs: [URL] = bundledResourceURLs
+    ) -> CodexCLIInstallations {
+        let bundledExecutablePaths = bundledResourceURLs.flatMap { resources in
+            [packageExecutablePath(in: resources), resources.appendingPathComponent("codex").path].compactMap(\.self)
+        }
         let cliPath = findExecutable(named: "codex", environment: environment)
         let cliIsBundled = cliPath.map { path in
             bundledExecutablePaths.contains { pathsAreEquivalent(path, $0) }
@@ -145,6 +155,22 @@ nonisolated enum CodexCLIResolver {
             globalPath: cliIsBundled ? nil : cliPath,
             bundledPath: bundledPath
         )
+    }
+
+    private static func packageExecutablePath(in resources: URL) -> String? {
+        let packageDirectory = resources.appendingPathComponent("codex-cli", isDirectory: true)
+        let manifestURL = packageDirectory.appendingPathComponent("codex-package.json")
+        guard let file = try? FileHandle(forReadingFrom: manifestURL) else { return nil }
+        defer { try? file.close() }
+        guard let data = try? file.read(upToCount: 65537), data.count <= 65536,
+              let manifest = try? JSONDecoder().decode(PackageManifest.self, from: data),
+              !manifest.entrypoint.isEmpty, !manifest.entrypoint.hasPrefix("/") else { return nil }
+        let executable = packageDirectory.appendingPathComponent(manifest.entrypoint).standardizedFileURL
+        let resolved = executable.resolvingSymlinksInPath()
+        // 清单入口必须留在 CLI 包内, 无效入口继续使用旧布局
+        guard resolved.path.hasPrefix(packageDirectory.resolvingSymlinksInPath().path + "/"),
+              (try? resolved.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return nil }
+        return executable.path
     }
 
     private static func appServerEnvironment() -> [String: String] {

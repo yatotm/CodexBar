@@ -5,6 +5,26 @@ struct UsageAnalyticsSmoke {
     static func main() throws {
         let decoder = JSONDecoder()
         let currentPrices = try decoder.decode(UsagePriceBook.self, from: Data(contentsOf: URL(fileURLWithPath: "CodexBar/Resources/UsagePrices.json")))
+        let sol61 = currentPrices.rate(for: "gpt-6.1-sol")!
+        precondition(sol61.input == 2 && sol61.cachedInput == 0.1 && sol61.cacheWrite == 2.5 && sol61.output == 10)
+        precondition(sol61.creditInput == 50 && sol61.creditCachedInput == 2.5 && sol61.creditOutput == 250)
+        precondition(currentPrices.rate(for: "gpt-6-sol")?.cachedInput == 0.2, "新 Sol 的缓存降价不能改写旧 Sol 历史")
+        precondition(currentPrices.rate(for: "gpt-6.1-sol-2026-09-29")?.model == "gpt-6.1-sol")
+        precondition(currentPrices.rate(for: "gpt-6.1-sol-preview") == nil)
+        precondition(currentPrices.rate(for: "gpt-6.2-sol") == nil, "新代际不能套用旧型号价格")
+        let sol61Day = AnalyticsDay(
+            date: "2026-09-30", tokens: .init(input: 3000000, cached: 3000000, output: 3000000),
+            models: [
+                .init(model: "gpt-6-sol", speed: "standard", weight: 305),
+                .init(model: "gpt-6.1-sol", speed: "standard", weight: 302.5),
+                .init(model: "gpt-6.1-sol", speed: "fast", weight: 756.25)
+            ]
+        )
+        let sol61Estimates = UsageModelAllocation.estimate(day: sol61Day, prices: currentPrices)!
+        precondition(sol61Estimates.allSatisfy { $0.tokens == .init(input: 1000000, cached: 1000000, output: 1000000) }, "混合新旧模型及速度模式时各类 Token 必须守恒")
+        precondition(abs(sol61Estimates[1].dollars - 12.1) < 0.000001 && sol61Estimates[1].credits == 302.5)
+        precondition(abs(sol61Estimates[2].dollars - 30.25) < 0.000001 && sol61Estimates[2].credits == 756.25, "Fast 延续订阅额度的估算口径")
+        precondition(UsageModelAllocation.multiplier(model: .init(model: "gpt-6.1-sol", speed: "ultrafast", weight: 1), prices: currentPrices) == nil, "不支持的速度模式不能默认为标准价")
         let newModels = AnalyticsDay(
             date: "2026-09-23", tokens: .init(input: 3000000, cached: 3000000, output: 3000000),
             models: [
