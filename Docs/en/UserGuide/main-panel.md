@@ -137,6 +137,6 @@ The All, Codex, and Claude tabs select the menu scope. Device details start coll
 
 ### Task tokens and detail effects
 
-The task card shows recorded tokens from the current task and linked subagents. The task center keeps the total beside each status line. Input includes cache reads and writes; missing data stays unavailable, including Claude reasoning tokens when not reported separately. Running text briefly sweeps twice when shown or when its phase changes. Approval particles play for three seconds, and the keep-awake icon rotates once. Elapsed-time and token updates do not restart these effects; hidden rows, closed panels, and disabled animations stop status effects. Reduce Motion also disables the text and particle effects.
+The task card shows recorded tokens from the current task and linked subagents. The task center keeps the total beside each status line. Input includes cache reads and writes; missing data stays unavailable, including Claude reasoning tokens when not reported separately. The task area keeps its simple hover outline, number transitions, and list fades. Status text no longer uses shimmer or particle effects.
 
 Heatmap details separate activity metrics from device-log tokens. The Codex page keeps official account totals, local Hook metrics, and collected device logs clearly labeled; these values are not added together.

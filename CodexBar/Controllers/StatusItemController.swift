@@ -33,8 +33,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let taskGlowSettings: TaskGlowSettings
     private lazy var activityCenterPanelController = ActivityCenterPanelController(
         activityPresentation: activityPresentation,
-        presentationState: activityCenterPresentationState,
-        mainPanelSettings: mainPanelSettings
+        presentationState: activityCenterPresentationState
     )
     private var activeMenuSurface = ActiveMenuSurface.none
     private lazy var globalHotKeyController = GlobalHotKeyController { [weak self] in

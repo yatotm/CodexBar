@@ -75,7 +75,6 @@ struct CodexActivityCard: View {
         .frame(maxWidth: .infinity)
         .frame(height: content.tokenUsage == nil ? Metrics.height : Metrics.usageHeight, alignment: .top)
         .clipped()
-        .activityStatusParticles(cornerRadius: MenuMetrics.panelCornerRadius)
         .liquidGlassSurface(cornerRadius: MenuMetrics.panelCornerRadius)
         .overlay {
             RoundedRectangle(cornerRadius: MenuMetrics.panelCornerRadius, style: .continuous)
@@ -105,11 +104,11 @@ struct CodexActivityCard: View {
                     .truncationMode(.middle)
 
                 if let detail = content.detail {
-                    CodexActivityStatusText(
-                        text: detail,
-                        tint: content.tint,
-                        effect: statusTextEffect
-                    )
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
 
@@ -334,15 +333,6 @@ struct CodexActivityCard: View {
 
     private var otherTaskCount: Int {
         max(0, snapshot.activeCount - 1)
-    }
-
-    private var statusTextEffect: CodexActivityStatusText.Effect {
-        guard allowsAnimations else { return .none }
-        switch snapshot.primaryActivity {
-        case let .running(task): return .shimmer(taskID: task.id, event: task.latestEvent, toolName: task.toolName)
-        case let .waiting(task): return .ionizing(taskID: task.id)
-        case .completed, .terminated, .idle: return .none
-        }
     }
 
     private enum Metrics {

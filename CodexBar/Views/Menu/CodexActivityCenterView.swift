@@ -47,7 +47,6 @@ struct CodexActivityCenterPanelContext {
 struct CodexActivityCenterView: View {
     @ObservedObject var activityPresentation: ActivityPresentationModel
     @ObservedObject var presentationState: CodexActivityCenterPresentationState
-    @ObservedObject var mainPanelSettings: MainPanelSettings
 
     var body: some View {
         content(now: presentationState.timelineDate)
@@ -56,7 +55,6 @@ struct CodexActivityCenterView: View {
                 maxHeight: .infinity,
                 alignment: .topLeading
             )
-            .activityStatusParticles(cornerRadius: Metrics.cornerRadius)
             .sidePanelChrome(cornerRadius: Metrics.cornerRadius)
     }
 
@@ -152,7 +150,6 @@ struct CodexActivityCenterView: View {
                 .padding(.vertical, Metrics.verticalPadding)
             }
             .scrollIndicators(.never)
-            .activityStatusParticleViewport()
         }
     }
 
@@ -280,8 +277,7 @@ struct CodexActivityCenterView: View {
             effort: nil,
             isAnonymous: task.isAnonymous,
             detail: taskDetail(task, now: now, isWaiting: isWaiting),
-            tokenUsage: task.tokenUsage,
-            effect: isWaiting ? .ionizing(taskID: task.id) : .shimmer(taskID: task.id, event: task.latestEvent, toolName: task.toolName)
+            tokenUsage: task.tokenUsage
         )
     }
 
@@ -331,8 +327,7 @@ struct CodexActivityCenterView: View {
         effort: String?,
         isAnonymous: Bool,
         detail: String,
-        tokenUsage: CodexTokenUsage? = nil,
-        effect: CodexActivityStatusText.Effect = .none
+        tokenUsage: CodexTokenUsage? = nil
     ) -> some View {
         HStack(alignment: .top, spacing: 9) {
             if isAnonymous {
@@ -353,11 +348,11 @@ struct CodexActivityCenterView: View {
                 )
 
                 HStack(spacing: 6) {
-                    CodexActivityStatusText(
-                        text: detail,
-                        tint: tint,
-                        effect: presentationState.isPresented && mainPanelSettings.areEntranceAnimationsEnabled ? effect : .none
-                    )
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     if let tokenUsage {
                         Spacer(minLength: 0)
                         CodexTokenUsageText(usage: tokenUsage)
