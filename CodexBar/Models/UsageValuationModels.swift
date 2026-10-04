@@ -228,6 +228,7 @@ nonisolated struct UsageAnalyticsPeriod: Identifiable {
     let missingDays: Int
     let unknownModels: [String]
     let unreliable: Bool
+    var logEstimate: UsageLogEstimate?
     var id: Double {
         scheduledEnd.timeIntervalSince1970
     }

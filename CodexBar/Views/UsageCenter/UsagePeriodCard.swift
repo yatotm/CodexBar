@@ -36,7 +36,7 @@ struct UsagePeriodCard<Content: View>: View {
                         .frame(width: 64)
                     VStack(alignment: .trailing, spacing: 3) {
                         Text("预计周限总额≈" + estimate).fontWeight(.semibold)
-                        Text((planTitle.isEmpty ? "" : planTitle + " · ") + (isReference ? "额度参考" : "用量推算"))
+                        Text((planTitle.isEmpty ? "" : planTitle + " · ") + (isReference ? "额度参考" : period.logEstimate == nil ? "用量推算" : "设备日志估算"))
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                     .frame(width: 202, alignment: .trailing)

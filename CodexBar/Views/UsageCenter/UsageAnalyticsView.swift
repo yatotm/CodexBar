@@ -13,7 +13,7 @@ struct UsageAnalyticsView: View {
                     ProgressView().controlSize(.mini)
                 }
                 Menu {
-                    Menu("同账号历史周限来源") {
+                    Menu("同账号设备日志来源") {
                         Text("仅选择 OAuth 历史属于当前账号的设备")
                         Toggle("本机 Mac", isOn: $model.includesLocalHistory)
                         ForEach(model.history.eligibleSources.filter { $0.id != "local" }) { source in
@@ -31,9 +31,9 @@ struct UsageAnalyticsView: View {
                 } label: { Image(systemName: "ellipsis.circle") }
                     .menuIndicator(.hidden).menuStyle(.borderlessButton).frame(width: 24)
                 Button { model.refresh(force: true) } label: { Image(systemName: "arrow.clockwise.circle") }
-                    .buttonStyle(.plain).disabled(model.isRefreshing).help("刷新官方账本")
+                    .buttonStyle(.plain).disabled(model.isRefreshing).help("刷新价值统计")
             }
-            Text("本机 ChatGPT 账号 · 官方 Codex / Work 账本 · 最近 70 天")
+            Text("当前 ChatGPT 账号 · 官方账本优先 · 同账号设备日志兜底")
                 .font(.caption2).foregroundStyle(.secondary)
             if let error = model.error {
                 Text(error).font(.caption2).foregroundStyle(.orange)
@@ -48,7 +48,7 @@ struct UsageAnalyticsView: View {
             ForEach(model.periods.prefix(visibleCount)) { period in
                 UsagePeriodCard(
                     period: period, estimate: weeklyEstimate(period),
-                    isReference: (model.projection(for: period) ?? 0) <= 0 && model.reference(for: period) != .disabled,
+                    isReference: (model.projection(for: period)?.upperBound ?? 0) <= 0 && model.reference(for: period) != .disabled,
                     planTitle: model.planTitle(for: period)
                 ) {
                     periodDetails(period)
@@ -57,7 +57,7 @@ struct UsageAnalyticsView: View {
             if model.periods.count > visibleCount {
                 Button("更多周期") { visibleCount += 8 }.buttonStyle(.plain).font(.caption)
             }
-            Text("按 Quota Compass 混合单价公式估算模型 Token 和金额。Fast 按订阅额度倍率折合, 不代表实际 API 账单; 缓存写入与长上下文未单列。")
+            Text("官方明细按 Quota Compass 公式换算, 缺失时使用设备日志。Fast 按订阅额度倍率折合, 不代表实际 API 账单; 缓存写入与长上下文未单列。")
                 .font(.caption2).foregroundStyle(.secondary)
             if let snapshot = model.snapshot {
                 Text("账本读取 \(snapshot.fetchedAt.formatted(date: .abbreviated, time: .shortened)) · 价格快照 \(model.prices?.asOf ?? "--")")
@@ -70,8 +70,8 @@ struct UsageAnalyticsView: View {
     }
 
     private func weeklyEstimate(_ period: UsageAnalyticsPeriod) -> String {
-        if let value = model.projection(for: period), value > 0 {
-            return value.formatted(.number.precision(.fractionLength(2))) + "$"
+        if let value = model.projection(for: period), value.upperBound > 0 {
+            return rangeText(value) + "$"
         }
         if let range = model.reference(for: period).dollarRange {
             return range.lowerBound.formatted(.number.precision(.fractionLength(0))) + "–"
@@ -80,14 +80,81 @@ struct UsageAnalyticsView: View {
         return "待补齐"
     }
 
+    @ViewBuilder
     private func periodDetails(_ period: UsageAnalyticsPeriod) -> some View {
+        if let estimate = period.logEstimate {
+            logDetails(period, estimate: estimate)
+        } else {
+            officialDetails(period)
+        }
+    }
+
+    private func logDetails(_ period: UsageAnalyticsPeriod, estimate: UsageLogEstimate) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("设备日志估算 · " + estimate.sources.joined(separator: " / "))
+                .fontWeight(.medium).foregroundStyle(.secondary)
+            HStack {
+                value("已记录折合价值", "≈ " + rangeText(estimate.dollars) + "$")
+                value("预计周限总额", "≈ " + weeklyEstimate(period))
+                value("估算 credits", estimate.credits.map { "≈ " + rangeText($0) } ?? "待补齐")
+            }
+            HStack {
+                value("未缓存输入", tokens(estimate.tokens.input))
+                value("输出", tokens(estimate.tokens.output))
+                value("缓存读取", tokens(estimate.tokens.cached))
+            }
+            Text("日志对齐至 \(estimate.valuedThrough.formatted(date: .abbreviated, time: .shortened)), 对应已用 \(estimate.usedPercent.formatted(.number.precision(.fractionLength(1))))% 周限")
+                .foregroundStyle(.secondary)
+            if estimate.unknownSpeedCount > 0 {
+                Text("\(estimate.unknownSpeedCount) 条记录缺少速度设置, 对这部分按标准至 Fast 显示范围")
+                    .foregroundStyle(.secondary)
+            }
+            if estimate.incomplete {
+                Text("部分设备或历史记录尚未补齐, 当前估值可能偏低").foregroundStyle(.orange)
+            }
+            if !estimate.unknownModels.isEmpty {
+                Text("未计价: " + estimate.unknownModels.joined(separator: ", ")).foregroundStyle(.orange)
+            }
+            if period.unreliable || model.planEntries(for: period).count > 1 {
+                Text("周期内额度回落或订阅档位变化, 暂停周限外推").foregroundStyle(.orange)
+            }
+            UsageDisclosure(title: "模型用量明细") {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(estimate.models) { row in
+                        UsageDisclosure(title: row.model + speedTitle(row.speed) + " · ≈ " + rangeText(row.dollars) + "$") {
+                            HStack {
+                                value("未缓存输入", tokens(row.tokens.input))
+                                value("输出", tokens(row.tokens.output))
+                                value("缓存读取", tokens(row.tokens.cached))
+                            }
+                        }
+                    }
+                }
+            }
+            Text("按已记录的模型和速度比例外推。纯云端任务可能未包含; 官方明细补齐后替换本估算, 不重复累计。")
+                .foregroundStyle(.secondary)
+        }.font(.caption2)
+    }
+
+    private func speedTitle(_ speed: String?) -> String {
+        guard let speed else { return " · 速度未记录" }
+        return speed == "standard" ? "" : " · " + speed
+    }
+
+    private func rangeText(_ range: ClosedRange<Double>) -> String {
+        let lower = range.lowerBound.formatted(.number.precision(.fractionLength(2)))
+        let upper = range.upperBound.formatted(.number.precision(.fractionLength(2)))
+        return lower == upper ? lower : lower + "–" + upper
+    }
+
+    private func officialDetails(_ period: UsageAnalyticsPeriod) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 value(period.missingDays > 0 || !period.unknownModels.isEmpty ? "已记录部分价值" : "区间折合价值", dollars(period.dollars))
                 value("预计周限总额", "≈ " + weeklyEstimate(period))
                 value("估算 credits", period.credits.map { "≈ " + $0.formatted(.number.precision(.fractionLength(1))) } ?? "待补齐")
             }
-            if (model.projection(for: period) ?? 0) <= 0, model.reference(for: period) != .disabled {
+            if (model.projection(for: period)?.upperBound ?? 0) <= 0, model.reference(for: period) != .disabled {
                 Text("周限总额采用 \(model.reference(for: period).title) 的参考范围, 按 25 credits = 1 美元换算。它是所选档位的经验值, 不代表该历史区间已被完整测量。")
                     .foregroundStyle(.secondary)
             }

@@ -18,6 +18,7 @@ fi
 "$usage_compiler" "${usage_flags[@]}" \
     CodexBar/Models/UsageCenterModels.swift \
     CodexBar/Models/UsageValuationModels.swift \
+    CodexBar/Models/UsageTokenHistoryModels.swift \
     CodexBar/Services/UsageCenter/UsageCenterStore.swift \
     Tests/UsageCenterSmoke.swift -o "$usage_tmp/store-tests"
 "$usage_tmp/store-tests"
@@ -25,6 +26,7 @@ fi
 "$usage_compiler" "${usage_flags[@]}" \
     CodexBar/Models/UsageCenterModels.swift \
     CodexBar/Models/UsageValuationModels.swift \
+    CodexBar/Models/UsageTokenHistoryModels.swift \
     CodexBar/Services/UsageCenter/UsageCenterStore.swift \
     CodexBar/Services/UsageCenter/UsageCollectorClient.swift \
     CodexBar/Services/UsageCenter/RemoteActivityController.swift \
@@ -49,10 +51,13 @@ fi
 "$usage_compiler" "${usage_flags[@]}" \
     CodexBar/Models/UsageCenterModels.swift \
     CodexBar/Models/UsageValuationModels.swift \
+    CodexBar/Models/UsageTokenHistoryModels.swift \
     CodexBar/Services/UsageCenter/UsageCenterStore.swift \
     CodexBar/Services/UsageCenter/UsageAnalyticsParser.swift \
     CodexBar/Services/UsageCenter/UsageAnalyticsValuation.swift \
+    CodexBar/Services/UsageCenter/UsageLogValuation.swift \
     CodexBar/Services/UsageCenter/UsageModelAllocation.swift \
+    Tests/UsageLogValuationSmoke.swift \
     Tests/UsageAnalyticsSmoke.swift -o "$usage_tmp/analytics-tests"
 "$usage_tmp/analytics-tests"
 

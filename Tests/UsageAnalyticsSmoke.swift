@@ -5,6 +5,7 @@ struct UsageAnalyticsSmoke {
     static func main() throws {
         let decoder = JSONDecoder()
         let currentPrices = try decoder.decode(UsagePriceBook.self, from: Data(contentsOf: URL(fileURLWithPath: "CodexBar/Resources/UsagePrices.json")))
+        UsageLogValuationSmoke.run(prices: currentPrices)
         let sol61 = currentPrices.rate(for: "gpt-6.1-sol")!
         precondition(sol61.input == 2 && sol61.cachedInput == 0.1 && sol61.cacheWrite == 2.5 && sol61.output == 10)
         precondition(sol61.creditInput == 50 && sol61.creditCachedInput == 2.5 && sol61.creditOutput == 250)

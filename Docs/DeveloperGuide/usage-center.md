@@ -87,6 +87,12 @@ Mac 后台任务单轮分页和回填有上限，取消与超时会终止本轮�
 
 接口维护时先保存脱敏结构说明，补充合成 fixture，验证缺失日、零额度、提前重置、账号切换和未知模型。不要把真实凭据或完整个人响应写入测试仓库。`Tests/UsageAnalyticsLive.swift` 是手动联网诊断，默认测试脚本不运行它。
 
+`token-history` 使用独立的 `token-value-v1.sqlite`，保留最近 70 天的逐请求计价证据。原数据库、设置键、Hook 聚合和采集协议不变。Mac 经既有本机或 SSH 通道每十五分钟按需增量扫描，不新增常驻进程。缓存位于 `UsageTokenHistory`，账号和来源配置参与隔离；取消、睡眠和来源停用沿用历史采集控制器。
+
+逐请求记录优先使用 `token_usage_record`，旧格式按累计量求差，缓存输入从输入总数中扣出。`thread_settings_applied.thread_settings.service_tier` 记录速度切换，`priority` 对应 Fast，`default` 和明确的空值对应标准模式，缺失值保持未知。API 模式和提供商切换清除旧身份；无显式登录模式的请求需要对应订阅额度回执，账号不符的记录不导出。只传输哈希请求标识、时间、模型、速度和 Token 数，不传输鉴权或会话内容。
+
+`UsageLogValuation` 在后台对同周期请求去重并计价。官方日明细缺失、无法计价或少于明确的设备用量时，整段使用日志估算；官方补齐后整段切回，禁止两份金额相加。估值时间与额度观察对齐，未记录速度的部分按标准至 Fast 计算范围。身份不明、回填未完成、设备过旧和截断证据会标记不完整；单源最多导出最近 20,000 条，不能把截断当作完整历史。请求证据冲突或周期内额度回落时停止外推。
+
 Apple 对弹窗尺寸动画的说明见 [NSPopover.contentSize](https://developer.apple.com/documentation/appkit/nspopover/contentsize)
 
 周额度参考是独立的账号设置键 `UsageAnalytics.quotaReference.<account-hash>`，默认禁用，可选 Pro 5x 或 Pro 20x。只在没有正数外推结果时补充所选经验范围，界面必须区别 `用量推算` 和 `额度参考`，不改变官方缓存或历史记录。

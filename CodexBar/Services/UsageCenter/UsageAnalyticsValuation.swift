@@ -92,17 +92,25 @@ nonisolated enum UsageAnalyticsValuation {
         let end: Double
     }
 
-    static func periods(snapshot: UsageAnalyticsSnapshot, prices: UsagePriceBook, now: Date = Date(), sourceWindows: [UsageObservedWindow] = []) -> [UsageAnalyticsPeriod] {
-        let windows = settledWindows(snapshot.windows + sourceWindows, acrossSources: !sourceWindows.isEmpty)
-        let cutoff = min(now.timeIntervalSince1970, snapshot.fetchedAt.timeIntervalSince1970)
-        let contexts = windows.enumerated().map { index, window in
+    private static func periodWindows(_ source: [UsageObservedWindow], acrossSources: Bool) -> [PeriodWindow] {
+        let windows = settledWindows(source, acrossSources: acrossSources)
+        return windows.enumerated().map { index, window in
             let next = windows.indices.contains(index + 1) ? windows[index + 1].resetsAt - 604800 : window.resetsAt
             return PeriodWindow(window: window, start: window.resetsAt - 604800, end: min(window.resetsAt, next))
         }
+    }
+
+    static func periods(
+        snapshot: UsageAnalyticsSnapshot, prices: UsagePriceBook, now: Date = Date(), sourceWindows: [UsageObservedWindow] = [],
+        tokenSources: [UsageTokenSource] = [], expectedTokenSources: Int = 0
+    ) -> [UsageAnalyticsPeriod] {
+        let cutoff = min(now.timeIntervalSince1970, snapshot.fetchedAt.timeIntervalSince1970)
+        let contexts = periodWindows(snapshot.windows + sourceWindows, acrossSources: !sourceWindows.isEmpty)
         let days = indexedDays(snapshot.days)
         let estimates = days.mapValues { UsageModelAllocation.estimate(day: $0, prices: prices) }
+        let officialDays = days.filter { key, day in (day.tokens?.total ?? 0) > 0 && (estimates[key] ?? nil) != nil }.compactMapValues(\.tokens)
         return contexts.compactMap { context -> UsageAnalyticsPeriod? in
-            guard !Task<Never, Never>.isCancelled, context.start < cutoff, context.end > context.start,
+            guard !Task<Never, Never>.isCancelled, context.start < now.timeIntervalSince1970, context.end > context.start,
                   context.end > (dayDate(snapshot.queryStart)?.timeIntervalSince1970 ?? 0) else { return nil }
             var models: [String: UsageModelEstimate] = [:]
             var tokens = AnalyticsTokens.zero
@@ -155,22 +163,26 @@ nonisolated enum UsageAnalyticsValuation {
             }
             let rows = models.values.sorted { $0.dollars > $1.dollars }
             let hasUnpricedData = missing > 0 || !unknown.isEmpty
-            let dollars = rows.isEmpty && hasUnpricedData ? nil : rows.reduce(0) { $0 + $1.dollars }
-            let credits = !rows.isEmpty && rows.allSatisfy { $0.credits != nil }
-                ? rows.reduce(0) { $0 + ($1.credits ?? 0) } : nil
             let used = consumption(context, at: min(context.end, cutoff))
+            let dollars = rows.isEmpty && (hasUnpricedData || used > 0 || context.window.lastUsed > 0) ? nil : rows.reduce(0) { $0 + $1.dollars }
+            let credits = !rows.isEmpty && rows.allSatisfy { $0.credits != nil } ? rows.reduce(0) { $0 + ($1.credits ?? 0) } : nil
             let pricedWeight = rows.reduce(0) { $0 + $1.weight }
             let coverage = hasUnpricedData && totalWeight > 0 ? min(1, pricedWeight / totalWeight) : 1
             let samplePercent = used * coverage
-            let projected = !context.window.decreased && samplePercent > 0 ? dollars.map { $0 * 100 / samplePercent } : nil
-            return UsageAnalyticsPeriod(
+            var period = UsageAnalyticsPeriod(
                 start: Date(timeIntervalSince1970: context.start), end: Date(timeIntervalSince1970: context.end),
                 scheduledEnd: Date(timeIntervalSince1970: context.window.resetsAt), usedPercent: context.window.lastUsed,
                 valuedPercent: used, samplePercent: samplePercent, valuedThrough: Date(timeIntervalSince1970: min(context.end, cutoff)),
-                tokens: tokens, dollars: dollars, projected: projected, credits: credits, models: rows,
+                tokens: tokens, dollars: dollars, projected: !context.window.decreased && samplePercent > 0 ? dollars.map { $0 * 100 / samplePercent } : nil,
+                credits: credits, models: rows,
                 boundaryDays: boundaries, timeAllocatedDays: timeAllocated, missingDays: missing,
                 unknownModels: unknown.sorted(), unreliable: context.window.decreased
             )
+            period.logEstimate = UsageLogValuation.estimate(
+                context: context, officialDays: officialDays, needsFallback: hasUnpricedData || (dollars ?? 0) <= 0,
+                prices: prices, sources: tokenSources, expectedSources: expectedTokenSources, now: now
+            )
+            return period
         }.reversed()
     }
 
@@ -183,7 +195,7 @@ nonisolated enum UsageAnalyticsValuation {
         return Dictionary(values, uniquingKeysWith: { _, last in last })
     }
 
-    private static func consumption(_ context: PeriodWindow, at time: Double) -> Double {
+    static func consumption(_ context: PeriodWindow, at time: Double) -> Double {
         let points = context.window.observations.filter { $0.at >= context.start && $0.at <= context.end }
         var previous = UsageQuotaPoint(at: context.start, used: 0)
         for point in points {

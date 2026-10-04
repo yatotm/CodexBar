@@ -294,6 +294,29 @@ actor UsageCollectorClient {
         _ = try await runCollector(source: source, arguments: arguments)
     }
 
+    func fetchTokenHistory(source: UsageSource, account: String, scan: Bool) async throws -> UsageSourceTokenEvidence {
+        guard source.transport != .https, source.includesCodex, source.validationError == nil,
+              account.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else {
+            throw UsageCenterError(message: "日志估算需要已确认同账号的本机或 SSH 来源")
+        }
+        var arguments = ["token-history", "--budget", "10", "--account-key", account]
+        if !scan {
+            arguments.append("--skip-scan")
+        }
+        for (flag, path) in [
+            ("--codex-home", source.codexHome), ("--claude-home", source.claudeHome),
+            ("--state-dir", source.collectorCacheDirectory ?? "")
+        ] where !path.isEmpty {
+            arguments += [flag, path]
+        }
+        let data = try await runCollector(source: source, arguments: arguments)
+        guard let value = try? JSONDecoder().decode(UsageSourceTokenEvidence.self, from: data), value.isValid else {
+            throw UsageCenterError(message: "设备 Token 历史格式无效")
+        }
+        guard value.matches(account) else { throw UsageCenterError(message: "当前 OAuth 账号与 Mac 不同, 未合并该来源") }
+        return value
+    }
+
     private func runCollector(source: UsageSource, arguments: [String]) async throws -> Data {
         guard let script = Bundle.main.url(forResource: "UsageCollector", withExtension: "py") else {
             throw UsageCenterError(message: "App 包内缺少统计采集器")

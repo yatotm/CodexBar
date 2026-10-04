@@ -121,7 +121,6 @@ final class UsageAnalyticsViewModel: ObservableObject {
                 if let pendingQuota {
                     observe(pendingQuota)
                 }
-                history.refresh()
             } catch {
                 if !Task.isCancelled {
                     let currentKey = try? await client.accountKey()
@@ -131,6 +130,9 @@ final class UsageAnalyticsViewModel: ObservableObject {
                     }
                     self.error = (error as? UsageCenterError)?.message ?? "官方分析暂不可用或响应格式已变化, 保留上次有效数据"
                 }
+            }
+            if !Task.isCancelled, snapshot?.accountKey == activeAccountKey {
+                history.refresh(force: force)
             }
         }
     }
@@ -185,9 +187,13 @@ final class UsageAnalyticsViewModel: ObservableObject {
         return names.joined(separator: " → ")
     }
 
-    func projection(for period: UsageAnalyticsPeriod) -> Double? {
+    func projection(for period: UsageAnalyticsPeriod) -> ClosedRange<Double>? {
         let plans = Set(planEntries(for: period).map(\.plan))
-        return plans.count > 1 ? nil : period.projected
+        guard plans.count <= 1 else { return nil }
+        if let estimate = period.logEstimate {
+            return estimate.projected
+        }
+        return period.projected.map { $0 ... $0 }
     }
 
     func planEntries(for period: UsageAnalyticsPeriod) -> [UsagePlanObservation] {
@@ -204,8 +210,18 @@ final class UsageAnalyticsViewModel: ObservableObject {
         calculation?.cancel()
         guard let snapshot, let prices else { return }
         let sourceWindows = history.accountKey == snapshot.accountKey ? history.windows : []
+        let tokenSources = history.accountKey == snapshot.accountKey ? history.tokenSources : []
+        let expectedSources = history.selectedSourceCount
         calculation = Task { [weak self] in
-            let work = Task.detached(priority: .utility) { UsageAnalyticsValuation.periods(snapshot: snapshot, prices: prices, sourceWindows: sourceWindows) }
+            let work = Task.detached(priority: .utility) {
+                UsageAnalyticsValuation.periods(
+                    snapshot: snapshot,
+                    prices: prices,
+                    sourceWindows: sourceWindows,
+                    tokenSources: tokenSources,
+                    expectedTokenSources: expectedSources
+                )
+            }
             let value = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
             guard !Task.isCancelled else { return }
             self?.periods = value

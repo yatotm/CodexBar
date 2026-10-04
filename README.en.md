@@ -71,7 +71,7 @@ CodexBar is a macOS 15+ menu bar app for Codex quotas and task status, plus Code
 - Use optional Linux timers or a Docker/HTTPS collector; VPS collection continues while the Mac sleeps
 - Read existing Claude quota caches without sending additional Anthropic requests
 - Continue closed-lid work on an awake external or virtual display; pause during system sleep or when no external display is working
-- Estimate subscription value from official account analytics and account-matched quota history, including early resets and plan changes
+- Estimate subscription value from official analytics, falling back to account-matched device logs when daily data is delayed; handle early resets and plan changes
 
 The new Usage Center currently uses Chinese. See the [usage guide](Docs/UserGuide/usage-center.md) and [Linux collector guide](Collector/README.md) for setup and data boundaries. Estimates are not billing statements.
 

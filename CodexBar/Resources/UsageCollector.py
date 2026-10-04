@@ -697,6 +697,145 @@ def codex_account_key(home):
         return None
 
 
+class TokenValueHistory(ValuationLedger):
+    """独立的逐请求计价证据, 不改写设备统计与额度历史"""
+
+    filename = "token-value-v1.sqlite"
+    max_records = 20000
+
+    def __init__(self, directory, home, budget, read_only=False):
+        super().__init__(directory, home, budget, self.filename, read_only)
+        self.cutoff = time.time() - 70 * 86400
+        if not read_only:
+            self.connection.executescript("""
+                CREATE TABLE IF NOT EXISTS usage (
+                    id TEXT PRIMARY KEY,at REAL,model TEXT,speed TEXT,input INTEGER,cached INTEGER,output INTEGER,
+                    auth TEXT,account TEXT);
+                CREATE INDEX IF NOT EXISTS usage_at ON usage(at);
+                CREATE TABLE IF NOT EXISTS token_state(key TEXT PRIMARY KEY,value TEXT);
+            """)
+        metadata = dict(self.connection.execute("SELECT key,value FROM token_state"))
+        self.complete = metadata.get("complete") == "true"
+        self.scanned_at = float(metadata.get("scannedAt", 0))
+
+    def scan_file(self, path):
+        try:
+            if path.stat().st_mtime < self.cutoff:
+                return
+        except OSError:
+            self.complete = False
+            return
+        super().scan_file(path)
+
+    @staticmethod
+    def authentication(state):
+        if state.get("auth") in ("oauth", "api"):
+            return state["auth"]
+        return "unknown" if state.get("provider", "unknown") in ("openai", "unknown") else "api"
+
+    def observe(self, row, state):
+        payload = row.get("payload")
+        date = timestamp(row.get("timestamp"))
+        if not isinstance(payload, dict) or not date or date.timestamp() > time.time() + 60:
+            return
+        typ = row.get("type")
+        sub = payload.get("type")
+        at = date.timestamp()
+        if typ == "session_meta":
+            state["session"] = digest("codex-session", payload.get("id", payload.get("session_id", state["session"])))
+        if typ == "turn_context" and payload.get("turn_id"):
+            turn = digest("codex-value-turn", payload["turn_id"])
+            if state.get("turn") != turn:
+                state.pop("pending", None)
+            state["turn"] = turn
+        settings = payload.get("thread_settings", {}) if typ == "event_msg" and sub == "thread_settings_applied" else payload
+        if isinstance(settings, dict) and (typ in ("session_meta", "turn_context") or sub == "thread_settings_applied"):
+            provider = settings.get("model_provider_id", settings.get("model_provider"))
+            if isinstance(provider, str) and provider != state.get("provider"):
+                state["provider"] = provider
+                for key in ("auth", "account", "pending", "speed"):
+                    state.pop(key, None)
+            mode = settings.get("auth_mode")
+            if mode in ("chatgpt", "chatgptAuthTokens", "apiKey", "apikey", "api_key"):
+                auth = "oauth" if mode.startswith("chatgpt") else "api"
+                if state.get("auth") != auth:
+                    state.pop("pending", None)
+                state["auth"] = auth
+            if isinstance(settings.get("account_id"), str):
+                state["account"] = digest("codex-account", settings["account_id"])
+            if isinstance(settings.get("model"), str):
+                state["model"] = text(settings["model"], 120)
+            if "service_tier" in settings:
+                speed = settings["service_tier"]
+                state["speed"] = {None: "standard", "default": "standard", "priority": "fast"}.get(speed, text(speed, 40)) if speed is None or isinstance(speed, str) else "unsupported"
+        if typ == "token_usage_record" and isinstance(payload.get("usage"), dict) and payload.get("response_id"):
+            state["exactUsage"] = True
+            identity = digest("codex-value-response", payload["response_id"])
+            if self.record_usage(identity, payload["usage"], state, at):
+                state["pending"] = (state.get("pending", []) + [identity])[-128:]
+        elif typ == "event_msg" and sub == "token_count":
+            limits = payload.get("rate_limits")
+            receipt = isinstance(limits, dict) and limits.get("limit_id") in (None, "codex") and isinstance(limits.get("plan_type"), str)
+            receipt = receipt and bool(limits["plan_type"]) and self.authentication(state) != "api" and (state.get("provider") == "openai" or state.get("auth") == "oauth")
+            account = limits.get("account_id") if isinstance(limits, dict) else None
+            account = digest("codex-account", account) if isinstance(account, str) and account else state.get("account")
+            pending = state.pop("pending", [])
+            if receipt:
+                for identity in pending:
+                    self.connection.execute("UPDATE usage SET auth='oauth',account=COALESCE(?,account) WHERE id=? AND auth='unknown'", (account, identity))
+            info = payload.get("info")
+            total = info.get("total_token_usage") if isinstance(info, dict) else None
+            if isinstance(total, dict):
+                previous = state.get("total", {})
+                if not state.get("exactUsage"):
+                    fields = ("input_tokens", "cached_input_tokens", "output_tokens")
+                    delta = {key: max(0, number(total.get(key)) - previous.get(key, 0)) for key in fields}
+                    context = dict(state, account=account)
+                    if receipt:
+                        context["auth"] = "oauth"
+                    self.record_usage(digest("codex-value-cumulative", state["session"], total), delta, context, at)
+                state["total"] = {key: max(number(value), previous.get(key, 0)) for key, value in total.items()}
+
+    def record_usage(self, identity, usage, state, at):
+        values = [usage.get(key, 0) for key in ("input_tokens", "cached_input_tokens", "output_tokens")]
+        if at < self.cutoff or not all(type(value) is int and 0 <= value <= 10**15 for value in values):
+            return False
+        supplied, cached, output = values
+        if cached > supplied or supplied + output == 0:
+            return False
+        self.connection.execute("""INSERT INTO usage VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+            model=CASE WHEN usage.model='unknown' THEN excluded.model ELSE usage.model END,
+            speed=COALESCE(usage.speed,excluded.speed),
+            auth=CASE WHEN excluded.auth!='unknown' THEN excluded.auth ELSE usage.auth END,
+            account=COALESCE(excluded.account,usage.account)
+            """, (identity, at, state.get("model", "unknown"), state.get("speed"), supplied - cached, cached, output,
+                  self.authentication(state), state.get("account")))
+        return True
+
+    def scan(self):
+        self.complete = True
+        super().scan()
+        self.scanned_at = time.time()
+        self.connection.execute("DELETE FROM usage WHERE at<?", (self.cutoff,))
+        self.connection.executemany("INSERT OR REPLACE INTO token_state VALUES(?,?)",
+                                    [("complete", encode(self.complete)), ("scannedAt", str(self.scanned_at))])
+        self.connection.commit()
+
+    def export(self, account_key):
+        rows = self.connection.execute("""SELECT id,at,model,speed,input,cached,output FROM usage
+            WHERE auth='oauth' AND (account IS NULL OR account=?) AND at>=? ORDER BY at DESC,id LIMIT ?""",
+            (account_key, self.cutoff, self.max_records + 1)).fetchall()
+        unknown_days = dict(self.connection.execute("""SELECT CAST(CAST(at/86400 AS INTEGER) AS TEXT),COUNT(*) FROM usage
+            WHERE auth='unknown' AND at>=? AND (account IS NULL OR account=?) GROUP BY CAST(at/86400 AS INTEGER)""",
+            (self.cutoff, account_key)))
+        return {"schema": 1, "ready": True, "complete": self.complete, "generatedAt": time.time(),
+                "scannedAt": self.scanned_at, "accountKey": codex_account_key(self.home),
+                "truncated": len(rows) > self.max_records, "unattributedCount": sum(unknown_days.values()), "unattributedDays": unknown_days,
+                "records": [{"id": row[0], "at": row[1], "model": row[2], "speed": row[3],
+                             "tokens": dict(zip(("input", "cached", "output"), row[4:]))}
+                            for row in rows[:self.max_records]]}
+
+
 BRIDGE_EVENTS = ("UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "SessionEnd")
 
 
@@ -853,7 +992,7 @@ def bridge_input(args):
 
 def parser():
     result = argparse.ArgumentParser(description="CodexBar 本地日志统计, 不导出登录凭据")
-    result.add_argument("command", choices=("collect", "valuation", "quota-history", "install-claude", "uninstall-claude", "claude-statusline", "claude-hook"))
+    result.add_argument("command", choices=("collect", "valuation", "quota-history", "token-history", "install-claude", "uninstall-claude", "claude-statusline", "claude-hook"))
     result.add_argument("--state-dir", type=pathlib.Path)
     result.add_argument("--codex-home", type=pathlib.Path, default=pathlib.Path(os.environ.get("CODEX_HOME", str(pathlib.Path.home() / ".codex"))))
     result.add_argument("--claude-home", type=pathlib.Path, default=pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", str(pathlib.Path.home() / ".claude"))))
@@ -883,6 +1022,24 @@ def main():
         raise ValueError("采集参数超出范围")
     directory = args.state_dir.expanduser() if args.state_dir else state_directory() / "sources" / digest(
         str(args.codex_home.expanduser().resolve()), str(args.claude_home.expanduser().resolve()))
+    if args.command == "token-history":
+        if not re.fullmatch("[0-9a-f]{64}", args.account_key):
+            raise ValueError("账号摘要格式无效")
+        if args.skip_scan and not (directory / TokenValueHistory.filename).exists():
+            if not args.quiet:
+                print(encode({"schema": 1, "ready": False, "complete": False, "generatedAt": time.time(), "scannedAt": 0,
+                              "accountKey": codex_account_key(args.codex_home.expanduser()), "truncated": False,
+                              "unattributedCount": 0, "records": []}))
+            return
+        ledger = TokenValueHistory(directory, args.codex_home.expanduser(), args.budget, read_only=args.skip_scan)
+        try:
+            if not args.skip_scan:
+                ledger.scan()
+            if not args.quiet:
+                print(encode(ledger.export(args.account_key)))
+        finally:
+            ledger.connection.close()
+        return
     if args.command == "quota-history":
         if args.account_key and not re.fullmatch("[0-9a-f]{64}", args.account_key):
             raise ValueError("账号摘要格式无效")
