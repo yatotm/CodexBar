@@ -64,18 +64,22 @@ struct AccountCard: View {
 
     private static func planBadgeTint(for plan: String, colorScheme: ColorScheme) -> Color {
         let normalizedPlan = plan.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let colors = planTintRules.first { rule in
-            rule.keywords.contains { normalizedPlan.contains($0) }
-        }?.colors ?? (light: 0x0E7490, dark: 0x67E8F9)
+        let colors = planTints.first { $0.plans.contains(normalizedPlan) }?.colors
+            ?? (light: 0x69717A, dark: 0xB1B7C0)
         return Color(hex: colorScheme == .dark ? colors.dark : colors.light)
     }
 
-    private static let planTintRules: [(keywords: [String], colors: (light: Int, dark: Int))] = [
-        (["enterprise"], (0x52677F, 0xA7AFBA)),
-        (["team", "business", "pro"], (0x147B82, 0x82B3B5)),
-        (["plus"], (0x256FA3, 0x89A9C2)),
-        (["edu"], (0x9B5F12, 0xC7A96B)),
-        (["free"], (0x167A5E, 0x7FB5A4))
+    private static let planTints: [(plans: [String], colors: (light: Int, dark: Int))] = [
+        (["free"], (0x527566, 0xA3C8B5)),
+        (["go"], (0x237D72, 0x77C9B6)),
+        (["plus"], (0x366FA8, 0x8FBCEB)),
+        (["prolite"], (0x6676AF, 0xB0BCEB)),
+        (["pro"], (0x8055AB, 0xC5A5E8)),
+        (["promax"], (0x986B2F, 0xE2BF7F)),
+        (["team"], (0x287D94, 0x83C9DC)),
+        (["business", "self_serve_business_prolite", "self_serve_business_usage_based"], (0xA1654B, 0xDDAF95)),
+        (["enterprise", "ent26", "enterprise_cbp_automation", "enterprise_cbp_usage_based"], (0x566780, 0xAABBD5)),
+        (["edu", "edu_plus", "edu_pro"], (0xA0567C, 0xDEABC9))
     ]
 }
 
@@ -148,6 +152,7 @@ struct QuotaLimitsSection: View {
     let resetCreditExpirationDates: [Date]?
     let isStale: Bool
     let onResetCreditsTap: (ResetCreditsPanelContext) -> Void
+    var isOrdinaryUsageRestricted = false
     @State private var sectionFrameProvider = ScreenFrameProvider()
 
     var body: some View {
@@ -178,6 +183,12 @@ struct QuotaLimitsSection: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .layoutPriority(-1)
+
+                if isOrdinaryUsageRestricted, limit.id.lowercased() == "codex" {
+                    Label("常规额度受限", systemImage: "exclamationmark.circle.fill")
+                        .font(.caption2).foregroundStyle(.orange)
+                        .help("Codex 当前常规额度受限, 不代表 Claude 或远程任务异常")
+                }
 
                 Spacer(minLength: 8)
 

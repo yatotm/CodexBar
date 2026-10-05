@@ -11,9 +11,29 @@ final class WorkflowMaintenanceScheduler {
     private var isRunning = false
     private var pendingRebuild: RebuildRequest?
     private var pendingMaintenanceTrigger: LogTrigger?
+    private var automaticTask: Task<Void, Never>?
 
     init(viewModel: WorkflowViewModel) {
         self.viewModel = viewModel
+    }
+
+    deinit { automaticTask?.cancel() }
+
+    func setAutomaticMaintenanceEnabled(_ enabled: Bool) {
+        guard enabled else {
+            automaticTask?.cancel()
+            automaticTask = nil
+            clearPendingMaintenance()
+            return
+        }
+        guard automaticTask == nil else { return }
+        automaticTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                guard !Task.isCancelled else { return }
+                self?.requestMaintenance(trigger: .auto)
+            }
+        }
     }
 
     func requestMaintenance(trigger: LogTrigger) {
@@ -32,6 +52,8 @@ final class WorkflowMaintenanceScheduler {
     }
 
     func cancel() {
+        automaticTask?.cancel()
+        automaticTask = nil
         clearPendingMaintenance()
         pendingRebuild?.completion(.failure(CancellationError()))
         pendingRebuild = nil

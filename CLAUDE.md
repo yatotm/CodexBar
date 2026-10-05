@@ -74,7 +74,7 @@ Debug 与 Release 使用不同 bundle ID，分别是 `io.github.yatotm.codexbar.
 
 `CodexStatusService`（actor） -> `CodexCLIResolver` 解析 `codex` 可执行文件，PATH 全局优先，回退 `/Applications/ChatGPT.app` 或 `Codex.app` 内置 -> 启动 `codex app-server --listen stdio://` -> `AppServerSession` 执行 stdio JSON-RPC -> 合成 `CodexQuotaSnapshot` -> `CodexStatusViewModel` 发布给 UI
 
-- 刷新间隔为 60 秒、请求超时为 20 秒，连接最长复用 1 小时，让后台升级的 `codex` 二进制有机会生效
+- 额度刷新默认 60 秒，可选 1、2、3、5 或 10 分钟；请求超时为 20 秒，连接最长复用 1 小时，让后台升级的 `codex` 二进制有机会生效
 - 主要方法有 `initialize`、`account/read`、`account/rateLimits/read`、`account/usage/read`、`config/read`、`config/batchWrite`、`hooks/list`
 - `SIGPIPE` 被忽略，app-server 退出后写管道由 write 抛错走重建路径
 - `stdout` 可能混有无关日志行，`AppServerSession` 先用轻量 `RPCIDEnvelope` 匹配 `id`，再完整解码
@@ -253,7 +253,7 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 - 文案只描述事实，不写“用户做了什么”这类主语，也不写推论；字段值要可 `grep`，用枚举 `rawValue` 而不是中文句子，App 与 helper 两侧保持同一套格式
 - 词根固定，一个词能 `grep` 出整条链路：额度、统计刷新（调度层）、事件汇总（计算层）、同步、KeepAlive（防睡眠决策层）、空闲断言（进程内 `IOPMAssertion`）、显示断言（屏幕常亮那条 `IOPMAssertion`）、Helper 注册（`SMAppService`）、Helper XPC（`NSXPCConnection`）、系统睡眠（helper 的 pmset 效果）、电源监听（`PowerSourceMonitor`）、任务、Hook、codex、通知
 - 防睡眠日志按两套机制分组：`KeepAlive` 是两套共用的决策层，`空闲断言` 与 `显示断言` 是机制一，`Helper 注册`、`Helper XPC`、`系统睡眠` 是机制二的授权、传输、效果三层，故障定位就是在这几层里找
-- `trigger=` 由 `LogTrigger` 提供，从 UI 入口透传到服务层，用来区分同一条链路是被用户动作、定时轮询还是系统事件踢起来的；统计维护挂在额度刷新完成事件上，它的 `trigger` 继承那一次刷新
+- `trigger=` 由 `LogTrigger` 提供，从 UI 入口透传到服务层，用来区分同一条链路是被用户动作、定时轮询还是系统事件踢起来的。本地统计维护独立每分钟运行，并随 Hook、睡眠门禁与退出暂停
 - 变化检测类日志只在值真的变了才记，例如 `KeepAlive 条件已变化` 与 `Hook 配置已变化` 各自存一份上次的值，否则每次开面板都会刷一条
 - 设置项的变更日志照抄设置页那一行的标题，例如 `菜单栏额度指示变更`、`开机自动启动变更`，用户说“我改了那个开关”时能直接对上；只有本身带完整链路的才用链路词根，例如 Hook、同步、通知、KeepAlive、快捷键
 - 成对的操作要留成对的日志，例如 XPC 的发送与回复各记一条并带同一个 `generation`，缺一条就说明请求丢在途中
@@ -348,3 +348,5 @@ Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEv
 
 
 任务 Token 使用现有实时链路，不新增历史库。`CodexTokenUsage` 的输入包含缓存，推理字段可缺失；本机 Codex 读取明确归属的轮次累计，远端采集器只在事件和保活时读取数字。实时协议新增可选 `tokenUsage`，旧端缺失时不填零，数据库与 Hook 聚合 schema 保持不变。主面板保留顶部固定的 AppKit 尺寸动画，不叠加逐帧 SwiftUI 高度动画；流光预览恢复剩余时长，并保留全部机器的实时事件门槛。
+
+生命周期历史回读与正向读取共享每轮预算，已结束任务的用量和归属补查每轮次累计最多 32 MiB。历史终态不重播通知或流光，远端通过可选 `isHistoricalTerminal` 标记同样的边界；读取游标只在进程内扩展，不改原数据库结构。任务用量补查不能累计到独立的价值账本。账户轮询间隔与本机每分钟维护分开，两者都受现有睡眠门禁控制。套餐配色与额度受限提示不改变混合任务图标，也不推断未知档位的固定额度。

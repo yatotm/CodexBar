@@ -15,6 +15,7 @@ nonisolated struct RemoteActivityTask: Decodable, Identifiable, Equatable, Senda
     var toolName: String?
     var activeSubagentCount: Int?
     var tokenUsage: CodexTokenUsage?
+    var isHistoricalTerminal: Bool?
 
     var isActive: Bool {
         state == "running" || state == "waiting"
@@ -320,7 +321,8 @@ final class RemoteActivityController: ObservableObject {
         guard wasConnected else { return [] }
         let oldByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
         return frame.tasks.filter { task in
-            guard let old = oldByID[task.id], old.isActive, old.startedAt == task.startedAt,
+            guard task.isHistoricalTerminal != true,
+                  let old = oldByID[task.id], old.isActive, old.startedAt == task.startedAt,
                   task.state == "completed" || task.state == "ended" else { return false }
             return (0 ... 10).contains(frame.sentAt - task.updatedAt)
         }
@@ -333,7 +335,7 @@ final class RemoteActivityController: ObservableObject {
         // 首次和重连只恢复基线, 不把离线期间的旧变化当成新通知
         if states[sourceID] == "实时连接" {
             for task in frame.tasks {
-                if let old = previous[task.id], old.state != task.state, old.isActive,
+                if task.isHistoricalTerminal != true, let old = previous[task.id], old.state != task.state, old.isActive,
                    task.state == "waiting" || task.state == "completed" {
                     onTransition?(sourceID, task)
                 }

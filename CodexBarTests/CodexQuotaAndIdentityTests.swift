@@ -2,6 +2,29 @@ import Foundation
 import Testing
 
 struct CodexQuotaAndIdentityTests {
+    @Test func ordinaryUsageWarningRequiresExplicitFreshRestriction() throws {
+        for (value, restricted) in [("false", true), ("true", false), ("null", false)] {
+            let response = try TestFixtures.decode(AccountRateLimitsResponse.self, "{\"ordinaryUsageAllowed\":\(value),\"rateLimits\":{\"primary\":{\"usedPercent\":100}}}")
+            #expect(try CodexQuotaSnapshot(accountResponse: accountResponse, rateLimitsResponse: response).isOrdinaryUsageRestricted == restricted)
+            #expect(try !CodexQuotaSnapshot(accountResponse: accountResponse, rateLimitsResponse: response, isRateLimitsStale: true).isOrdinaryUsageRestricted)
+        }
+        let missing = try TestFixtures.decode(AccountRateLimitsResponse.self, #"{"rateLimits":{}}"#)
+        #expect(try !CodexQuotaSnapshot(accountResponse: accountResponse, rateLimitsResponse: missing).isOrdinaryUsageRestricted)
+    }
+
+    @Test func freshQuotaPlanPrecedesCachedAccountPlanWithoutGuessingBudgets() throws {
+        let response = try TestFixtures.decode(AccountRateLimitsResponse.self, #"{"rateLimits":{"planType":"promax"}}"#)
+        #expect(try CodexQuotaSnapshot(accountResponse: accountResponse, rateLimitsResponse: response).planLabel == "promax")
+        #expect(try CodexQuotaSnapshot(accountResponse: accountResponse, rateLimitsResponse: response, isRateLimitsStale: true).planLabel == "plus")
+        #expect(UsagePlanObservation(at: 0, resetsAt: 604800, plan: "promax").reference == .disabled)
+    }
+
+    @Test func compactQuotaLabelsRemainConsistentAcrossProviders() {
+        for (minutes, label) in [(300, "5h"), (10080, "7d"), (40320, "28d"), (90, "90m")] {
+            #expect(QuotaWindow(kind: .primary, windowDurationMins: minutes, usedPercent: 50, resetsAt: nil).label == label)
+        }
+    }
+
     @Test func resetCandidatesRequireExplicitStatusTypeAndExpiration() throws {
         let summary = try TestFixtures.decode(RateLimitResetCreditsSummary.self, """
         {"availableCount":5,"credits":[

@@ -146,6 +146,7 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
                 viewModel.pauseForSleep()
                 usageCenterViewModel.pauseForSleep()
             }
+            statusItemController?.setWorkflowMaintenanceAllowed(allowed)
         }
     }
 

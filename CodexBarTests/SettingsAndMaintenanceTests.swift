@@ -3,6 +3,51 @@ import Foundation
 import Testing
 
 struct SettingsAndMaintenanceTests {
+    @Test func quotaRefreshIntervalDefaultsPersistsAndRejectsInvalidValues() throws {
+        let preferences = try TestPreferences()
+        defer { preferences.remove() }
+        let model = CodexStatusViewModel(defaults: preferences.defaults)
+        #expect(model.quotaRefreshInterval == .oneMinute)
+        model.setQuotaRefreshInterval(.fiveMinutes)
+        #expect(model.autoRefreshInterval == 300)
+        #expect(CodexStatusViewModel(defaults: preferences.defaults).quotaRefreshInterval == .fiveMinutes)
+        preferences.defaults.set(99, forKey: "CodexQuota.refreshIntervalSeconds")
+        #expect(CodexStatusViewModel(defaults: preferences.defaults).quotaRefreshInterval == .oneMinute)
+    }
+
+    @Test func changingQuotaIntervalDuringSleepDoesNotResumeRequests() throws {
+        let preferences = try TestPreferences()
+        defer { preferences.remove() }
+        let model = CodexStatusViewModel(defaults: preferences.defaults)
+        model.pauseForSleep()
+        model.startAutoRefresh()
+        model.setQuotaRefreshInterval(.twoMinutes)
+        model.refresh(trigger: .manual)
+        #expect(model.isRefreshSuspended)
+        #expect(!model.isRefreshing)
+        #expect(model.autoRefreshCountdownStartedAt == nil)
+        #expect(model.autoRefreshInterval == 120)
+        model.stopAutoRefresh()
+    }
+
+    @Test func quotaCountdownUsesSelectedIntervalAndClampsOverdueRefresh() {
+        let now = TestFixtures.now
+        #expect(CodexQuotaRefreshInterval.allCases.map(\.rawValue) == [60, 120, 180, 300, 600])
+        #expect(CodexQuotaRefreshInterval.oneMinute.remainingTime(since: nil, now: now) == 0)
+        #expect(CodexQuotaRefreshInterval.fiveMinutes.remainingTime(since: now.addingTimeInterval(-100), now: now) == 200)
+        #expect(CodexQuotaRefreshInterval.oneMinute.remainingTime(since: now.addingTimeInterval(-100), now: now) == 0)
+    }
+
+    @Test func remoteTasksRemainAvailableWithoutLocalCodexHook() throws {
+        let preferences = try TestPreferences()
+        defer { preferences.remove() }
+        let settings = MainPanelSettings(defaults: preferences.defaults)
+        settings.updateHookEnabled(false, hasRemote: true)
+        #expect(settings.hasActivitySource && settings.hasRemoteActivitySource)
+        settings.setSection(.activity, isVisible: true, undoManager: UndoManager())
+        #expect(settings.layout.isVisible(.activity))
+    }
+
     @Test func taskGlowDefaultsOffAndPreviewOnlyFollowsEnableTransitions() throws {
         let preferences = try TestPreferences()
         defer { preferences.remove() }

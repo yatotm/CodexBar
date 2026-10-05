@@ -51,11 +51,16 @@ A shortcut needs at least two modifier keys and cannot use `Command-Space` or `C
 | Setting | Purpose | Default |
 | --- | --- | --- |
 | Proxy | Configure the proxy for CodexBar’s Codex service connection | Off |
+| Codex quota refresh | Poll account quota every 1, 2, 3, 5, or 10 minutes | 1 minute |
 | [CodexBar Hook](activity-and-hook.md) | Enable live tasks and daily activity statistics | Off if not installed |
 | [System Notifications](notifications.md) | Configure notification types, thresholds, sounds, and haptics | Main switch off |
 | Automatic Reset | Use banked resets shortly before expiration | Off, 30-minute lead time |
 | [Prevent System Sleep](sleep-prevention.md) | Choose Off, Manual, or Follow Tasks | Off |
 | [Rebuild Data](sync-data-privacy.md#rebuild-data) | Recalculate Hook statistics for selected dates | Manual |
+
+### Codex Quota Refresh
+
+The interval only reschedules account polling. It preserves in-flight requests, device collection, live tasks, and value-estimate schedules. Local Hook maintenance keeps its one-minute cadence and follows the existing sleep and display gate.
 
 ### Proxy
 

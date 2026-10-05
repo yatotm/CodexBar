@@ -5,6 +5,7 @@ import ctypes
 import datetime
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -397,14 +398,14 @@ def event_time(value):
     try:
         if isinstance(value, str):
             return datetime.datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
             return value / 1000 if value > 100000000000 else float(value)
     except (ValueError, OverflowError):
         pass
     return None
 
 
-def codex_terminal(details, started, now):
+def codex_terminal(details, started, now, byte_limit=2 * 1024 * 1024, read_counts=None):
     path = details.get("transcriptPath")
     if not path:
         return None
@@ -416,7 +417,9 @@ def codex_terminal(details, started, now):
                 offset = max(0, stat.st_size - 512 * 1024)
                 cursor = {"identity": [stat.st_dev, stat.st_ino], "offset": offset, "discard": offset > 0}
             handle.seek(cursor["offset"])
-            data = handle.read(2 * 1024 * 1024)
+            data = handle.read(byte_limit)
+            if read_counts is not None:
+                read_counts.append(len(data))
         consumed = 0
         result = None
         fragments = data.split(b"\n")
@@ -444,11 +447,11 @@ def codex_terminal(details, started, now):
             if target and cursor.get("turnKey") != target:
                 continue
             at = event_time(value.get("timestamp")) or event_time(payload.get("completed_at"))
-            if at is None or at < started or (not target and at < details["pendingStop"] - 2):
+            if at is None or at < started or (not target and at < details.get("pendingStop", started) - 2):
                 continue
             result = ("ended" if kind == "turn_aborted" else "completed", min(at, now))
         # 超出预算的行继续按字节跳过, 不保存对话片段, 后续终态仍可读取
-        if not consumed and len(data) == 2 * 1024 * 1024:
+        if not consumed and len(data) == byte_limit:
             consumed = len(data)
             cursor["discard"] = True
         cursor["offset"] += consumed
@@ -458,12 +461,121 @@ def codex_terminal(details, started, now):
         return None
 
 
-def reconcile(db, now=None):
+class CodexReverseCursor:
+    """只在进程内保留回读位置和有界半行, 不改变既有数据库游标"""
+    line_limit = 256 * 1024
+
+    def __init__(self, end):
+        self.offset = end
+        self.partial = b""
+        self.discard = True
+        self.bytes_read = 0
+
+    def read(self, stream, budget):
+        count = min(self.offset, max(0, budget))
+        if not count:
+            return [], 0
+        start = self.offset - count
+        stream.seek(start)
+        data = stream.read(count)
+        self.bytes_read += len(data)
+        if len(data) != count:
+            raise OSError("回读期间文件发生变化")
+        self.offset = start
+        parts = (data + self.partial).split(b"\n")
+        self.partial = b""
+        if self.discard:
+            parts.pop()
+            if not parts:
+                return [], count
+            self.discard = False
+        if start > 0:
+            self.partial = parts.pop(0) if parts else b""
+            if len(self.partial) > self.line_limit:
+                self.partial = b""
+                self.discard = True
+        return [line for line in reversed(parts) if len(line) <= self.line_limit and line.strip()], count
+
+
+class CodexTerminalReader:
+    """回补明确属于当前轮次的终态, 历史恢复不触发新的提示"""
+    byte_limit = 8 * 1024 * 1024
+
+    def __init__(self):
+        self.cursors = {}
+        self.silent = set()
+        self.started_at = time.time()
+        self.remaining = self.byte_limit
+
+    def begin(self, rows):
+        self.remaining = self.byte_limit
+        active = {(row[0], row[6]) for row in rows}
+        self.cursors = {key: value for key, value in self.cursors.items() if key in active}
+        self.silent = set(sorted(self.silent, key=lambda item: item[2])[-500:])
+
+    def terminal(self, task_id, details, started, now):
+        if self.remaining <= 0:
+            return None
+        counts = []
+        result = codex_terminal(details, started, now, min(2 * 1024 * 1024, self.remaining), counts)
+        self.remaining -= sum(counts)
+        if result is not None:
+            return result
+        path, target = details.get("transcriptPath"), details.get("turnKey")
+        if not path or not target or self.remaining <= 0:
+            return None
+        try:
+            with open(path, "rb") as stream:
+                stat = os.fstat(stream.fileno())
+                key = (task_id, started)
+                identity = (path, stat.st_dev, stat.st_ino)
+                item = self.cursors.get(key)
+                if item is None or item[0] != identity or stat.st_size < item[1]:
+                    if len(self.cursors) >= 128:
+                        self.cursors.pop(next(iter(self.cursors)))
+                    item = (identity, stat.st_size, CodexReverseCursor(stat.st_size))
+                    self.cursors[key] = item
+                lines, count = item[2].read(stream, self.remaining)
+                self.remaining -= count
+                after = os.fstat(stream.fileno())
+                if (after.st_dev, after.st_ino) != (stat.st_dev, stat.st_ino) or after.st_size < stat.st_size:
+                    self.cursors.pop(key, None)
+                    return None
+            for line in lines:
+                try:
+                    value = json.loads(line)
+                    payload = value.get("payload") or {}
+                    kind = payload.get("type")
+                    if value.get("type") != "event_msg" or kind not in ("task_complete", "turn_complete", "turn_aborted"):
+                        continue
+                    at = event_time(value.get("timestamp")) or event_time(payload.get("completed_at"))
+                    if identifier(payload.get("turn_id")) == target and at is not None and started <= at <= now + 60:
+                        self.cursors.pop(key, None)
+                        return ("ended" if kind == "turn_aborted" else "completed", min(at, now))
+                except (ValueError, AttributeError, TypeError):
+                    continue
+        except OSError:
+            self.cursors.pop((task_id, started), None)
+        return None
+
+    def remember(self, task_id, started, at):
+        if at <= self.started_at:
+            self.silent.add((task_id, started, at))
+
+    def enrich(self, tasks):
+        for task in tasks:
+            if (task["id"], task["startedAt"], task["updatedAt"]) in self.silent and task["state"] in ("completed", "ended"):
+                task["isHistoricalTerminal"] = True
+
+
+def reconcile(db, now=None, terminal_reader=None):
     now = time.time() if now is None else now
     rows = db.execute("SELECT t.id,t.provider,t.state,t.pid,t.birth,t.updated,t.started,d.payload FROM tasks t "
                       "LEFT JOIN details d ON d.id=t.id WHERE t.state IN ('running','waiting','unknown')").fetchall()
     # 文件和进程检查在写事务外执行, 不阻塞同时到达的 Hook
     rows.sort(key=lambda row: json.loads(row[7] or "{}").get("terminalCheckedAt", 0))
+    if terminal_reader is not None:
+        terminal_reader.begin(rows)
     scanned = 0
     for task_id, provider, state, pid, birth, updated, started, raw in rows:
         details = json.loads(raw) if raw else {}
@@ -472,12 +584,17 @@ def reconcile(db, now=None):
         next_state = state
         terminal_at = updated
         pending = details.get("pendingStop")
-        if pending is not None and scanned < 8:
+        can_read = provider != "codex" or terminal_reader is None or terminal_reader.remaining > 0
+        inspect_codex = terminal_reader is not None and provider == "codex" and details.get("turnKey") and can_read
+        if (pending is not None or inspect_codex) and scanned < 8 and can_read:
             scanned += 1
             details["terminalCheckedAt"] = now
             child_count = db.execute("SELECT COUNT(*) FROM agents WHERE parent=?", (task_id,)).fetchone()[0] if provider == "claude" else 0
             completed_at = max(pending, updated) if provider == "claude" and details.get("eventName") == "SubagentStop" else pending
-            terminal = (("completed", completed_at) if child_count == 0 and now - completed_at >= 2 else None) if provider == "claude" else codex_terminal(details, started, now)
+            if provider == "claude":
+                terminal = ("completed", completed_at) if child_count == 0 and now - completed_at >= 2 else None
+            else:
+                terminal = terminal_reader.terminal(task_id, details, started, now) if terminal_reader else codex_terminal(details, started, now)
             if terminal:
                 next_state, terminal_at = terminal
                 details.pop("pendingStop", None)
@@ -488,13 +605,13 @@ def reconcile(db, now=None):
                 if details.get("turnKey"):
                     details["endedTurns"] = (details.get("endedTurns", []) + [details["turnKey"]])[-16:]
                 details["observedAt"] = terminal_at
-            elif now - pending >= 10 and provider == "codex":
+            elif pending is not None and now - pending >= 10 and provider == "codex":
                 next_state = "ended" if details.get("sessionEnded") else "unknown"
                 if next_state == "ended":
                     details.pop("pendingStop", None)
                     terminal_at = pending
                     details["observedAt"] = terminal_at
-        elif state in ("running", "waiting") and pending is None:
+        if next_state == state and state in ("running", "waiting") and pending is None:
             identity = process_identity(pid) if pid else None
             if (pid and (not identity or identity[1] != birth)) or (not pid and now - updated > 600):
                 next_state = "unknown"
@@ -502,7 +619,7 @@ def reconcile(db, now=None):
             identity = process_identity(pid) if pid else None
             if (pid and (not identity or identity[1] != birth)) or (not pid and now - updated > 600):
                 next_state = "unknown"
-        if next_state == state and pending is None:
+        if next_state == state and pending is None and not inspect_codex:
             continue
         with db:
             db.execute("BEGIN IMMEDIATE")
@@ -516,7 +633,9 @@ def reconcile(db, now=None):
                 db.execute("UPDATE meta SET revision=revision+1")
                 if next_state in ("completed", "ended"):
                     db.execute("DELETE FROM agents WHERE parent=?", (task_id,))
-            if pending is not None:
+                    if terminal_reader is not None:
+                        terminal_reader.remember(task_id, started, terminal_at)
+            if pending is not None or inspect_codex:
                 db.execute("INSERT OR REPLACE INTO details VALUES(?,?)", (task_id, json.dumps(details)))
 
 
@@ -526,7 +645,7 @@ def pending_stop_delay(frame):
     return 1 if any(t.get("eventName") == "Stop" and t["state"] in ("running", "waiting", "unknown") and now - t["updatedAt"] < 10 for t in frame["tasks"]) else 60
 
 
-def snapshot(db, token_reader=None):
+def snapshot(db, token_reader=None, terminal_reader=None):
     with db:
         db.execute("BEGIN")
         epoch, revision = db.execute("SELECT epoch,revision FROM meta").fetchone()
@@ -536,6 +655,8 @@ def snapshot(db, token_reader=None):
               **current_details(row[7], row[4])} for row in rows]
     if token_reader is not None:
         token_reader.enrich(tasks, rows)
+    if terminal_reader is not None:
+        terminal_reader.enrich(tasks)
     return dict(schema=SCHEMA, epoch=epoch, revision=revision, sentAt=time.time(), tasks=tasks)
 
 
@@ -661,6 +782,7 @@ class ActivityTokenReader:
     """只在现有事件和心跳时增量读取数字, 不写入统计账本或任务状态"""
     byte_limit = 8 * 1024 * 1024
     line_limit = 2 * 1024 * 1024
+    history_limit = 32 * 1024 * 1024
     fields = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "total_tokens")
 
     def __init__(self):
@@ -743,7 +865,8 @@ class ActivityTokenReader:
                     # Codex 提供轮次累计值, 可直接从尾部读取; Claude 需覆盖任务开始时间
                     offset = max(0, stat.st_size - self.byte_limit)
                     cursor = dict(identity=identity, offset=offset, lower=offset, partial=b"", skip=offset > 0,
-                                  records={}, invalid=False, covered=offset == 0, complete=False)
+                                  records={}, invalid=False, covered=offset == 0, complete=False,
+                                  history=CodexReverseCursor(stat.st_size), hasRootRecord=False)
                     self.cursors[key] = cursor
                 if budget <= 0:
                     cursor["complete"] = cursor["complete"] and cursor["offset"] == stat.st_size
@@ -766,6 +889,16 @@ class ActivityTokenReader:
                     cursor["invalid"] = True
                 for line in lines:
                     self.consume(line, task, details, cursor)
+                needs_codex_history = task["provider"] == "codex" and (not cursor["records"] or (
+                    task["state"] in ("completed", "ended") and not cursor["hasRootRecord"]))
+                if needs_codex_history and not cursor["covered"] and consumed < budget:
+                    history = cursor["history"]
+                    remaining = min(budget - consumed, max(0, self.history_limit - history.bytes_read))
+                    earlier, count = history.read(source, remaining)
+                    consumed += count
+                    for line in earlier:
+                        self.consume(line, task, details, cursor, historical=True)
+                    cursor["covered"] = cursor["covered"] or history.offset == 0
                 if task["provider"] == "claude" and not cursor["covered"] and consumed < budget:
                     lower = max(0, cursor["lower"] - (budget - consumed))
                     source.seek(lower)
@@ -783,14 +916,14 @@ class ActivityTokenReader:
                     cursor["lower"] = lower
                     cursor["covered"] = cursor["covered"] or lower == 0
                 cursor["complete"] = cursor["offset"] == stat.st_size and not cursor["partial"] and not cursor["skip"] and (
-                    task["provider"] == "codex" or cursor["covered"])
+                    (task["provider"] == "codex" and (cursor["hasRootRecord"] or task["state"] not in ("completed", "ended"))) or cursor["covered"])
         except (OSError, ValueError):
             if key in self.cursors:
                 self.cursors[key]["complete"] = False
         return consumed
 
-    def consume(self, line, task, details, cursor):
-        if not line:
+    def consume(self, line, task, details, cursor, historical=False):
+        if not line.strip():
             return
         if len(line) > self.line_limit:
             cursor["invalid"] = True
@@ -818,6 +951,9 @@ class ActivityTokenReader:
                     return
                 identity = (thread, turn)
                 usage = value.get("turn_token_usage")
+                previous = cursor["records"].get(identity)
+                if historical and previous is not None and at < previous[0]:
+                    return
             else:
                 if at < task["startedAt"] or task["state"] in ("completed", "ended") and at > task["updatedAt"] + 2:
                     return
@@ -839,6 +975,8 @@ class ActivityTokenReader:
             if not self.valid(usage) or identity not in cursor["records"] and sum(len(value["records"]) for value in self.cursors.values()) >= 20000:
                 cursor["invalid"] = True
                 return
+            if task["provider"] == "codex" and value.get("thread_id") == value.get("session_id") and value.get("turn_id") == value.get("root_turn_id"):
+                cursor["hasRootRecord"] = True
             old = cursor["records"].get(identity)
             if old is None or at >= old[0]:
                 cursor["records"][identity] = (at, {key: value for key, value in usage.items() if key in self.fields or key == "reasoning_output_tokens"})
@@ -886,6 +1024,7 @@ class ChangeWatcher:
 def stream(root, db):
     watcher = ChangeWatcher(root)
     token_reader = ActivityTokenReader()
+    terminal_reader = CodexTerminalReader()
     try:
         revision = None
         heartbeat = 0.0
@@ -894,9 +1033,9 @@ def stream(root, db):
         while True:
             now = time.monotonic()
             if now >= next_reconcile:
-                reconcile(db)
+                reconcile(db, terminal_reader=terminal_reader)
                 next_reconcile = now + 60
-            frame = snapshot(db, token_reader)
+            frame = snapshot(db, token_reader, terminal_reader)
             next_reconcile = min(next_reconcile, now + pending_stop_delay(frame))
             if frame["revision"] != revision or now >= heartbeat:
                 data = json.dumps(frame, separators=(",", ":")).encode() + b"\n"

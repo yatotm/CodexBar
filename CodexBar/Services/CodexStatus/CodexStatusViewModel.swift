@@ -2,6 +2,27 @@ import Combine
 import Foundation
 import os
 
+nonisolated enum CodexQuotaRefreshInterval: Int, CaseIterable, Sendable {
+    case oneMinute = 60
+    case twoMinutes = 120
+    case threeMinutes = 180
+    case fiveMinutes = 300
+    case tenMinutes = 600
+
+    var duration: TimeInterval {
+        TimeInterval(rawValue)
+    }
+
+    var title: String {
+        String(localized: "duration.minutes", defaultValue: "\(rawValue / 60, specifier: "%lld")")
+    }
+
+    func remainingTime(since startedAt: Date?, now: Date) -> TimeInterval {
+        guard let startedAt else { return 0 }
+        return max(0, duration - now.timeIntervalSince(startedAt))
+    }
+}
+
 /// UI 级状态; 更细的连接和接口错误由服务层归并到日志
 nonisolated enum CodexLoadState: Equatable {
     case loading
@@ -30,21 +51,24 @@ final class CodexStatusViewModel: ObservableObject {
     @Published private(set) var codexSourceSelection = CodexCLISourceSelection.automatic
     @Published private(set) var pendingCodexSourceSelection: CodexCLISourceSelection?
     @Published private(set) var autoRefreshCountdownStartedAt: Date?
-
-    /// 统计维护挂在额度刷新完成事件上, 由它继承本次刷新的触发来源
-    private(set) var lastRefreshTrigger: LogTrigger = .launch
+    @Published private(set) var quotaRefreshInterval: CodexQuotaRefreshInterval
 
     var isReconnecting: Bool {
         pendingCodexSourceSelection != nil
     }
 
     var autoRefreshInterval: TimeInterval {
-        Self.refreshInterval
+        quotaRefreshInterval.duration
     }
 
-    private static let refreshInterval: TimeInterval = 60
+    var isRefreshSuspended: Bool {
+        refreshCoordinator.isSuspended
+    }
+
+    private static let refreshIntervalKey = "CodexQuota.refreshIntervalSeconds"
 
     private let service: CodexStatusService
+    private let defaults: UserDefaults
     private var autoRefreshTask: Task<Void, Never>?
     private var wantsAutoRefresh = false
     private var pendingRefreshTask: Task<Void, Never>?
@@ -52,8 +76,11 @@ final class CodexStatusViewModel: ObservableObject {
     private let refreshCoordinator = RefreshTaskCoordinator()
     private var connectionInfoGeneration: UInt64 = 0
 
-    init(service: CodexStatusService = CodexStatusService()) {
+    init(service: CodexStatusService = CodexStatusService(), defaults: UserDefaults = .standard) {
         self.service = service
+        self.defaults = defaults
+        quotaRefreshInterval = (defaults.object(forKey: Self.refreshIntervalKey) as? Int)
+            .flatMap(CodexQuotaRefreshInterval.init(rawValue:)) ?? .oneMinute
     }
 
     deinit {
@@ -63,7 +90,7 @@ final class CodexStatusViewModel: ObservableObject {
     }
 
     func refreshIfNeeded(trigger: LogTrigger) {
-        guard Date().timeIntervalSince(autoRefreshCountdownStartedAt ?? .distantPast) > Self.refreshInterval else {
+        guard quotaRefreshInterval.remainingTime(since: autoRefreshCountdownStartedAt, now: Date()) == 0 else {
             return
         }
 
@@ -76,14 +103,28 @@ final class CodexStatusViewModel: ObservableObject {
             return
         }
 
-        autoRefreshTask = Task { [weak self] in
-            let trigger = self?.pendingForcedRefreshTrigger ?? initialTrigger
-            self?.pendingForcedRefreshTrigger = nil
-            self?.refreshIfNeeded(trigger: trigger)
+        let trigger = pendingForcedRefreshTrigger ?? initialTrigger
+        pendingForcedRefreshTrigger = nil
+        refreshIfNeeded(trigger: trigger)
+        scheduleAutoRefresh()
+    }
 
+    func setQuotaRefreshInterval(_ interval: CodexQuotaRefreshInterval) {
+        guard quotaRefreshInterval != interval else { return }
+        defaults.set(interval.rawValue, forKey: Self.refreshIntervalKey)
+        quotaRefreshInterval = interval
+        AppLog.settings.notice("Codex 额度刷新间隔变更: seconds=\(interval.rawValue)")
+        if wantsAutoRefresh, !refreshCoordinator.isSuspended {
+            scheduleAutoRefresh()
+        }
+    }
+
+    private func scheduleAutoRefresh() {
+        autoRefreshTask?.cancel()
+        autoRefreshTask = Task { [weak self] in
             // 每轮按剩余时间等待, 手动刷新后倒计时会自然重新对齐
             while !Task.isCancelled {
-                let delay = self?.autoRefreshDelay ?? Self.refreshInterval
+                guard let delay = self?.autoRefreshDelay else { return }
                 if await (try? Task.sleep(for: .seconds(delay))) == nil {
                     break
                 }
@@ -127,7 +168,6 @@ final class CodexStatusViewModel: ObservableObject {
             return
         }
 
-        lastRefreshTrigger = trigger
         AppLog.app.notice("额度刷新开始: trigger=\(trigger.rawValue, privacy: .public)")
         let duration = LogDuration()
 
@@ -332,10 +372,10 @@ final class CodexStatusViewModel: ObservableObject {
 
     private var autoRefreshDelay: TimeInterval {
         guard let autoRefreshCountdownStartedAt else {
-            return Self.refreshInterval
+            return autoRefreshInterval
         }
 
-        let remaining = Self.refreshInterval - Date().timeIntervalSince(autoRefreshCountdownStartedAt)
+        let remaining = quotaRefreshInterval.remainingTime(since: autoRefreshCountdownStartedAt, now: Date())
         return max(1, remaining)
     }
 }

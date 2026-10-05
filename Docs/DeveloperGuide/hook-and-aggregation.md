@@ -437,11 +437,11 @@ schema 变化通常把保留期内所有事件日期标脏。source generation �
 
 [`WorkflowService.swift`](../../CodexBar/Services/Workflow/WorkflowService.swift) 是 actor，串行执行读取、聚合、清理和重建。
 
-维护任务与额度刷新周期协调，但两条数据链路没有数据依赖。Workflow ViewModel 对 UI 的最短刷新间隔为 5 秒，避免频繁文件变更造成重复渲染。
+维护任务使用独立的一分钟计时器，不随账户额度刷新间隔改变。Hook 关闭、睡眠门禁关闭和 App 退出时取消计时器与待处理维护；恢复后重新对账。Workflow ViewModel 对 UI 的最短刷新间隔为 5 秒，避免频繁文件变更造成重复渲染。
 
 ### 维护日志
 
-维护默认跟随 60 秒刷新。空闲机器一天会执行上千次没有变化的检查。
+维护每 60 秒检查一次。空闲机器一天会执行上千次没有变化的检查。
 
 `WorkflowService` 累计连续 idle 轮数，只有真正写入、跳过、失败或清理时才输出一条摘要，并附带之前空转次数。这样日志既能证明维护一直在运行，又不会淹没真正故障。
 

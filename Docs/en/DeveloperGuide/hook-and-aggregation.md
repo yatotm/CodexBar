@@ -437,11 +437,11 @@ The operation fails as a whole only if every date fails. Partial success reports
 
 [`WorkflowService.swift`](../../../CodexBar/Services/Workflow/WorkflowService.swift) is an actor that serializes reading, aggregation, pruning, and rebuild.
 
-Maintenance coordinates with the rate-limit refresh cycle but has no data dependency on it. The Workflow view model refreshes UI no more often than every 5 seconds to avoid rerendering for frequent file changes.
+Maintenance has an independent one-minute timer. Disabling Hook, closing the sleep gate, or quitting cancels automatic maintenance and pending requests. Account polling intervals do not change this cadence. The Workflow view model refreshes UI no more often than every 5 seconds.
 
 ### Maintenance Logs
 
-Maintenance normally follows the 60-second refresh. An idle machine would otherwise emit more than a thousand no-change checks per day.
+Maintenance checks every 60 seconds. An idle machine would otherwise emit more than a thousand no-change checks per day.
 
 `WorkflowService` accumulates consecutive idle cycles and logs one summary only after a write, skip, failure, or cleanup, including the preceding idle count. Logs can prove that maintenance runs without burying real failures.
 

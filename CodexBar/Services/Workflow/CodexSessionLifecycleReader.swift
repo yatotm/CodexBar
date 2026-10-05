@@ -5,6 +5,7 @@ nonisolated struct CodexActivityTurnReference: Hashable {
     let sessionId: String
     let turnId: String
     let startedAt: Date
+    var isTerminalUsageOnly = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.sessionId == rhs.sessionId && lhs.turnId == rhs.turnId
@@ -38,36 +39,41 @@ actor CodexSessionLifecycleReader {
         cursorsBySession = cursorsBySession.filter { $0.value.lastReadAt > cutoff }
         lastResolutionAttemptBySession = lastResolutionAttemptBySession.filter { $0.value > cutoff }
         lastRecursiveAttemptBySession = lastRecursiveAttemptBySession.filter { $0.value > cutoff }
-        var budget = Self.contextByteLimit
-        var performedBackfill = false
+        var budget = Self.readByteLimit
         var states: [CodexSessionTaskLifecycleState] = []
         let sessions = grouped.keys.sorted()
         let start = sessions.isEmpty ? 0 : roundRobinOffset % sessions.count
         let ordered = Array(sessions.dropFirst(start)) + Array(sessions.prefix(start))
         roundRobinOffset = sessions.isEmpty ? 0 : (start + 1) % sessions.count
         for sessionId in ordered {
+            guard !Task.isCancelled else { return [] }
             guard let sessionReferences = grouped[sessionId],
                   let latest = sessionReferences.max(by: { $0.startedAt < $1.startedAt }) else { continue }
             var status = CodexSessionReadStatus.notFound
             if var cursor = cursor(for: latest) {
-                status = scan(into: &cursor, limit: min(Self.incrementalByteLimit, budget), now: now)
+                let needsHistory = sessionReferences.contains { cursor.historyReadLimit(for: $0) > 0 }
+                let tailLimit = needsHistory ? Self.readByteLimit / 2 : Self.readByteLimit
+                status = scan(into: &cursor, limit: min(tailLimit, budget), now: now)
+                budget -= min(budget, cursor.lastReadByteCount)
                 if cursor.metadata?.id != sessionId {
                     status = .unavailable
                 }
-                budget -= min(budget, cursor.lastReadByteCount)
-                let needsContext = sessionReferences.contains {
-                    let known = cursor.lifecycleByTurnId[$0.turnId]
-                    return known?.terminal == nil && (known?.hasContext != true || known?.effort == nil || known?.approvalReviewer == nil)
+                cursor.prepareSupplementalHistory(for: sessionReferences, now: now)
+                let historyLimit = sessionReferences.map { cursor.historyReadLimit(for: $0) }.max() ?? 0
+                if status != .unavailable, budget > 0, historyLimit > 0 {
+                    if !backfillHistory(into: &cursor, limit: historyLimit, budget: &budget) {
+                        status = .unavailable
+                    }
                 }
-                if status == .complete, needsContext, cursor.historicalOffset > 0,
-                   !cursor.didBackfill, !performedBackfill {
-                    status = backfillContext(into: &cursor)
-                    performedBackfill = true
-                }
+                guard !Task.isCancelled else { return [] }
                 cursor.lastReadAt = now
                 let referencedTurns = Set(sessionReferences.map(\.turnId))
                 cursor.lifecycleByTurnId = cursor.lifecycleByTurnId.filter {
                     referencedTurns.contains($0.key) || ($0.value.lastProgressAt ?? .distantPast) > cutoff
+                        || (cursor.supplementalHistoryByTurn[$0.key]?.lastRequestedAt ?? .distantPast) > cutoff
+                }
+                cursor.supplementalHistoryByTurn = cursor.supplementalHistoryByTurn.filter {
+                    $0.value.lastRequestedAt > cutoff
                 }
                 cursorsBySession[sessionId] = cursor
             }
@@ -75,8 +81,15 @@ actor CodexSessionLifecycleReader {
             for reference in sessionReferences {
                 let known = cursor?.lifecycleByTurnId[reference.turnId]
                 let hasReadGap = known?.hasReadGap ?? (cursor?.hasDecodeFailures == true)
-                let turnStatus: CodexSessionReadStatus = status == .complete && hasReadGap && known?.terminal == nil
-                    ? .incomplete : status
+                let hasHistoryGap = cursor?.hasHistoryGap(for: reference.turnId) == true
+                let turnStatus: CodexSessionReadStatus = if status == .unavailable || status == .notFound {
+                    status
+                } else if known?.terminal != nil {
+                    // 明确终态不依赖文件尾部另一条记录是否已写完
+                    .complete
+                } else {
+                    hasReadGap || hasHistoryGap ? .incomplete : status
+                }
                 states.append(CodexSessionTaskLifecycleState(
                     sessionId: sessionId, turnId: reference.turnId, startedAt: known?.startedAt,
                     approvalReviewer: known?.approvalReviewer, effort: known?.effort,
@@ -88,9 +101,10 @@ actor CodexSessionLifecycleReader {
                     rootSessionId: cursor?.metadata?.sessionId,
                     parentThreadId: cursor?.metadata?.parentThreadId,
                     lastExecutionProgressAt: known?.lastExecutionProgressAt,
-                    incompleteTailUnchangedSince: status == .incomplete && !hasReadGap && known?.hasContext == true && known?.terminal == nil
+                    incompleteTailUnchangedSince: status == .incomplete && !hasReadGap && !hasHistoryGap && known?.hasContext == true && known?.terminal == nil
                         ? cursor?.incompleteTailUnchangedSince : nil,
-                    tokenUsage: turnStatus == .complete ? known?.tokenUsage : nil
+                    tokenUsage: turnStatus == .complete && status == .complete ? known?.tokenUsage : nil,
+                    isHistoricalTerminal: known?.isHistoricalTerminal == true
                 ))
             }
         }
@@ -165,31 +179,47 @@ actor CodexSessionLifecycleReader {
         let size = stat?.size ?? 0
         let offset = size > Self.bootstrapByteLimit ? size - Self.bootstrapByteLimit : 0
         return SessionFileCursor(
-            url: url, fileIdentifier: stat?.identifier, offset: offset, historicalOffset: offset,
+            url: url, fileIdentifier: stat?.identifier, offset: offset,
             isDiscardingLine: offset > 0,
-            metadata: WorkflowRolloutMetadataReader.metadata(transcriptPath: url.path)
+            metadata: WorkflowRolloutMetadataReader.metadata(transcriptPath: url.path),
+            bootstrapEnd: offset > 0 ? size : nil
         )
     }
 
-    private func backfillContext(into cursor: inout SessionFileCursor) -> CodexSessionReadStatus {
-        let end = cursor.offset
-        let start = end > UInt64(Self.contextByteLimit) ? end - UInt64(Self.contextByteLimit) : 0
-        var restored = SessionFileCursor(
-            url: cursor.url,
-            fileIdentifier: cursor.fileIdentifier,
-            offset: start,
-            historicalOffset: start,
-            isDiscardingLine: start > 0,
-            metadata: cursor.metadata
-        )
-        let status = scan(into: &restored, limit: Self.contextByteLimit, through: end)
-        guard status == .complete else { return status }
-        restored.didBackfill = true
-        cursor = restored
-        return .complete
+    private func backfillHistory(into cursor: inout SessionFileCursor, limit: Int, budget: inout Int) -> Bool {
+        guard var history = cursor.history, history.offset > 0 else { return true }
+        guard let before = WorkflowStorage.fileStat(at: cursor.url),
+              before.identifier == cursor.fileIdentifier, before.size >= cursor.offset,
+              let handle = try? FileHandle(forReadingFrom: cursor.url) else { return false }
+        defer { try? handle.close() }
+        let count = min(limit, budget, Int(history.offset))
+        let start = history.offset - UInt64(count)
+        guard (try? handle.seek(toOffset: start)) != nil,
+              let data = try? handle.read(upToCount: count) else { return false }
+        budget -= data.count
+        // 短读或后置检查失败前实际读到的字节也计入补查预算
+        cursor.totalHistoryBytesRead += UInt64(data.count)
+        guard data.count == count else { return false }
+        history.offset = start
+        history.consume(data, file: cursor, maximumBufferedLineByteCount: Self.maximumBufferedLineByteCount)
+        guard let after = WorkflowStorage.fileStat(at: cursor.url),
+              after.identifier == before.identifier, after.size >= before.size else { return false }
+        for (turnId, earlier) in history.lifecycleByTurnId {
+            var latest = cursor.lifecycleByTurnId[turnId] ?? SessionTurnLifecycle()
+            if latest.terminal == nil, earlier.terminal != nil {
+                latest.isHistoricalTerminal = true
+            }
+            latest.mergeEarlier(earlier)
+            cursor.lifecycleByTurnId[turnId] = latest
+        }
+        cursor.restoreInitialContext(from: history)
+        // 已合并的事实留在主游标, 回读只保留跨块半行和待定位的进展
+        history.lifecycleByTurnId.removeAll(keepingCapacity: true)
+        cursor.history = history
+        return true
     }
 
-    private func scan(into cursor: inout SessionFileCursor, limit: Int, through upperBound: UInt64? = nil, now: Date = Date()) -> CodexSessionReadStatus {
+    private func scan(into cursor: inout SessionFileCursor, limit: Int, now: Date = Date()) -> CodexSessionReadStatus {
         cursor.lastReadByteCount = 0
         var previousTailUnchangedSince = cursor.incompleteTailUnchangedSince
         cursor.incompleteTailUnchangedSince = nil
@@ -198,7 +228,7 @@ actor CodexSessionLifecycleReader {
             cursor = initialCursor(for: cursor.url)
             previousTailUnchangedSince = nil
         }
-        let end = min(stat.size, upperBound ?? stat.size)
+        let end = stat.size
         guard let handle = try? FileHandle(forReadingFrom: cursor.url) else { return .unavailable }
         defer { try? handle.close() }
         if end > cursor.offset {
@@ -220,29 +250,105 @@ actor CodexSessionLifecycleReader {
     }
 
     private static let bootstrapByteLimit: UInt64 = 512 * 1024
-    private static let incrementalByteLimit = 8 * 1024 * 1024
-    private static let contextByteLimit = 8 * 1024 * 1024
+    private static let readByteLimit = 8 * 1024 * 1024
     private static let maximumBufferedLineByteCount = 16 * 1024 * 1024
+}
+
+private nonisolated struct SessionSupplementalHistoryRead {
+    let initialHistoryBytesRead: UInt64
+    var lastRequestedAt: Date
 }
 
 private nonisolated struct SessionFileCursor {
     let url: URL
     var fileIdentifier: UInt64?
     var offset: UInt64
-    let historicalOffset: UInt64
     var isDiscardingLine: Bool
     var metadata: WorkflowRolloutMetadataPayload?
     var currentTurnId: String?
+    var hasTurnBoundary = false
     var lifecycleByTurnId: [String: SessionTurnLifecycle] = [:]
+    var supplementalHistoryByTurn: [String: SessionSupplementalHistoryRead] = [:]
+    var totalHistoryBytesRead: UInt64 = 0
     var partialLineData = Data()
-    var didBackfill = false
-    var hasDecodeFailures = false
+    var history: SessionHistoryCursor?
+    var initialContextOffset: UInt64?
+    private var pendingInitialProgress = SessionTurnLifecycle()
+    private var initialProgressBeforeTerminal: [String: SessionTurnLifecycle] = [:]
+    var bootstrapEnd: UInt64?
+    private(set) var lastReadGapOffset: UInt64?
     var lastReadAt = Date()
     var lastReadByteCount = 0
     var incompleteTailUnchangedSince: Date?
 
+    init(url: URL, fileIdentifier: UInt64?, offset: UInt64, isDiscardingLine: Bool, metadata: WorkflowRolloutMetadataPayload?, bootstrapEnd: UInt64? = nil) {
+        self.url = url
+        self.fileIdentifier = fileIdentifier
+        self.offset = offset
+        self.isDiscardingLine = isDiscardingLine
+        self.metadata = metadata
+        self.bootstrapEnd = bootstrapEnd
+        initialContextOffset = bootstrapEnd == nil ? nil : offset
+        history = bootstrapEnd.map { SessionHistoryCursor(offset: $0, contextLookupOffset: offset) }
+    }
+
+    var hasDecodeFailures: Bool {
+        lastReadGapOffset != nil
+    }
+
     var hasPartialLine: Bool {
         isDiscardingLine || !partialLineData.isEmpty
+    }
+
+    private var hasPendingInitialProgress: Bool {
+        initialContextOffset != nil && pendingInitialProgress.lastProgressAt != nil
+    }
+
+    func hasHistoryGap(for turnId: String) -> Bool {
+        let hasStart = lifecycleByTurnId[turnId]?.startedAt != nil
+        return (hasPendingInitialProgress && !hasStart)
+            || history.map { $0.requiresLeadingLineRecovery || ($0.offset > 0 && (!hasStart || hasPendingInitialProgress)) } == true
+    }
+
+    func historyReadLimit(for reference: CodexActivityTurnReference) -> Int {
+        guard history.map({ $0.offset > 0 }) == true else { return 0 }
+        let known = lifecycleByTurnId[reference.turnId]
+        if known?.terminal == nil, !reference.isTerminalUsageOnly {
+            let needsHistory = hasPendingInitialProgress || history?.requiresLeadingLineRecovery == true
+                || known?.startedAt == nil || known?.hasContext != true
+                || known?.effort == nil || known?.approvalReviewer == nil
+            return needsHistory ? Int.max : 0
+        }
+        guard known?.terminal == nil || known?.rootTurnId == nil || known?.hasTokenUsageRecord != true else { return 0 }
+        let initialBytes = supplementalHistoryByTurn[reference.turnId]?.initialHistoryBytesRead ?? totalHistoryBytesRead
+        let consumedBytes = min(UInt64(Self.supplementalHistoryByteLimit), totalHistoryBytesRead - initialBytes)
+        return Self.supplementalHistoryByteLimit - Int(consumedBytes)
+    }
+
+    mutating func prepareSupplementalHistory(for references: [CodexActivityTurnReference], now: Date) {
+        let initial = SessionSupplementalHistoryRead(initialHistoryBytesRead: totalHistoryBytesRead, lastRequestedAt: now)
+        for reference in references where reference.isTerminalUsageOnly || lifecycleByTurnId[reference.turnId]?.terminal != nil {
+            supplementalHistoryByTurn[reference.turnId, default: initial].lastRequestedAt = now
+        }
+    }
+
+    private static let supplementalHistoryByteLimit = 32 * 1024 * 1024
+
+    mutating func restoreInitialContext(from history: SessionHistoryCursor) {
+        guard initialContextOffset != nil, history.hasInitialTurnBoundary, !history.initialContextHasReadGap else { return }
+        if let turnId = history.initialTurnId {
+            var state = lifecycleByTurnId[turnId] ?? SessionTurnLifecycle()
+            state.mergeEarlier(initialProgressBeforeTerminal[turnId] ?? pendingInitialProgress)
+            lifecycleByTurnId[turnId] = state
+        }
+        pendingInitialProgress = SessionTurnLifecycle()
+        initialContextOffset = nil
+        // 尾部可能已进入下一轮, 补查只给启动片段补归属, 不回退当前轮次
+        if !hasTurnBoundary {
+            currentTurnId = history.initialTurnId.flatMap { initialProgressBeforeTerminal[$0] == nil ? $0 : nil }
+            hasTurnBoundary = true
+        }
+        initialProgressBeforeTerminal.removeAll()
     }
 
     /// 读取预算可以在一行中间结束, 游标仍需推进并在下一轮继续拼接
@@ -250,9 +356,20 @@ private nonisolated struct SessionFileCursor {
     mutating func consume(_ data: Data, maximumBufferedLineByteCount: Int) {
         var fragmentStart = data.startIndex
         while let newline = data[fragmentStart...].firstIndex(of: JSONLines.newlineByte) {
+            if isDiscardingLine, let bootstrapEnd {
+                let lineEnd = offset - UInt64(data.count) + UInt64(newline + 1)
+                self.bootstrapEnd = nil
+                // 启动时跨过的半行后来才写完, 重新定位这一行以免正反两路都跳过它
+                if lineEnd > bootstrapEnd {
+                    history = SessionHistoryCursor(
+                        offset: lineEnd, contextLookupOffset: initialContextOffset, requiresLeadingLineRecovery: true
+                    )
+                }
+            }
             consumeLineFragment(
                 data[fragmentStart ..< newline],
                 completesLine: true,
+                endingAt: offset - UInt64(data.count) + UInt64(newline + 1),
                 maximumBufferedLineByteCount: maximumBufferedLineByteCount
             )
             fragmentStart = data.index(after: newline)
@@ -261,6 +378,7 @@ private nonisolated struct SessionFileCursor {
             consumeLineFragment(
                 data[fragmentStart...],
                 completesLine: false,
+                endingAt: offset,
                 maximumBufferedLineByteCount: maximumBufferedLineByteCount
             )
         }
@@ -269,6 +387,7 @@ private nonisolated struct SessionFileCursor {
     private mutating func consumeLineFragment(
         _ fragment: Data.SubSequence,
         completesLine: Bool,
+        endingAt: UInt64,
         maximumBufferedLineByteCount: Int
     ) {
         if isDiscardingLine {
@@ -280,7 +399,7 @@ private nonisolated struct SessionFileCursor {
 
         guard fragment.count <= maximumBufferedLineByteCount - partialLineData.count else {
             partialLineData.removeAll(keepingCapacity: false)
-            markReadGap()
+            markReadGap(at: endingAt)
             isDiscardingLine = !completesLine
             return
         }
@@ -290,37 +409,48 @@ private nonisolated struct SessionFileCursor {
         let keepsCapacity = partialLineData.count <= Self.retainedLineCapacityByteLimit
         defer { partialLineData.removeAll(keepingCapacity: keepsCapacity) }
 
-        let decoded = JSONLines.decodeWithFailures(CodexRolloutLineEnvelope.self, from: partialLineData)
-        if decoded.failedLineCount > 0 {
-            markReadGap()
+        applyCompleteLine(partialLineData, endingAt: endingAt)
+    }
+
+    @discardableResult
+    mutating func applyCompleteLine(_ data: Data, endingAt: UInt64) -> CodexRolloutLineEnvelope? {
+        guard !JSONLines.isBlankLine(data) else { return nil }
+        let decoder = JSONDecoder()
+        guard let envelope = try? decoder.decode(CodexRolloutLineEnvelope.self, from: data) else {
+            markReadGap(at: endingAt)
+            return nil
         }
-        for envelope in decoded.values {
-            apply(envelope)
-            if envelope.type == "token_usage_record", let turnId = envelope.payload?.turnId {
-                // 用量字段损坏不能影响生命周期解码, 也不能沿用上一条累计值
-                var state = lifecycleByTurnId[turnId] ?? SessionTurnLifecycle()
-                state.tokenUsage = nil
-                if let record = try? JSONDecoder().decode(CodexRolloutTokenUsageRecord.self, from: partialLineData).payload,
-                   record.threadId == metadata?.id,
-                   record.sessionId == (metadata?.sessionId ?? metadata?.id),
-                   !record.responseId.isEmpty, !record.rootTurnId.isEmpty,
-                   !turnId.isEmpty, record.turnTokenUsage.isValid {
-                    state.tokenUsage = record.turnTokenUsage
-                    state.rootTurnId = record.rootTurnId
-                }
-                lifecycleByTurnId[turnId] = state
+        apply(envelope)
+        if envelope.type == "token_usage_record", let turnId = envelope.payload?.turnId {
+            // 用量字段损坏不能影响生命周期解码, 也不能沿用上一条累计值
+            var state = lifecycleByTurnId[turnId] ?? SessionTurnLifecycle()
+            state.tokenUsage = nil
+            state.hasTokenUsageRecord = true
+            if let record = try? decoder.decode(CodexRolloutTokenUsageRecord.self, from: data).payload,
+               record.threadId == metadata?.id,
+               record.sessionId == (metadata?.sessionId ?? metadata?.id),
+               !record.responseId.isEmpty, !record.rootTurnId.isEmpty,
+               !turnId.isEmpty, record.turnTokenUsage.isValid {
+                state.tokenUsage = record.turnTokenUsage
+                state.rootTurnId = record.rootTurnId
             }
+            lifecycleByTurnId[turnId] = state
         }
+        return envelope
     }
 
     private static let retainedLineCapacityByteLimit = 512 * 1024
 
     /// 损坏可能遮住 turn 边界, 只保留已明确结束的事实, 后续新 turn 独立建立覆盖
-    mutating func markReadGap() {
-        hasDecodeFailures = true
+    mutating func markReadGap(at offset: UInt64) {
+        lastReadGapOffset = offset
         currentTurnId = nil
+        hasTurnBoundary = true
+        pendingInitialProgress = SessionTurnLifecycle()
+        initialProgressBeforeTerminal.removeAll()
         for turnId in lifecycleByTurnId.keys {
             lifecycleByTurnId[turnId]?.tokenUsage = nil
+            lifecycleByTurnId[turnId]?.hasTokenUsageRecord = true
             if lifecycleByTurnId[turnId]?.terminal == nil {
                 lifecycleByTurnId[turnId]?.hasReadGap = true
             }
@@ -328,7 +458,13 @@ private nonisolated struct SessionFileCursor {
     }
 
     mutating func apply(_ envelope: CodexRolloutLineEnvelope) {
+        if envelope.endsTurnContext, !hasTurnBoundary, initialContextOffset != nil,
+           let turnId = envelope.payload?.turnId, !turnId.isEmpty, initialProgressBeforeTerminal[turnId] == nil {
+            // 起始归属尚未恢复, 先保留各轮次结束前的进展, 不让迟到终态截断其他轮次
+            initialProgressBeforeTerminal[turnId] = pendingInitialProgress
+        }
         if envelope.startsTurnContext {
+            hasTurnBoundary = true
             currentTurnId = envelope.payload?.turnId.flatMap { $0.isEmpty ? nil : $0 }
             if let turnId = currentTurnId, let rootTurnId = envelope.payload?.rootTurnId, !rootTurnId.isEmpty {
                 var state = lifecycleByTurnId[turnId] ?? SessionTurnLifecycle()
@@ -338,6 +474,9 @@ private nonisolated struct SessionFileCursor {
         }
         if let event = envelope.progressEvent(currentTurnId: currentTurnId) {
             apply(event)
+        } else if !hasTurnBoundary, initialContextOffset != nil, let progress = envelope.unassignedProgress {
+            // 只暂存启动片段的进展时间, 首个轮次边界之后按新上下文正常处理
+            pendingInitialProgress.apply(progress)
         }
         if let event = envelope.lifecycleEvent {
             apply(event)
@@ -356,6 +495,125 @@ private nonisolated struct SessionFileCursor {
         var state = lifecycleByTurnId[event.turnId] ?? SessionTurnLifecycle()
         state.apply(event.change)
         lifecycleByTurnId[event.turnId] = state
+    }
+}
+
+/// 从启动时的文件末尾向前读, 每个完整行只在回读链路中解析一次
+private nonisolated struct SessionHistoryCursor {
+    var offset: UInt64
+    var contextLookupOffset: UInt64?
+    var requiresLeadingLineRecovery = false
+    private var hasSkippedTail = false
+    var lifecycleByTurnId: [String: SessionTurnLifecycle] = [:]
+    private var partialLineData = Data()
+    // 第一段可能是尚未落盘完整的尾行, 由正向游标继续跟踪
+    private var isDiscardingLine = true
+    private var hasDecodeFailures = false
+    private var pendingProgress = SessionTurnLifecycle()
+    private var progressAfterTerminals: [(turnId: String, progress: SessionTurnLifecycle)] = []
+    private var initialEndedTurnIds: Set<String> = []
+    private(set) var hasInitialTurnBoundary = false
+    private(set) var initialTurnId: String?
+    private(set) var initialContextHasReadGap = false
+
+    init(offset: UInt64, contextLookupOffset: UInt64?, requiresLeadingLineRecovery: Bool = false) {
+        self.offset = offset
+        self.contextLookupOffset = contextLookupOffset
+        self.requiresLeadingLineRecovery = requiresLeadingLineRecovery
+    }
+
+    mutating func consume(_ data: Data, file: SessionFileCursor, maximumBufferedLineByteCount: Int) {
+        var end = data.endIndex
+        while let newline = data[..<end].lastIndex(of: JSONLines.newlineByte) {
+            prepend(data[(newline + 1) ..< end], maximumBufferedLineByteCount: maximumBufferedLineByteCount)
+            finishLine(file: file, lineStart: offset + UInt64(newline + 1))
+            end = newline
+        }
+        prepend(data[..<end], maximumBufferedLineByteCount: maximumBufferedLineByteCount)
+        if offset == 0 {
+            finishLine(file: file, lineStart: 0)
+        }
+    }
+
+    private mutating func prepend(_ fragment: Data.SubSequence, maximumBufferedLineByteCount: Int) {
+        guard !isDiscardingLine else { return }
+        guard fragment.count <= maximumBufferedLineByteCount - partialLineData.count else {
+            partialLineData.removeAll(keepingCapacity: false)
+            isDiscardingLine = true
+            hasDecodeFailures = true
+            pendingProgress = SessionTurnLifecycle()
+            progressAfterTerminals.removeAll()
+            return
+        }
+        partialLineData = Data(fragment) + partialLineData
+    }
+
+    private mutating func finishLine(file: SessionFileCursor, lineStart: UInt64) {
+        if hasSkippedTail {
+            requiresLeadingLineRecovery = false
+        }
+        hasSkippedTail = true
+        defer {
+            partialLineData.removeAll(keepingCapacity: false)
+            isDiscardingLine = false
+        }
+        guard !isDiscardingLine, !partialLineData.isEmpty else { return }
+        var earlier = SessionFileCursor(
+            url: file.url, fileIdentifier: file.fileIdentifier, offset: 0,
+            isDiscardingLine: false, metadata: file.metadata
+        )
+        let envelope = earlier.applyCompleteLine(partialLineData, endingAt: lineStart + UInt64(partialLineData.count))
+        if earlier.hasDecodeFailures {
+            hasDecodeFailures = true
+            pendingProgress = SessionTurnLifecycle()
+            progressAfterTerminals.removeAll()
+        }
+        if let envelope {
+            if !hasInitialTurnBoundary, let contextLookupOffset, lineStart <= contextLookupOffset {
+                if envelope.endsTurnContext, let turnId = envelope.payload?.turnId, !turnId.isEmpty {
+                    initialEndedTurnIds.insert(turnId)
+                }
+                if envelope.startsTurnContext {
+                    hasInitialTurnBoundary = true
+                    initialContextHasReadGap = hasDecodeFailures
+                    initialTurnId = envelope.payload?.turnId.flatMap { $0.isEmpty || initialEndedTurnIds.contains($0) ? nil : $0 }
+                    initialEndedTurnIds.removeAll()
+                }
+            }
+            if envelope.endsTurnContext, let turnId = envelope.payload?.turnId, !turnId.isEmpty {
+                progressAfterTerminals.append((turnId, pendingProgress))
+                pendingProgress = SessionTurnLifecycle()
+            }
+            if envelope.startsTurnContext {
+                if let turnId = envelope.payload?.turnId, !turnId.isEmpty {
+                    var state = earlier.lifecycleByTurnId[turnId] ?? SessionTurnLifecycle()
+                    state.mergeEarlier(pendingProgress)
+                    // 反向读到开始边界后才确定归属, 只排除该轮次自身结束后的进展
+                    for segment in progressAfterTerminals.reversed() {
+                        guard segment.turnId != turnId else { break }
+                        state.mergeEarlier(segment.progress)
+                    }
+                    earlier.lifecycleByTurnId[turnId] = state
+                }
+                pendingProgress = SessionTurnLifecycle()
+                progressAfterTerminals.removeAll()
+            }
+            // 没有显式轮次的进展, 遇到更早的上下文边界后才能确定归属
+            if let progress = envelope.unassignedProgress {
+                pendingProgress.apply(progress)
+            }
+        }
+        for (turnId, var state) in earlier.lifecycleByTurnId {
+            // 正向新增的坏行可能不在历史快照中, 按位置保留跨过该缺口的轮次状态
+            if hasDecodeFailures || file.lastReadGapOffset.map({ lineStart < $0 }) == true {
+                state.hasReadGap = true
+                state.tokenUsage = nil
+                state.hasTokenUsageRecord = true
+            }
+            var latest = lifecycleByTurnId[turnId] ?? SessionTurnLifecycle()
+            latest.mergeEarlier(state)
+            lifecycleByTurnId[turnId] = latest
+        }
     }
 }
 
@@ -420,6 +678,20 @@ private nonisolated extension CodexRolloutLineEnvelope {
     }
 
     func progressEvent(currentTurnId: String?) -> SessionLifecycleEvent? {
+        guard let turnId = explicitProgressTurnId ?? currentTurnId, !turnId.isEmpty,
+              let change = progressChange else { return nil }
+        return SessionLifecycleEvent(turnId: turnId, change: change)
+    }
+
+    var unassignedProgress: SessionLifecycleChange? {
+        explicitProgressTurnId == nil ? progressChange : nil
+    }
+
+    private var explicitProgressTurnId: String? {
+        type == "response_item" ? payload?.messageMetadata?.turnId : payload?.turnId
+    }
+
+    private var progressChange: SessionLifecycleChange? {
         let progressTypes: Set = [
             "token_count", "item_completed", "agent_message", "agent_reasoning",
             "task_started", "turn_started", "task_complete", "turn_complete", "turn_aborted"
@@ -435,16 +707,12 @@ private nonisolated extension CodexRolloutLineEnvelope {
             return nil
         }
 
-        let explicitTurnId = type == "response_item" ? payload?.messageMetadata?.turnId : payload?.turnId
-        guard let turnId = explicitTurnId ?? currentTurnId, !turnId.isEmpty else {
-            return nil
-        }
         let isExecutionProgress = if type == "response_item" {
             payload?.role == "assistant" || ["function_call_output", "custom_tool_call_output", "tool_search_output"].contains(payload?.type ?? "")
         } else {
             type == "event_msg" && ["agent_message", "agent_reasoning"].contains(payload?.type ?? "")
         }
-        return SessionLifecycleEvent(turnId: turnId, change: .progress(at: eventDate, resumesApproval: isExecutionProgress))
+        return .progress(at: eventDate, resumesApproval: isExecutionProgress)
     }
 
     var lifecycleEvent: SessionLifecycleEvent? {
@@ -520,6 +788,8 @@ private nonisolated enum SessionLifecycleChange {
 
 private nonisolated struct SessionTurnLifecycle {
     var tokenUsage: CodexTokenUsage?
+    var hasTokenUsageRecord = false
+    var isHistoricalTerminal = false
     var rootTurnId: String?
     var hasReadGap = false
     var contextObservedAt: Date?
@@ -530,6 +800,29 @@ private nonisolated struct SessionTurnLifecycle {
     var lastProgressAt: Date?
     var lastExecutionProgressAt: Date?
     var terminal: CodexSessionTaskTerminalState?
+
+    mutating func mergeEarlier(_ earlier: Self) {
+        hasReadGap = hasReadGap || earlier.hasReadGap
+        hasContext = hasContext || earlier.hasContext
+        if let start = earlier.startedAt {
+            startedAt = min(startedAt ?? start, start)
+        }
+        approvalReviewer = approvalReviewer ?? earlier.approvalReviewer
+        effort = effort ?? earlier.effort
+        contextObservedAt = contextObservedAt ?? earlier.contextObservedAt
+        rootTurnId = rootTurnId ?? earlier.rootTurnId
+        terminal = terminal ?? earlier.terminal
+        if let progress = earlier.lastProgressAt {
+            lastProgressAt = max(lastProgressAt ?? progress, progress)
+        }
+        if let progress = earlier.lastExecutionProgressAt {
+            lastExecutionProgressAt = max(lastExecutionProgressAt ?? progress, progress)
+        }
+        if !hasTokenUsageRecord {
+            tokenUsage = earlier.tokenUsage
+            hasTokenUsageRecord = earlier.hasTokenUsageRecord
+        }
+    }
 
     mutating func apply(_ change: SessionLifecycleChange) {
         switch change {
@@ -575,6 +868,7 @@ nonisolated struct CodexSessionTaskLifecycleState {
     var lastExecutionProgressAt: Date?
     var incompleteTailUnchangedSince: Date?
     var tokenUsage: CodexTokenUsage?
+    var isHistoricalTerminal = false
 }
 
 nonisolated enum CodexSessionReadStatus {

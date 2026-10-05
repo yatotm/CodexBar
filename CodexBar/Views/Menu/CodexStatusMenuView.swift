@@ -209,7 +209,8 @@ private extension CodexStatusMenuView {
                 resetCreditsAvailableCount: snapshot.resetCreditsAvailableCount,
                 resetCreditExpirationDates: snapshot.resetCreditExpirationDates,
                 isStale: snapshot.isRateLimitsStale,
-                onResetCreditsTap: onResetCreditsTap
+                onResetCreditsTap: onResetCreditsTap,
+                isOrdinaryUsageRestricted: snapshot.isOrdinaryUsageRestricted
             )
             .id(usageCenterViewModel.menuScope)
             .id(menuSurfaceVisibility.presentationGeneration)

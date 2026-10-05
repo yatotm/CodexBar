@@ -127,8 +127,8 @@ actor 在 `await` 期间可以重入，因此 `isProcessingReads` 和 `hasPendin
 
 - 默认每 1 秒检查一次
 - 初始尾部窗口为 512 KB
-- effort 等 turn context 字段最多回查 8 MB
-- 只解析生命周期、turn, progress, effort 和 reviewer
+- 正向增量与历史回读每轮共享 8 MiB 预算，按线程轮换
+- 只解析生命周期、turn、progress、effort、reviewer 和数字用量
 - 不读取或保存对话内容用于产品展示
 
 Hook 的 `Stop` 只是完成候选。rollout 中的 terminal 状态用于区分真正完成、用户取消和异常中断。
@@ -149,7 +149,9 @@ resume 可能继续很早以前创建的 session。快速路径找不到时，�
 
 实时任务只需要活跃 turn 附近的 lifecycle，全量读取一个长期 session 会增加常驻 I/O。
 
-初始 cursor 从最后 512 KB 开始并丢弃第一条可能不完整的行。如果 effort 仍缺失，对具体 turn 再定向回查最多 8 MB。
+初始 cursor 从最后 512 KiB 开始。历史游标向前分批查找缺失的轮次边界，保留有界半行以恢复跨块记录；尚未写完的尾行由正向游标继续跟踪。明确终态不受其他尾行未完成的影响，旧轮次的迟到终态不能截断新轮次。
+
+已结束任务补查用量和归属时，每轮次累计最多读取 32 MiB。旧历史不能覆盖更新的计数，损坏的最新计数也不能退回更早的数值。历史终态只更新任务列表，不补发通知、触觉或流光；本链路不写入用量中心或价值账本。
 
 effort backfill 只针对至少运行 2 秒，尚未 terminal 且仍缺 effort 的任务，同一 turn 重试间隔 10 秒。这避免刚创建任务时立刻做大范围回查。
 

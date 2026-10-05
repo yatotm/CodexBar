@@ -155,6 +155,45 @@ class ActivityTokensTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_codex_missing_tail_usage_is_recovered_across_history_chunks(self):
+        self.reader.byte_limit = 700
+        path = self.root / 'root'
+        self.write(path, [self.codex()])
+        with path.open('ab') as stream:
+            stream.write(b'\n' * 4000)
+        for _ in range(12):
+            task = self.frame([path], 'codex', state='completed')
+            if 'tokenUsage' in task:
+                break
+        self.assertEqual(task['tokenUsage']['total_tokens'], 102)
+
+    def test_codex_history_budget_stops_and_late_usage_still_arrives(self):
+        self.reader.byte_limit = 700
+        self.reader.history_limit = 1400
+        path = self.root / 'root'
+        self.write(path, [self.codex()])
+        with path.open('ab') as stream:
+            stream.write(b'\n' * 5000)
+        for _ in range(10):
+            self.assertNotIn('tokenUsage', self.frame([path], 'codex', state='completed'))
+        cursor = next(iter(self.reader.cursors.values()))
+        self.assertEqual(cursor['history'].bytes_read, 1400)
+        self.write(path, [self.codex(250, 5)], 'a')
+        self.assertEqual(self.frame([path], 'codex', state='completed')['tokenUsage']['total_tokens'], 252)
+
+    def test_codex_completed_child_includes_earlier_turns_without_replacing_latest(self):
+        self.reader.byte_limit = 700
+        path = self.root / 'child'
+        self.write(path, [self.codex(100, -1, thread='child', turn='a'), self.codex(200, thread='child', turn='b')])
+        with path.open('ab') as stream:
+            stream.write(b'\n' * 2000)
+        self.write(path, [self.codex(250, 2, thread='child', turn='b')], 'a')
+        for _ in range(12):
+            task = self.frame([path], 'codex', state='completed')
+            if 'tokenUsage' in task:
+                break
+        self.assertEqual(task['tokenUsage']['total_tokens'], 354)
+
     def test_codex_hook_hashes_match_raw_rollout_turn_identifiers(self):
         home = self.root / 'codex'
         path = home / 'sessions/rollout-root.jsonl'

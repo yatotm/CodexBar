@@ -27,6 +27,8 @@ CodexBar is a macOS 15+ menu bar app for Codex quotas and task status, plus Code
 
 ## Features
 
+Codex account polling supports 1, 2, 3, 5, or 10-minute intervals and follows the existing sleep gate. Device collection and value estimates keep their own schedules.
+
 ### Account and rate limits at a glance
 
 - View your current Codex account and plan

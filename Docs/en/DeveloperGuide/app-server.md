@@ -244,7 +244,7 @@ This avoids repeatedly refreshing the same credential during one UI refresh.
 
 ## Refresh Model
 
-The status view model refreshes every 60 seconds by default. Users can double-click the account icon in the main panel to request an immediate refresh.
+Account polling defaults to 60 seconds, with 1, 2, 3, 5, and 10-minute options stored under `CodexQuota.refreshIntervalSeconds`. Missing or invalid values fall back to one minute. Changing the interval reschedules polling without canceling in-flight requests or resuming a suspended coordinator. Users can double-click the account icon for an immediate refresh.
 
 Each refresh resolves the account first, then reads rate limits and usage. Supplemental caches are strictly bound to account identity:
 

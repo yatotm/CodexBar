@@ -66,7 +66,8 @@ struct SettingsOptionsPicker<Option: Hashable>: View {
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
-        .frame(width: width, alignment: alignment)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(minWidth: width, alignment: alignment)
     }
 }
 

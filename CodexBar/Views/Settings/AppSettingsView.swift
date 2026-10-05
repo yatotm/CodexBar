@@ -302,6 +302,8 @@ private extension AppSettingsView {
                 isShowingProxySettings = true
             }
             LiquidGlassDivider()
+            quotaRefreshIntervalRow
+            LiquidGlassDivider()
             codexHookRow
             LiquidGlassDivider()
             notificationRow
@@ -404,6 +406,24 @@ private extension AppSettingsView {
     }
 
     // MARK: - 高级页各行
+
+    var quotaRefreshIntervalRow: some View {
+        HStack(spacing: SettingsRowMetrics.spacing) {
+            Image(systemName: "timer")
+                .frame(width: SettingsRowMetrics.iconWidth)
+                .foregroundStyle(.tint)
+            Text("Codex 额度刷新")
+            Spacer()
+            SettingsOptionsPicker(
+                title: "Codex 额度刷新",
+                selection: Binding(get: { statusViewModel.quotaRefreshInterval }, set: { statusViewModel.setQuotaRefreshInterval($0) }),
+                options: CodexQuotaRefreshInterval.allCases,
+                label: { $0.title }, width: 90
+            )
+        }
+        .frame(minHeight: SettingsRowMetrics.optionsButtonSize)
+        .help("仅调整 Codex 账户额度轮询, 不改变设备日志和价值统计的刷新间隔")
+    }
 
     var codexHookRow: some View {
         VStack(alignment: .leading, spacing: 4) {

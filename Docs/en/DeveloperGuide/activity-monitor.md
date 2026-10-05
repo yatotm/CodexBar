@@ -127,8 +127,8 @@ Rules are:
 
 - Poll every 1 second by default
 - Begin with a 512 KB tail window
-- Look back at most 8 MB for turn-context fields such as effort
-- Parse only lifecycle, turn, progress, effort, and reviewer
+- Share an 8 MiB budget per read cycle between forward and historical reads, rotating across threads
+- Parse only lifecycle, turn, progress, effort, reviewer, and numeric usage
 - Never read or store conversation content for product presentation
 
 Hook `Stop` is only a completion candidate. Rollout terminal state distinguishes actual completion, user cancellation, and abnormal termination.
@@ -149,7 +149,7 @@ If a file moves to the archive, a missing cached URL clears its cursor and allow
 
 Live tasks need lifecycle near an active turn, not a full read of a long-running session. Starting from the last 512 KB reduces resident I/O and discards the first potentially partial line.
 
-If effort remains missing, a targeted lookup for that turn can read up to 8 MB.
+Historical reads continue across chunks with bounded partial-line recovery. A confirmed terminal remains usable when a later line is incomplete, and a late old terminal cannot end a newer turn. Usage and ownership recovery after completion has a cumulative 32 MiB budget per turn. Older records cannot replace newer usage or repair an explicitly invalid latest count. Historical completion updates task history silently, without replaying notifications or glow, and never writes to the value ledger.
 
 Effort backfill applies only to nonterminal tasks that have run for at least 2 seconds and still lack effort, with a 10-second retry interval per turn. This avoids a large search immediately after every task creation.
 

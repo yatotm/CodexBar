@@ -38,6 +38,8 @@ The About page in Settings shows the connection failure reason; the Logs window 
 
 ## Rate Limits
 
+A fresh, explicit Codex usage restriction appears only in the Codex quota card. Missing or stale status does not create a warning or change the shared Codex/Claude task icon. Plan colors match complete names; an unfamiliar plan does not inherit another tier’s reference budget.
+
 CodexBar shows every rate-limit group and window returned by Codex.
 
 Each rate-limit window includes:

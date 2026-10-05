@@ -1372,7 +1372,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "找不到 Codex CLI 或 Codex APP"
+            "value" : "找不到 Codex CLI 或 Codex App"
           }
         }
       }
@@ -4444,7 +4444,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "清除 APP 快捷键"
+            "value" : "清除 App 快捷键"
           }
         }
       }
@@ -4476,7 +4476,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "APP 快捷键"
+            "value" : "App 快捷键"
           }
         }
       }

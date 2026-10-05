@@ -296,6 +296,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
+    func setWorkflowMaintenanceAllowed(_ allowed: Bool) {
+        let enabled = allowed && codexHookSettings.isEnabled
+        workflowMaintenanceScheduler.setAutomaticMaintenanceEnabled(enabled)
+        if enabled {
+            workflowMaintenanceScheduler.requestMaintenance(trigger: .wake)
+        }
+    }
+
     func openSettingsFromCommand() {
         closeMenuSurface(animated: false)
         openSettings()
@@ -413,7 +421,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 guard let self else {
                     return
                 }
-                refreshWorkflowIfHookEnabled(performMaintenance: true)
+                refreshWorkflowIfHookEnabled()
             }
             .store(in: &cancellables)
 
@@ -452,10 +460,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                     return
                 }
 
-                if isEnabled {
+                workflowMaintenanceScheduler.setAutomaticMaintenanceEnabled(isEnabled && !viewModel.isRefreshSuspended)
+                if isEnabled, !viewModel.isRefreshSuspended {
                     // 回调跑在 willSet, codexHookSettings.isEnabled 此刻还是旧值, 只能用参数
                     workflowMaintenanceScheduler.requestMaintenance(trigger: .hookEnabled)
-                } else {
+                } else if !isEnabled {
                     workflowMaintenanceScheduler.clearPendingMaintenance()
                     activityCenterPanelController.hide(immediate: true)
                 }
@@ -715,7 +724,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             guard let self, isActiveMenuSurfaceVisible else { return }
             menuSurfaceState = .shown
             // 淡入完成后刷新共享状态, 避免同时触发整个面板重算
-            refreshWorkflowIfHookEnabled(performMaintenance: false)
+            refreshWorkflowIfHookEnabled()
             viewModel.refreshIfNeeded(trigger: .panelOpen)
         }
     }
@@ -963,22 +972,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     // MARK: - 刷新与同步
 
-    private func refreshWorkflowIfHookEnabled(performMaintenance: Bool) {
-        // Hook 与额度使用同一刷新节奏, 配置和信任状态损坏后都能自动收敛
+    private func refreshWorkflowIfHookEnabled() {
+        // 配置和信任仍随额度对账, 本地聚合保持独立的分钟级维护
         codexHookSettings.reconcileInstalledHooks()
         guard codexHookSettings.isEnabled else {
             workflowMaintenanceScheduler.clearPendingMaintenance()
             return
         }
 
-        if performMaintenance {
-            // 统计维护挂在额度刷新完成事件上, 触发来源继承那一次刷新
-            workflowMaintenanceScheduler.requestMaintenance(
-                trigger: viewModel.lastRefreshTrigger
-            )
-        } else {
-            workflowViewModel.refreshIfNeeded()
-        }
+        workflowViewModel.refreshIfNeeded()
     }
 
     // MARK: - 侧边面板

@@ -103,6 +103,10 @@ struct UsageCommandSmoke {
             let done = RemoteActivityTask(id: id, provider: provider, state: "completed", project: "p", updatedAt: 20, startedAt: 1, modelName: "m")
             let frame = RemoteActivityFrame(schema: 1, epoch: String(repeating: "a", count: 32), revision: 2, sentAt: 21, tasks: [done])
             precondition(RemoteActivityController.liveTerminals(previous: [previous], frame: frame, wasConnected: true).count == 1)
+            var recovered = done
+            recovered.isHistoricalTerminal = true
+            let replay = RemoteActivityFrame(schema: 1, epoch: frame.epoch, revision: 3, sentAt: 21, tasks: [recovered])
+            precondition(RemoteActivityController.liveTerminals(previous: [previous], frame: replay, wasConnected: true).isEmpty, "历史回补不应重播流光")
             precondition(RemoteActivityController.liveTerminals(previous: [previous], frame: frame, wasConnected: false).isEmpty, "重连不得重播终态流光")
             let stale = RemoteActivityFrame(schema: 1, epoch: frame.epoch, revision: 3, sentAt: 100, tasks: [done])
             precondition(RemoteActivityController.liveTerminals(previous: [previous], frame: stale, wasConnected: true).isEmpty, "过期终态不得再次提示")

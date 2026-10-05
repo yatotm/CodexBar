@@ -24,13 +24,18 @@ nonisolated struct CodexQuotaSnapshot: Equatable {
     let usage: CodexUsageSnapshot?
     let isRateLimitsStale: Bool
     let isUsageStale: Bool
+    var ordinaryUsageAllowed: Bool?
+
+    var isOrdinaryUsageRestricted: Bool {
+        !isRateLimitsStale && ordinaryUsageAllowed == false
+    }
 
     var accountLabel: String {
         account.displayName
     }
 
     var planLabel: String? {
-        account.planType ?? planType
+        isRateLimitsStale ? account.planType ?? planType : planType ?? account.planType
     }
 
     var hasTrustedData: Bool {
@@ -141,6 +146,7 @@ nonisolated struct AccountRateLimitsResponse: Decodable {
     let rateLimits: RateLimitSnapshot
     let rateLimitsByLimitId: [String: RateLimitSnapshot]?
     let rateLimitResetCredits: RateLimitResetCreditsSummary?
+    var ordinaryUsageAllowed: Bool?
 }
 
 /// app-server 返回的可用额度重置次数和明细
@@ -303,7 +309,8 @@ nonisolated extension CodexQuotaSnapshot {
             limits: limits,
             usage: usage,
             isRateLimitsStale: isRateLimitsStale,
-            isUsageStale: isUsageStale
+            isUsageStale: isUsageStale,
+            ordinaryUsageAllowed: rateLimitsResponse?.ordinaryUsageAllowed
         )
     }
 
