@@ -132,6 +132,39 @@ class CollectorTests(unittest.TestCase):
         value.observe_quota("codex", {"five_hour": {"used_percentage": 90}}, now - 1)
         self.assertIsNone(value.quotas["codex"]["windows"][0]["resetsAt"])
 
+    def test_claude_reset_window_survives_later_stale_session_redraws(self):
+        now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+        old_reset, new_reset, week_reset = now + 3600, now + 7200, now + 3 * 86400
+
+        def signal(session, observed, reset, used, weekly_used):
+            return {"type": "codexbar_signal", "event": "statusline", "session": session * 64,
+                    "timestamp": dt.datetime.fromtimestamp(observed, dt.timezone.utc).isoformat(),
+                    "rateLimits": {"five_hour": {"used_percentage": used, "resets_at": reset},
+                                   "seven_day": {"used_percentage": weekly_used, "resets_at": week_reset}}}
+
+        self.write([signal("a", now - 30, new_reset, 3, 0)], self.claude / "codexbar-usage/signals/a.jsonl")
+        stale = self.write([signal("b", now - 20, old_reset, 35, 98)], self.claude / "codexbar-usage/signals/z.jsonl")
+        for observed in (now - 10, now - 5):
+            self.write([signal("b", observed, old_reset, 35, 98)], stale, append=True)
+            quota = self.scan().quotas["claude"]
+            self.assertEqual(quota["observedAt"], now - 30)
+            self.assertEqual(quota["windows"], [{"name": "5h", "usedPercent": 3, "resetsAt": new_reset},
+                                                {"name": "7d", "usedPercent": 0, "resetsAt": week_reset}])
+
+        self.write([signal("a", now - 1, new_reset, 4, 1)], self.claude / "codexbar-usage/signals/a.jsonl", append=True)
+        quota = self.scan().quotas["claude"]
+        self.assertEqual(quota["observedAt"], now - 1)
+        self.assertEqual([w["usedPercent"] for w in quota["windows"]], [4, 1])
+
+    def test_claude_weekly_rollover_survives_redraw_with_same_five_hour_window(self):
+        now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+        value = collector.Collector(self.db, self.codex, self.claude, ["claude"])
+        for observed, weekly_reset, used in [(now - 20, now + 7 * 86400, 0), (now - 1, now - 10, 98)]:
+            value.observe_quota("claude", {"five_hour": {"used_percentage": 3, "resets_at": now + 3600},
+                                           "seven_day": {"used_percentage": used, "resets_at": weekly_reset}}, observed)
+        self.assertEqual(value.quotas["claude"]["observedAt"], now - 20)
+        self.assertEqual(value.quotas["claude"]["windows"][1]["usedPercent"], 0)
+
     def test_current_codex_authentication_exports_only_the_mode(self):
         auth = self.codex / "auth.json"
         auth.write_text(json.dumps({"auth_mode": "chatgpt", "tokens": {"access_token": "PRIVATE_CREDENTIAL"}}))

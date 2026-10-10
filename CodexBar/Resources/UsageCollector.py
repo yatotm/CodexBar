@@ -63,7 +63,9 @@ def claude_quota_priority(quota, now):
     complete = 0 <= now - observed < 5 * 3600 and reset > now
     # 已知窗口结束后, 过期之前的无时间缓存不能让旧用量重新出现
     evidence = max(observed, reset) if 0 < reset <= now else observed
-    return complete, evidence, observed
+    # 状态栏重绘可能重报旧缓存, 同等完整的记录先按额度窗口排序
+    weekly_reset = next((w.get("resetsAt") or 0 for w in quota.get("windows", []) if w.get("name") == "7d"), 0)
+    return complete, reset if complete else 0, weekly_reset if complete else 0, evidence, observed
 
 
 def state_directory():

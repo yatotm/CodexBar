@@ -179,6 +179,16 @@ nonisolated struct UsageQuotaObservation: Codable, Identifiable {
             if complete != otherComplete {
                 return complete
             }
+            if complete {
+                // 状态栏重绘可能重报旧缓存, 同等完整的记录先按额度窗口排序
+                for name in ["5h", "7d"] {
+                    let reset = windows.first { $0.name == name }?.resetsAt ?? 0
+                    let otherReset = other.windows.first { $0.name == name }?.resetsAt ?? 0
+                    if reset != otherReset {
+                        return reset > otherReset
+                    }
+                }
+            }
             let evidence = fiveHourEvidenceTime(at: now)
             let otherEvidence = other.fiveHourEvidenceTime(at: now)
             if evidence != otherEvidence {

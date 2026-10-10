@@ -71,6 +71,20 @@ struct UsageCenterSmoke {
         precondition(!cache.isPreferred(over: native, at: now))
         let next = quota(now - 1, reset: now + 18000)
         precondition(next.isPreferred(over: native, at: now), "新的完整窗口必须替换旧窗口")
+        let redrawnOld = quota(now, reset: now + 3600)
+        precondition(next.isPreferred(over: redrawnOld, at: now), "旧会话后来重绘不能覆盖重置后的窗口")
+        precondition(!redrawnOld.isPreferred(over: next, at: now))
+        precondition(quota(now, reset: now + 18000).isPreferred(over: next, at: now), "同一窗口仍按观察时间更新用量")
+        let newWeek = UsageQuotaObservation(provider: "claude", observedAt: now - 20, windows: [
+            .init(name: "5h", usedPercent: 3, resetsAt: now + 3600),
+            .init(name: "7d", usedPercent: 0, resetsAt: now + 7 * 86400)
+        ])
+        let oldWeek = UsageQuotaObservation(provider: "claude", observedAt: now, windows: [
+            .init(name: "5h", usedPercent: 3, resetsAt: now + 3600),
+            .init(name: "7d", usedPercent: 98, resetsAt: now - 10)
+        ])
+        precondition(newWeek.isPreferred(over: oldWeek, at: now), "相同五小时窗口内也要保留新的周限窗口")
+        precondition(!oldWeek.isPreferred(over: newWeek, at: now))
         let expired = quota(now - 20, reset: now - 1)
         precondition(expired.isPreferred(over: cache, at: now), "结束前的无时间缓存不能让过期用量重新出现")
         precondition(quota(now, reset: nil).isPreferred(over: expired, at: now), "过期后允许回退新观察")
