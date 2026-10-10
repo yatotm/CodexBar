@@ -13,6 +13,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+from stat import S_ISREG
 import sys
 import time
 import tempfile
@@ -348,8 +349,8 @@ class Collector:
     def scan_file(self, path, provider):
         identity = digest(str(path))
         try:
-            stat = path.stat()
-            if not path.is_file() or path.is_symlink():
+            stat = path.lstat()
+            if not S_ISREG(stat.st_mode):
                 return
             saved = self.db.connection.execute("SELECT inode, offset, prefix, state FROM files WHERE id=?", (identity,)).fetchone()
             inode = str(stat.st_dev) + ":" + str(stat.st_ino)

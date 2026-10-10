@@ -239,6 +239,35 @@ class CollectorTests(unittest.TestCase):
         self.scan()
         self.assertEqual(self.records(), [])
 
+    def test_log_symlinks_are_skipped_without_unreadable_warning(self):
+        self.write([token_count(10)])
+        self.write([claude_message()], self.claude / "projects/a.jsonl")
+        outside = self.write([token_count(999)], self.root / "outside.jsonl")
+        for directory in (self.codex / "sessions", self.claude / "projects"):
+            (directory / "valid-link.jsonl").symlink_to(outside)
+            (directory / "broken-link.jsonl").symlink_to(self.root / "missing.jsonl")
+            loop = directory / "loop.jsonl"
+            loop.symlink_to(loop)
+
+        for _ in range(2):
+            result = self.scan()
+            self.assertEqual(result.warnings, set())
+            self.assertTrue(result.scan_complete)
+            self.assertEqual(len(self.records()), 2)
+            self.assertEqual(sum(record["input"] for record in self.records()), 20)
+
+    def test_unreadable_regular_log_still_warns_and_retries(self):
+        path = self.write([token_count(10)])
+        result = collector.Collector(self.db, self.codex, self.claude, ["codex"], budget=10)
+        with mock.patch.object(pathlib.Path, "open", side_effect=PermissionError("unreadable fixture")):
+            result.scan_file(path, "codex")
+        self.assertEqual(result.warnings, {"部分日志文件无法读取, 下次刷新重试"})
+        self.assertEqual(self.records(), [])
+
+        recovered = self.scan()
+        self.assertEqual(recovered.warnings, set())
+        self.assertEqual(sum(record["input"] for record in self.records()), 10)
+
     def test_cursor_pagination_reset_and_read_only_export(self):
         self.write([token_count(10), token_count(20), token_count(30)])
         self.scan()
