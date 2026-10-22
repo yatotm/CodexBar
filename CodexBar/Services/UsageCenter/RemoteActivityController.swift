@@ -16,6 +16,17 @@ nonisolated struct RemoteActivityTask: Decodable, Identifiable, Equatable, Senda
     var activeSubagentCount: Int?
     var tokenUsage: CodexTokenUsage?
     var isHistoricalTerminal: Bool?
+    var stage: String?
+    var recentEvent: String?
+    var recentEventAt: TimeInterval?
+    var planCompleted: Int?
+    var planTotal: Int?
+    var pendingInputCount: Int?
+    var hasBlockingInputRequest: Bool?
+    var lifecycleComplete: Bool?
+    var lastProgressAt: TimeInterval?
+    var protectionIdentifier: String?
+    var tokenUsageComplete: Bool?
 
     var isActive: Bool {
         state == "running" || state == "waiting"
@@ -38,9 +49,14 @@ nonisolated struct RemoteActivityFrame: Decodable, Sendable {
     let revision: Int64
     let sentAt: TimeInterval
     let tasks: [RemoteActivityTask]
+    var sourceAvailable: Bool?
+    var sourceReason: String?
+    var backend: String?
+    var serverVersion: String?
 
     var isValid: Bool {
         schema == 1 && epoch.count == 32 && revision >= 0 && sentAt.isFinite && tasks.count <= 500
+            && (backend?.count ?? 0) <= 40 && (sourceReason?.count ?? 0) <= 80 && (serverVersion?.count ?? 0) <= 100
             && Set(tasks.map(\.id)).count == tasks.count
             && tasks.allSatisfy {
                 $0.id.count == 64 && ["codex", "claude"].contains($0.provider)
@@ -51,7 +67,25 @@ nonisolated struct RemoteActivityFrame: Decodable, Sendable {
                     && $0.startedAt > 0 && $0.updatedAt >= $0.startedAt
                     && ($0.stateChangedAt.map(\.isFinite) ?? true)
                     && ($0.tokenUsage?.isValid ?? true)
+                    && ($0.stage?.count ?? 0) <= 60 && ($0.recentEvent?.count ?? 0) <= 240
+                    && ($0.protectionIdentifier.map { $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil } ?? true)
+                    && ($0.lastProgressAt.map { $0.isFinite && $0 > 0 && $0 <= sentAt + 60 } ?? true)
+                    && (0 ... 1000).contains($0.pendingInputCount ?? 0)
+                    && (0 ... 1000).contains($0.planCompleted ?? 0) && (0 ... 1000).contains($0.planTotal ?? 0)
             }
+    }
+}
+
+nonisolated enum ActivityBackend: String, CaseIterable {
+    case sharedCodex
+    case claudeHooks
+
+    var provider: String {
+        self == .sharedCodex ? "codex" : "claude"
+    }
+
+    var installedScript: String {
+        self == .sharedCodex ? ".local/share/codexbar-shared-codex/collector.py" : ".local/share/codexbar-usage/ActivityCollector.py"
     }
 }
 
@@ -109,26 +143,33 @@ nonisolated enum ActivityStreamClient {
     }
 
     static func configure(source: UsageSource, install: Bool) async throws {
+        if source.includesCodex {
+            try await configure(source: source, backend: .sharedCodex, install: install)
+        }
+        if source.includesClaude {
+            try await configure(source: source, backend: .claudeHooks, install: install)
+        }
+    }
+
+    static func configure(source: UsageSource, backend: ActivityBackend, install: Bool) async throws {
+        let resource = backend == .sharedCodex ? "SharedCodexCollector" : "ActivityCollector"
         guard source.validationError == nil, source.transport != .https,
-              let url = Bundle.main.url(forResource: "ActivityCollector", withExtension: "py") else {
+              let url = Bundle.main.url(forResource: resource, withExtension: "py") else {
             throw UsageCenterError(message: "实时接入需要有效的本机或 SSH 来源")
         }
         let code = try await Task.detached { try Data(contentsOf: url) }.value
-        let bootstrap = "import sys; CODEXBAR_SCRIPT_SOURCE=sys.stdin.buffer.read(1048576); exec(compile(CODEXBAR_SCRIPT_SOURCE,'ActivityCollector.py','exec'))"
-        let providers = [source.includesCodex && source.transport == .ssh ? "codex" : nil, source.includesClaude ? "claude" : nil].compactMap(\.self)
-        guard !providers.isEmpty else { throw UsageCenterError(message: "请至少选择一种工具") }
-        let arguments = [
-            "python3",
-            "-c",
-            bootstrap,
-            install ? "install" : "uninstall",
-            "--providers",
-            providers.joined(separator: ","),
-            "--codex-home",
-            source.codexHome,
-            "--claude-home",
-            source.claudeHome
-        ]
+        let bootstrap = "import sys; CODEXBAR_SCRIPT_SOURCE=sys.stdin.buffer.read(1048576); exec(compile(CODEXBAR_SCRIPT_SOURCE,'\(resource).py','exec'))"
+        var arguments = ["python3", "-c", bootstrap, install ? "install" : "uninstall"]
+        if backend == .sharedCodex {
+            if !source.codexHome.isEmpty {
+                arguments += ["--codex-home", source.codexHome]
+            }
+            if install {
+                arguments.append("--retire-legacy-hooks")
+            }
+        } else {
+            arguments += ["--providers", "claude", "--codex-home", source.codexHome, "--claude-home", source.claudeHome]
+        }
         if source.transport == .local {
             _ = try await UsageCommandRunner.run(executable: python, arguments: Array(arguments.dropFirst()), input: code)
         } else {
@@ -136,11 +177,11 @@ nonisolated enum ActivityStreamClient {
         }
     }
 
-    static func run(source: UsageSource, receive: @escaping @Sendable (RemoteActivityFrame) async -> Void) async throws {
+    static func run(source: UsageSource, backend: ActivityBackend = .claudeHooks, receive: @escaping @Sendable (RemoteActivityFrame) async -> Void) async throws {
         let cancellation = ActivityStreamCancellation()
         try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) {
-                try await stream(source: source, cancellation: cancellation, receive: receive)
+                try await stream(source: source, backend: backend, cancellation: cancellation, receive: receive)
             }.value
         } onCancel: { cancellation.cancel() }
     }
@@ -168,6 +209,7 @@ nonisolated enum ActivityStreamClient {
 
     private static func stream(
         source: UsageSource,
+        backend: ActivityBackend,
         cancellation: ActivityStreamCancellation,
         receive: @escaping @Sendable (RemoteActivityFrame) async -> Void
     ) async throws {
@@ -175,8 +217,8 @@ nonisolated enum ActivityStreamClient {
         let input = Pipe(), output = Pipe()
         process.executableURL = URL(fileURLWithPath: source.transport == .local ? python : "/usr/bin/ssh")
         process.arguments = source.transport == .local
-            ? [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share/codexbar-usage/ActivityCollector.py").path, "stream"]
-            : sshArguments(source, command: "exec python3 \"$HOME/.local/share/codexbar-usage/ActivityCollector.py\" stream")
+            ? [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(backend.installedScript).path, "stream"]
+            : sshArguments(source, command: "exec python3 \"$HOME/\(backend.installedScript)\" stream")
         process.environment = CodexCLIResolver.environment
         process.standardInput = input
         process.standardOutput = output
@@ -213,7 +255,7 @@ nonisolated enum ActivityStreamClient {
                     throw UsageCenterError(message: "实时状态协议无效")
                 }
                 // 同一版本的保活帧只确认连接健康, 不反复刷新整个菜单
-                if lastFrame?.revision != frame.revision || lastFrame?.tasks != frame.tasks {
+                if backend == .sharedCodex || lastFrame?.revision != frame.revision || lastFrame?.tasks != frame.tasks {
                     await receive(frame)
                 }
                 lastFrame = frame
@@ -227,6 +269,7 @@ nonisolated enum ActivityStreamClient {
 @MainActor
 final class RemoteActivityController: ObservableObject {
     var onTransition: ((String, RemoteActivityTask) -> Void)?
+    var onLocalCodexUpdate: (([RemoteActivityTask], Bool, Bool) -> Void)?
     private let terminalSubject = PassthroughSubject<(String, RemoteActivityTask), Never>()
     var terminalPublisher: AnyPublisher<(String, RemoteActivityTask), Never> {
         terminalSubject.eraseToAnyPublisher()
@@ -239,6 +282,8 @@ final class RemoteActivityController: ObservableObject {
     private var sources: [UsageSource] = []
     private var connections: [String: Task<Void, Never>] = [:]
     private var generations: [String: UUID] = [:]
+    private var backendTasks: [String: [RemoteActivityTask]] = [:]
+    private var preparedBackends: Set<String> = []
     private var canConnect = false
     private var canReadLocal = false
     private static let settingsKey = "RemoteActivity.enabledSourceIDs"
@@ -250,7 +295,12 @@ final class RemoteActivityController: ObservableObject {
 
     func setSources(_ sources: [UsageSource]) {
         for source in self.sources where !sources.contains(source) {
-            disconnect(source.id)
+            for backend in ActivityBackend.allCases {
+                let key = Self.connectionKey(source.id, provider: backend.provider)
+                disconnect(source: source, backend: backend)
+                preparedBackends.remove(key)
+                backendTasks[key] = nil
+            }
         }
         self.sources = sources
         reconcile()
@@ -278,41 +328,83 @@ final class RemoteActivityController: ObservableObject {
         reconcile()
     }
 
-    private func disconnect(_ id: String) {
-        generations[id] = nil
-        connections.removeValue(forKey: id)?.cancel()
-        states[id] = "已暂停"
+    nonisolated static func connectionKey(_ sourceID: String, provider: String) -> String {
+        sourceID + ":" + provider
+    }
+
+    private func disconnect(source: UsageSource, backend: ActivityBackend) {
+        let key = Self.connectionKey(source.id, provider: backend.provider)
+        generations[key] = nil
+        connections.removeValue(forKey: key)?.cancel()
+        setState("已暂停", source: source, backend: backend)
+        if source.transport == .local, backend == .sharedCodex {
+            onLocalCodexUpdate?([], false, true)
+        }
+    }
+
+    private func setState(_ value: String, source: UsageSource, backend: ActivityBackend) {
+        let key = Self.connectionKey(source.id, provider: backend.provider)
+        if states[key] != value {
+            states[key] = value
+        }
+        let health = ActivityBackend.allCases.compactMap { candidate -> String? in
+            guard candidate == .sharedCodex ? source.includesCodex : source.includesClaude else { return nil }
+            return states[Self.connectionKey(source.id, provider: candidate.provider)]
+        }
+        let summary = health.allSatisfy { $0 == "实时连接" } ? "实时连接"
+            : health.contains("实时连接") ? "部分连接" : value
+        if states[source.id] != summary {
+            states[source.id] = summary
+        }
     }
 
     private func reconcile() {
-        let desired = sources.filter {
-            ($0.transport == .local ? canReadLocal : canConnect) && $0.isEnabled && $0.transport != .https
-                && enabledSourceIDs.contains($0.id) && $0.validationError == nil
-        }
-        for id in Array(connections.keys) where !desired.contains(where: { $0.id == id }) {
-            disconnect(id)
-        }
-        for source in desired where connections[source.id] == nil {
-            let generation = UUID()
-            generations[source.id] = generation
-            connections[source.id] = Task { [weak self] in
-                var failures = 0
-                while !Task.isCancelled {
-                    guard let self, generations[source.id] == generation else { return }
-                    states[source.id] = "正在连接"
-                    let started = ContinuousClock.now
-                    do {
-                        try await ActivityStreamClient.run(source: source) { [weak self] frame in
-                            await self?.receive(frame, sourceID: source.id, generation: generation)
-                        }
-                    } catch is CancellationError { return } catch {
-                        guard !Task.isCancelled, generations[source.id] == generation else { return }
-                        states[source.id] = "连接中断, 等待重连"
-                    }
-                    failures = started.duration(to: .now) > .seconds(60) ? 1 : min(failures + 1, 7)
-                    let delay = min(120, pow(2, Double(failures))) * Double.random(in: 0.8 ... 1.2)
-                    do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+        for source in sources {
+            for backend in ActivityBackend.allCases {
+                let key = Self.connectionKey(source.id, provider: backend.provider)
+                let includesProvider = backend == .sharedCodex ? source.includesCodex : source.includesClaude
+                let enabled = enabledSourceIDs.contains(source.id) || (source.transport == .local && backend == .sharedCodex)
+                let desired = includesProvider && enabled && source.isEnabled && source.validationError == nil
+                    && source.transport != .https && (source.transport == .local ? canReadLocal : canConnect)
+                if desired, connections[key] == nil {
+                    connect(source: source, backend: backend)
+                } else if !desired, connections[key] != nil {
+                    disconnect(source: source, backend: backend)
                 }
+            }
+        }
+    }
+
+    private func connect(source: UsageSource, backend: ActivityBackend) {
+        let key = Self.connectionKey(source.id, provider: backend.provider)
+        let generation = UUID()
+        generations[key] = generation
+        connections[key] = Task { [weak self] in
+            var failures = 0
+            while !Task.isCancelled {
+                guard let self, generations[key] == generation else { return }
+                setState("正在连接", source: source, backend: backend)
+                let started = ContinuousClock.now
+                do {
+                    if backend == .sharedCodex, !preparedBackends.contains(key) {
+                        try await ActivityStreamClient.configure(source: source, backend: backend, install: true)
+                        try Task.checkCancellation()
+                        guard generations[key] == generation else { return }
+                        preparedBackends.insert(key)
+                    }
+                    try await ActivityStreamClient.run(source: source, backend: backend) { [weak self] frame in
+                        await self?.receive(frame, source: source, backend: backend, generation: generation)
+                    }
+                } catch is CancellationError { return } catch {
+                    guard !Task.isCancelled, generations[key] == generation else { return }
+                    setState("连接中断, 等待重连", source: source, backend: backend)
+                    if source.transport == .local, backend == .sharedCodex {
+                        onLocalCodexUpdate?([], false, true)
+                    }
+                }
+                failures = started.duration(to: .now) > .seconds(60) ? 1 : min(failures + 1, 7)
+                let delay = min(120, pow(2, Double(failures))) * Double.random(in: 0.8 ... 1.2)
+                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             }
         }
     }
@@ -328,27 +420,64 @@ final class RemoteActivityController: ObservableObject {
         }
     }
 
-    private func receive(_ frame: RemoteActivityFrame, sourceID: String, generation: UUID) {
-        guard generations[sourceID] == generation else { return }
-        let previous = Dictionary(uniqueKeysWithValues: (tasks[sourceID] ?? []).map { ($0.id, $0) })
-        let liveTerminals = Self.liveTerminals(previous: Array(previous.values), frame: frame, wasConnected: states[sourceID] == "实时连接")
+    static func liveTransitions(previous: [RemoteActivityTask], frame: RemoteActivityFrame, wasConnected: Bool) -> [RemoteActivityTask] {
+        guard wasConnected else { return [] }
+        let completed = liveTerminals(previous: previous, frame: frame, wasConnected: true).filter { $0.state == "completed" }
+        let oldByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
+        let waiting = frame.tasks.filter { task in
+            guard task.state == "waiting", task.isHistoricalTerminal != true,
+                  let old = oldByID[task.id], old.isActive, old.state != "waiting",
+                  old.startedAt == task.startedAt else { return false }
+            return (0 ... 10).contains(frame.sentAt - (task.stateChangedAt ?? task.updatedAt))
+        }
+        return completed + waiting
+    }
+
+    private func receive(_ incoming: RemoteActivityFrame, source: UsageSource, backend: ActivityBackend, generation: UUID) {
+        let sourceID = source.id
+        let key = Self.connectionKey(sourceID, provider: backend.provider)
+        guard generations[key] == generation else { return }
+        let frame = incoming.filtered(provider: backend.provider)
+        let previous = Dictionary(uniqueKeysWithValues: (backendTasks[key] ?? []).map { ($0.id, $0) })
+        let available = backend == .sharedCodex ? frame.sourceAvailable == true && frame.backend == "sharedCodex" : frame.sourceAvailable != false
+        let wasConnected = states[key] == "实时连接"
+        let isLocalCodex = source.transport == .local && backend == .sharedCodex
+        let liveTerminals = Self.liveTerminals(previous: Array(previous.values), frame: frame, wasConnected: wasConnected && available)
         // 首次和重连只恢复基线, 不把离线期间的旧变化当成新通知
-        if states[sourceID] == "实时连接" {
-            for task in frame.tasks {
-                if task.isHistoricalTerminal != true, let old = previous[task.id], old.state != task.state, old.isActive,
-                   task.state == "waiting" || task.state == "completed" {
-                    onTransition?(sourceID, task)
-                }
+        if wasConnected, available, !isLocalCodex {
+            for task in Self.liveTransitions(previous: Array(previous.values), frame: frame, wasConnected: true) {
+                onTransition?(sourceID, task)
             }
         }
-        if tasks[sourceID] != frame.tasks {
-            tasks[sourceID] = frame.tasks
+        backendTasks[key] = frame.tasks
+        let merged = ActivityBackend.allCases.flatMap { backendTasks[Self.connectionKey(sourceID, provider: $0.provider)] ?? [] }
+        if tasks[sourceID] != merged {
+            tasks[sourceID] = merged
         }
-        if states[sourceID] != "实时连接" {
-            states[sourceID] = "实时连接"
+        let state = available ? "实时连接" : frame.sourceReason == "unsupported-server-version" ? "需升级 Codex 至 0.162.0" : "后台暂不可用"
+        setState(state, source: source, backend: backend)
+        if isLocalCodex {
+            onLocalCodexUpdate?(frame.tasks, available, !wasConnected)
+        } else {
+            for task in liveTerminals {
+                terminalSubject.send((sourceID, task))
+            }
         }
-        for task in liveTerminals {
-            terminalSubject.send((sourceID, task))
-        }
+    }
+}
+
+private extension RemoteActivityFrame {
+    func filtered(provider: String) -> Self {
+        Self(
+            schema: schema,
+            epoch: epoch,
+            revision: revision,
+            sentAt: sentAt,
+            tasks: tasks.filter { $0.provider == provider },
+            sourceAvailable: sourceAvailable,
+            sourceReason: sourceReason,
+            backend: backend,
+            serverVersion: serverVersion
+        )
     }
 }

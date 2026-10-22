@@ -56,7 +56,7 @@ Settings animations stop when closed, minimized or occluded. Main-panel continuo
 
 ## Task Glow
 
-`TaskGlowController` consumes the all-device stream from `ActivityPresentationModel`, independently of notifications and power control. An operative local Codex Hook or an enabled remote/Claude source makes the feature available. Appearance keys preserve the existing switch and original default colors, standard speed, 100% brightness, and 10-second end duration.
+`TaskGlowController` consumes the all-device stream from `ActivityPresentationModel`, independently of notifications and power control. A configured local Codex backend or enabled remote/Claude source makes the feature available; transient disconnection does not rewrite preferences. Appearance keys preserve the existing switch and original default colors, standard speed, 100% brightness, and 10-second end duration.
 
 `TaskGlowSettings.appearance` supplies colors, speed, brightness, and end duration. All displays share a motion clock; speed changes preserve cycle progress. Appearance updates modify existing layers without rebuilding task services. The options panel is created only when opened.
 
@@ -193,26 +193,24 @@ When Automatic Reset or Prevent System Sleep changes from off to on, `AppSetting
 Each secondary-settings entry uses its own availability decision:
 
 - Main Panel Layout is always available
-- Task Glow requires its switch and either an operative local Hook or an enabled remote/Claude source
+- Task Glow requires its switch and a configured shared backend or an enabled remote/Claude source
 - Notifications reads `NotificationSettings.canShowOptions`
 - Automatic Reset requires `AutoResetSettings.isEnabled` and `KeepAliveController.helperStatus == .enabled`
 - Sleep prevention reads `KeepAliveController.canShowOptions`
 
 When a condition becomes false, Settings sends the corresponding `close` action so an unavailable child panel does not remain visible. Automatic Reset and sleep-prevention rows show no status explanation while their main switches are off.
 
-`MainPanelSettings` stores the order and visibility of Account, Task Center, Quota, Token Usage, and Footer Status with stable section identifiers. Layout normalization removes duplicates, ignores invalid values, appends missing sections, and keeps at least one section visible. After reading a disabled Hook state, `StatusItemController` calls `updateHookEnabled(_:)` to persist Task Center as hidden. If Task Center was the only visible section, Account is enabled at the same time. The settings panel disables only the Task Center switch, so its drag handle remains available. Temporary availability of other data sources affects only the current rendering.
+`MainPanelSettings` preserves existing stable section IDs, order and visibility, appending Service Status. Task availability follows configured sources; a transient outage never hides a user-selected task section.
 
 Layout sorting uses a custom `DragGesture` on the handle. A floating copy follows the pointer, other rows move when it crosses half a row, and releasing calls `setSectionOrder(_:)` once to persist the final order.
 
 `SettingsWindowController` owns the only `UndoManager` for this window group. The Settings window exposes it through `AuxiliaryHostingWindow`, and each settings child panel obtains the same instance from its parent when shown. `Command-Z` and `Command-Shift-Z` therefore operate on one layout history while focus is in either the Settings window or any child panel. Automatic Task Center changes caused by Hook state do not enter the user's undo history.
 
-### Proxy Configuration Dialog
+### Shared backend and updates
 
-`CodexBarAppDelegate` owns `CodexProxySettings` and injects it into Settings through the window controllers. `AppSettingsView` presents `ProxySettingsView` in a SwiftUI `sheet`, closing side settings panels first.
+App-specific proxy and Codex Hook installation controls are removed. About distinguishes the actual shared-daemon version from installed CLI launchers and supports copying paths. Launcher selection applies only when the daemon is absent. Reconnect never stops the official daemon.
 
-Without a configuration, clicking the row or toggle opens the dialog. With one saved, the row opens the dialog and the toggle independently enables or disables it. Presentation loads the draft from local preferences; dismissal cancels tests and clears the in-memory password draft. The top-right clear menu depends on whether a saved record exists and remains available when decoding fails.
-
-In About, the reconnect button sits immediately after the Codex Versions title, with the source picker at the end of the row. Both are disabled during reconnection and refresh; Reconnect is also disabled when no source is available.
+Downloaded Sparkle updates retain their installation callback for retry after canceled quit. Release notes point to the fork’s actual tag page.
 
 ## Global Shortcut
 

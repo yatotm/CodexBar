@@ -36,14 +36,14 @@ struct UsageSourceEditor: View {
                 Toggle("采集 Claude Code", isOn: $source.includesClaude)
                 if source.transport == .ssh || (source.transport == .local && source.includesClaude) {
                     HStack {
-                        Text("实时任务")
+                        Text(source.transport == .local ? "Claude 实时任务" : "实时任务")
                         Spacer()
                         Button("接入") { configureActivity(install: true) }
                         Button("移除") { configureActivity(install: false) }
                     }.disabled(isSaving || source.validationError != nil)
                     Text(source.transport == .ssh
-                        ? "通过 SSH 接收任务变化, 不等待 5 分钟刷新; 合盖且无工作显示器或系统睡眠时暂停, 恢复使用且联网后重连; 接入会保留已有 Hook"
-                        : "实时读取本机 Claude Hook; Codex 继续使用设置中的 CodexBar Hook, 不重复接入")
+                        ? "Codex 连接此机器的共享后台, Claude 使用本地 Hook。任务变化经 SSH 实时同步; 合盖且无工作显示器或系统睡眠时暂停, 恢复后重连。"
+                        : "本机 Codex 自动连接共享后台; 此处仅接入 Claude 实时任务, 保留其他应用的 Hook。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if source.includesCodex {
@@ -130,9 +130,13 @@ struct UsageSourceEditor: View {
             defer { isSaving = false }
             do {
                 guard await viewModel.save(source, token: token) else { return }
-                try await ActivityStreamClient.configure(source: source, install: install)
+                if source.transport == .local {
+                    try await ActivityStreamClient.configure(source: source, backend: .claudeHooks, install: install)
+                } else {
+                    try await ActivityStreamClient.configure(source: source, install: install)
+                }
                 viewModel.remoteActivity.setEnabled(install, sourceID: source.id)
-                bridgeMessage = install ? "已接入实时任务, 已打开的 CLI 会话可能需要重启" : "已移除实时接入, 历史统计保持可用"
+                bridgeMessage = install ? "已接入实时任务; Codex 会话无需重启, Claude 从后续 Hook 事件更新" : "已移除所选实时接入, 历史统计保持可用"
             } catch {
                 viewModel.error = error.localizedDescription
             }

@@ -8,6 +8,7 @@ nonisolated enum MainPanelSection: String, CaseIterable, Identifiable, Sendable 
     case quota
     case usage
     case status
+    case serviceStatus
 
     var id: Self {
         self
@@ -70,7 +71,7 @@ final class MainPanelSettings: ObservableObject {
     @Published private(set) var hasRemoteActivitySource = false
 
     private let defaults: UserDefaults
-    private var isHookEnabled: Bool?
+    private var isActivitySourceEnabled: Bool?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -85,7 +86,7 @@ final class MainPanelSettings: ObservableObject {
         }
 
         let loadedLayout = Self.loadLayout(from: defaults)
-        guard isHookEnabled == false else {
+        guard isActivitySourceEnabled == false else {
             publish(loadedLayout)
             return
         }
@@ -99,11 +100,16 @@ final class MainPanelSettings: ObservableObject {
     }
 
     func updateHookEnabled(_ localEnabled: Bool, hasRemote: Bool = false) {
+        updateActivitySources(local: localEnabled, hasRemote: hasRemote)
+    }
+
+    /// 传入已配置的采集来源, 临时断线不应改写用户布局
+    func updateActivitySources(local localEnabled: Bool, hasRemote: Bool = false) {
         hasRemoteActivitySource = hasRemote
         let isEnabled = localEnabled || hasRemote
         hasActivitySource = isEnabled
-        let wasEnabled = isHookEnabled
-        isHookEnabled = isEnabled
+        let wasEnabled = isActivitySourceEnabled
+        isActivitySourceEnabled = isEnabled
         let updatedLayout: MainPanelLayout
         if isEnabled {
             // 首次恢复只读取布局, 用户重新接入任务来源时才显示任务区域
@@ -135,7 +141,7 @@ final class MainPanelSettings: ObservableObject {
         isVisible: Bool,
         undoManager: UndoManager
     ) {
-        guard section != .activity || !isVisible || isHookEnabled == true else {
+        guard section != .activity || !isVisible || isActivitySourceEnabled == true else {
             return
         }
         guard layout.isVisible(section) != isVisible else {
@@ -186,7 +192,7 @@ final class MainPanelSettings: ObservableObject {
         _ requestedLayout: MainPanelLayout,
         undoManager: UndoManager
     ) {
-        let updatedLayout = isHookEnabled == false
+        let updatedLayout = isActivitySourceEnabled == false
             ? requestedLayout.disablingActivitySection()
             : requestedLayout
         guard updatedLayout != layout else {

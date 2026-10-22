@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Hook 开启时显示的活动摘要, 使用主面板共享的时间
+/// 本机和远程活动摘要, 使用主面板共享的时间
 /// 活动和防睡眠状态由卡片自行观察, 避免刷新整个菜单树
 struct CodexActivityCard: View {
     @ObservedObject var activityPresentation: ActivityPresentationModel
@@ -11,6 +11,7 @@ struct CodexActivityCard: View {
     @Environment(\.mainPanelAnimationsEnabled) private var allowsAnimations
     @State private var frameProvider = ScreenFrameProvider()
     @State private var isHovered = false
+    @State private var outgoingContent: ActivityCardContent?
 
     private var snapshot: CodexActivitySnapshot {
         showsUnavailableState ? .empty : activityPresentation.snapshot
@@ -41,11 +42,12 @@ struct CodexActivityCard: View {
     // MARK: - 卡片布局
 
     var body: some View {
+        let content = content(at: timelineDate)
         // 保留同一张卡片的视图身份, 空闲时只禁用交互, 避免打断内容和高度过渡
         Button {
             onTaskCenterTap(frameProvider)
         } label: {
-            card(now: timelineDate)
+            card(content)
         }
         .buttonStyle(ActivityCardButtonStyle())
         .disabled(!snapshot.hasTaskCenterContent)
@@ -54,13 +56,51 @@ struct CodexActivityCard: View {
             ScreenFrameReader(provider: frameProvider)
         }
         .onHover { isHovered = $0 }
+        .onChange(of: content) { previous, current in
+            guard allowsAnimations, previous.taskID != nil, previous.taskID != current.taskID else { return }
+            outgoingContent = previous
+        }
+        .task(id: outgoingContent?.taskID) {
+            guard outgoingContent != nil else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            // 只在切换任务时短暂交接内容, 每秒时间和 Token 更新不触发整行动画
+            withAnimation(allowsAnimations ? .easeInOut(duration: 0.2) : nil) {
+                outgoingContent = nil
+            }
+        }
     }
 
-    private func card(now: Date) -> some View {
-        let content = content(at: now)
-        return VStack(alignment: .leading, spacing: 0) {
+    private func card(_ content: ActivityCardContent) -> some View {
+        cardContent(content)
+            .opacity(outgoingContent == nil ? 1 : 0)
+            .overlay(alignment: .topLeading) {
+                if let outgoingContent {
+                    cardContent(outgoingContent)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(height: content.tokenUsage == nil ? Metrics.height : Metrics.usageHeight, alignment: .top)
+            .clipped()
+            .liquidGlassSurface(cornerRadius: MenuMetrics.panelCornerRadius)
+            .overlay {
+                RoundedRectangle(cornerRadius: MenuMetrics.panelCornerRadius, style: .continuous)
+                    .strokeBorder(
+                        isTaskCenterPresented
+                            ? Color.accentColor.opacity(0.55)
+                            : Color.primary.opacity(isHovered && snapshot.hasTaskCenterContent ? 0.14 : 0),
+                        lineWidth: 1
+                    )
+                    .animation(.codexStatus, value: isHovered)
+                    .animation(.codexStatus, value: isTaskCenterPresented)
+            }
+    }
+
+    private func cardContent(_ content: ActivityCardContent) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
             statusRow(content)
-                .frame(height: Metrics.height)
+                .frame(height: Metrics.height, alignment: .top)
 
             if let usage = content.tokenUsage {
                 VStack(spacing: 8) {
@@ -73,24 +113,12 @@ struct CodexActivityCard: View {
         }
         .padding(.horizontal, MenuMetrics.panelPadding)
         .frame(maxWidth: .infinity)
-        .frame(height: content.tokenUsage == nil ? Metrics.height : Metrics.usageHeight, alignment: .top)
-        .clipped()
-        .liquidGlassSurface(cornerRadius: MenuMetrics.panelCornerRadius)
-        .overlay {
-            RoundedRectangle(cornerRadius: MenuMetrics.panelCornerRadius, style: .continuous)
-                .strokeBorder(
-                    isTaskCenterPresented
-                        ? Color.accentColor.opacity(0.55)
-                        : Color.primary.opacity(isHovered && snapshot.hasTaskCenterContent ? 0.14 : 0),
-                    lineWidth: 1
-                )
-                .animation(.codexStatus, value: isHovered)
-                .animation(.codexStatus, value: isTaskCenterPresented)
-        }
+        .id(content.taskID)
+        .transaction { $0.animation = nil }
     }
 
     private func statusRow(_ content: ActivityCardContent) -> some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: content.symbolName)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(content.tint)
@@ -111,6 +139,7 @@ struct CodexActivityCard: View {
                         .truncationMode(.tail)
                 }
             }
+            .help(content.help ?? content.detail ?? content.title)
 
             Spacer(minLength: 0)
 
@@ -148,6 +177,7 @@ struct CodexActivityCard: View {
                     .help(String(localized: "activity.summary.other-task-count", defaultValue: "\(content.otherTaskCount, specifier: "%lld")"))
             }
         }
+        .padding(.top, 12)
         .animation(.codexStatus, value: showsKeepAliveBadge)
         .animation(.codexStatus, value: content.isAnonymous)
         // 任务数变化会让 +N 增删, 防睡眠徽标跟着横移; 动画只作用于状态行
@@ -206,10 +236,8 @@ struct CodexActivityCard: View {
                 symbolName: "hand.raised.fill",
                 tint: .orange,
                 fallback: "activity.status.task-waiting-for-approval",
-                detailComponents: CodexActivityDisplayFormat.waitingDetailComponents(
-                    for: task,
-                    now: now
-                )
+                now: now,
+                isWaiting: true
             )
         case let .running(task):
             return activeContent(
@@ -217,10 +245,8 @@ struct CodexActivityCard: View {
                 symbolName: "bolt.fill",
                 tint: .blue,
                 fallback: "common.codex",
-                detailComponents: CodexActivityDisplayFormat.runningDetailComponents(
-                    for: task,
-                    now: now
-                )
+                now: now,
+                isWaiting: false
             )
         case let .completed(completion):
             let details = CodexActivityDisplayFormat.historyDetailComponents(
@@ -240,7 +266,8 @@ struct CodexActivityCard: View {
                 detail: details.joined(separator: " • "),
                 otherTaskCount: 0,
                 isAnonymous: completion.isAnonymous,
-                tokenUsage: completion.tokenUsage
+                tokenUsage: completion.tokenUsage,
+                taskID: completion.id
             )
         case let .terminated(termination):
             let details = CodexActivityDisplayFormat.historyDetailComponents(
@@ -260,7 +287,8 @@ struct CodexActivityCard: View {
                 detail: details.joined(separator: " • "),
                 otherTaskCount: 0,
                 isAnonymous: termination.isAnonymous,
-                tokenUsage: termination.tokenUsage
+                tokenUsage: termination.tokenUsage,
+                taskID: termination.id
             )
         case .idle:
             return ActivityCardContent(
@@ -281,9 +309,10 @@ struct CodexActivityCard: View {
         symbolName: String,
         tint: Color,
         fallback: LocalizedStringResource,
-        detailComponents: [String]
+        now: Date,
+        isWaiting: Bool
     ) -> ActivityCardContent {
-        let details = activeDetailComponents(detailComponents, task: task)
+        let details = CodexActivityTaskDetails.components(for: task, now: now, isWaiting: isWaiting)
         return ActivityCardContent(
             symbolName: symbolName,
             tint: tint,
@@ -297,7 +326,9 @@ struct CodexActivityCard: View {
             detail: details.joined(separator: " • "),
             otherTaskCount: otherTaskCount,
             isAnonymous: task.isAnonymous,
-            tokenUsage: task.tokenUsage
+            tokenUsage: task.tokenUsage,
+            taskID: task.id,
+            help: CodexActivityTaskDetails.help(for: task, now: now, isWaiting: isWaiting)
         )
     }
 
@@ -317,18 +348,6 @@ struct CodexActivityCard: View {
         ]
         .compactMap(\.self)
         .joined(separator: " • ")
-    }
-
-    private func activeDetailComponents(
-        _ components: [String],
-        task: CodexActivityTaskSnapshot
-    ) -> [String] {
-        guard let count = task.activeSubagentCount, count > 0 else {
-            return components
-        }
-        var result = components
-        result.insert(String(localized: "activity.summary.subagent-count", defaultValue: "\(count, specifier: "%lld")"), at: min(1, result.count))
-        return result
     }
 
     private var otherTaskCount: Int {
@@ -363,7 +382,7 @@ private struct ActivityCardButtonStyle: ButtonStyle {
     }
 }
 
-private struct ActivityCardContent {
+private struct ActivityCardContent: Equatable {
     let symbolName: String
     let tint: Color
     let title: String
@@ -371,6 +390,8 @@ private struct ActivityCardContent {
     let otherTaskCount: Int
     let isAnonymous: Bool
     var tokenUsage: CodexTokenUsage?
+    var taskID: UUID?
+    var help: String?
 }
 
 struct CodexActivityAnonymousIcon: View {

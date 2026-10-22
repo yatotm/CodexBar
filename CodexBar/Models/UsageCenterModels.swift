@@ -270,6 +270,7 @@ nonisolated struct UsageMetrics: Equatable {
     var compactions: Int64 = 0
     var subagents: Int64 = 0
     var durationMs: Int64 = 0
+    var interruptions: Int64?
 }
 
 nonisolated struct UsageGroup: Identifiable {

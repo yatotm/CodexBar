@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Codex CLI/App 版本区, 同时展示磁盘版本和当前 app-server 运行版本
+/// 分别展示安装版本和共享后台运行版本, 重连只影响当前客户端
 struct CodexVersionSection: View {
     @EnvironmentObject private var animationState: SettingsWindowAnimationState
     let snapshot: CodexCLIVersionSnapshot
@@ -12,7 +12,7 @@ struct CodexVersionSection: View {
     let errorMessage: String?
     let unavailableSource: CodexCLIExecutableSource?
     let onReconnect: (CodexCLISourceSelection?) -> Void
-    @State private var copiedPathResetTasks: [CodexCLIExecutableSource: Task<Void, Never>] = [:]
+    @State private var copiedPathResetTasks: [String: Task<Void, Never>] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.rowSpacing) {
@@ -30,17 +30,22 @@ struct CodexVersionSection: View {
                 sourcePicker
             }
 
-            if !displayedItems.isEmpty {
-                LiquidGlassDivider()
-                    .padding(.leading, Metrics.iconWidth + 10)
-
-                VStack(alignment: .leading, spacing: Metrics.rowSpacing) {
-                    ForEach(displayedItems) { item in
-                        codexVersionRow(icon: item.source == .global ? "terminal" : "app.badge", item: item)
-                    }
-                }
+            Text("settings.codex-version.source.caption")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, Metrics.childIndent)
+
+            LiquidGlassDivider()
+                .padding(.leading, Metrics.iconWidth + 10)
+
+            VStack(alignment: .leading, spacing: Metrics.rowSpacing) {
+                daemonRow
+                ForEach(displayedItems) { item in
+                    codexVersionRow(icon: item.source == .global ? "terminal" : "app.badge", item: item)
+                }
             }
+            .padding(.leading, Metrics.childIndent)
 
             if let message = errorMessage {
                 Text(message)
@@ -51,6 +56,7 @@ struct CodexVersionSection: View {
         }
         .onDisappear {
             copiedPathResetTasks.values.forEach { $0.cancel() }
+            copiedPathResetTasks.removeAll()
         }
     }
 
@@ -68,7 +74,7 @@ struct CodexVersionSection: View {
 
     private var reconnectButton: some View {
         let isWorking = isBusy || isReconnecting
-        let isEnabled = !isWorking && isSourceInstalled(sourceSelection)
+        let isEnabled = !isWorking
         let label: LocalizedStringKey = isReconnecting
             ? "settings.codex-version.reconnecting"
             : "settings.codex-version.reconnect"
@@ -108,9 +114,8 @@ struct CodexVersionSection: View {
 
     private var displayedItems: [CodexCLIVersionItem] {
         [snapshot.global, snapshot.bundled].filter {
-            $0.path != nil || $0.source == connectionInfo?.source
-                || (snapshot.refreshedAt != .distantPast
-                    && ($0.source == sourceSelection.source || $0.source == unavailableSource))
+            $0.path != nil || (snapshot.refreshedAt != .distantPast
+                && ($0.source == sourceSelection.source || $0.source == unavailableSource))
         }
     }
 
@@ -123,83 +128,75 @@ struct CodexVersionSection: View {
         return installedItems.contains { $0.source == source }
     }
 
-    private func codexVersionRow(icon: String, item: CodexCLIVersionItem) -> some View {
-        let row = CodexCLIVersionDisplay(item: item, connection: connectionInfo)
-        let isUnavailable = snapshot.refreshedAt != .distantPast && item.path == nil
-        let statusColor: Color = isUnavailable ? .orange : .green
-        let isPathCopied = copiedPathResetTasks[item.source] != nil
+    private var daemonRow: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "cpu")
+                .frame(width: Metrics.iconWidth)
+                .foregroundStyle(.tint)
+            Text("settings.codex.daemon.title")
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 28)
+            VStack(alignment: .trailing, spacing: 3) {
+                if let info = connectionInfo {
+                    HStack(spacing: 12) {
+                        Text("settings.codex.daemon.in-use")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.green)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .liquidGlassCapsule(tint: .green)
+                        Text(info.version ?? String(localized: "codex-cli.version.unknown"))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .contentTransition(.opacity)
+                    }
+                    if let path = info.socketPath {
+                        CopyablePathText(path: path, isCopied: copiedPathResetTasks["shared"] != nil)
+                            .onTapGesture { copyPathToPasteboard(path, key: "shared") }
+                    }
+                } else {
+                    Text("settings.codex.daemon.disconnected")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: Metrics.versionColumnWidth, alignment: .trailing)
+        }
+    }
 
+    private func codexVersionRow(icon: String, item: CodexCLIVersionItem) -> some View {
+        let hasVersion = item.version != nil
         return HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
                 .frame(width: Metrics.iconWidth)
                 .foregroundStyle(.tint)
-
             Text(item.source.displayName)
                 .foregroundStyle(.secondary)
-
             Spacer(minLength: 28)
-
             VStack(alignment: .trailing, spacing: 3) {
-                HStack(spacing: 12) {
-                    if row.isCurrent || isUnavailable {
-                        Text(isUnavailable ? "settings.codex-version.unavailable" : "settings.codex-version.in-use")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(statusColor)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .liquidGlassCapsule(tint: statusColor)
-                            .transition(.opacity)
-                    }
-
-                    if row.hasVersion || !isUnavailable {
-                        Text(row.displayVersion)
-                            .font(row.hasVersion ? .body.monospacedDigit() : .body)
-                            .foregroundStyle(row.hasVersion ? .secondary : .tertiary)
-                            .lineLimit(1)
-                            .contentTransition(.opacity)
-                            .animation(Metrics.statusAnimation, value: row.displayVersion)
-                    }
-                }
-                .animation(Metrics.statusAnimation, value: row.isCurrent)
-                .animation(Metrics.statusAnimation, value: isUnavailable)
-
-                if let newerInstalledVersion = row.newerInstalledVersion {
-                    Text(LocalizedStringResource("settings.codex-version.updated-to", defaultValue: "\(newerInstalledVersion)"))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
-                        .transition(.opacity)
-                }
-
-                if let path = row.path {
-                    CopyablePathText(path: path, isCopied: isPathCopied)
-                        .animation(Metrics.statusAnimation, value: isPathCopied)
-                        .help(
-                            isPathCopied
-                                ? "common.status.copied"
-                                : "common.action.click-to-copy"
-                        )
-                        .onTapGesture {
-                            copyPathToPasteboard(path, source: item.source)
-                        }
+                Text(item.displayVersion)
+                    .font(hasVersion ? .body.monospacedDigit() : .body)
+                    .foregroundStyle(Color(nsColor: hasVersion ? .secondaryLabelColor : .tertiaryLabelColor))
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+                    .animation(Metrics.statusAnimation, value: item.displayVersion)
+                if let path = item.path {
+                    CopyablePathText(path: path, isCopied: copiedPathResetTasks[item.source.rawValue] != nil)
+                        .onTapGesture { copyPathToPasteboard(path, key: item.source.rawValue) }
                         .transition(.opacity)
                 }
             }
             .frame(maxWidth: Metrics.versionColumnWidth, alignment: .trailing)
-            .animation(Metrics.statusAnimation, value: row.newerInstalledVersion)
-            .animation(Metrics.statusAnimation, value: row.path)
+            .animation(Metrics.statusAnimation, value: item.path)
         }
     }
 
-    private func copyPathToPasteboard(_ path: String, source: CodexCLIExecutableSource) {
+    private func copyPathToPasteboard(_ path: String, key: String) {
         PasteboardWriter.copy(path)
-
-        copiedPathResetTasks[source]?.cancel()
-        copiedPathResetTasks[source] = Task { @MainActor in
+        copiedPathResetTasks[key]?.cancel()
+        copiedPathResetTasks[key] = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(1500))
             guard !Task.isCancelled else { return }
-
-            copiedPathResetTasks[source] = nil
+            copiedPathResetTasks[key] = nil
         }
     }
 
@@ -233,5 +230,7 @@ private struct CopyablePathText: View {
                 .opacity(isCopied ? 1 : 0)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
+        .animation(.codexStatus, value: isCopied)
+        .help(isCopied ? "common.status.copied" : "common.action.click-to-copy")
     }
 }

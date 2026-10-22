@@ -434,6 +434,8 @@ class Collector:
                             break
                         if name.endswith(".jsonl"):
                             self.scan_file(pathlib.Path(directory, name), provider)
+            if "codex" in self.providers:
+                self.read_shared_codex_events()
             self.db.connection.execute("DELETE FROM records WHERE day<?", (self.cutoff.strftime("%Y-%m-%d"),))
             self.db.set("warnings", encode(sorted(self.warnings)))
             self.db.set("quotas", encode(list(self.quotas.values())))
@@ -448,6 +450,81 @@ class Collector:
         except Exception:
             self.db.connection.rollback()
             raise
+
+    def read_shared_codex_events(self, directory=None):
+        root = directory or pathlib.Path.home() / ".local/state/codexbar-shared-codex"
+        path = root / "shared-activity-v1.sqlite"
+        if not path.exists() or path.is_symlink() or root.is_symlink():
+            return
+        connection = None
+        try:
+            if path.stat().st_uid != os.geteuid():
+                return
+            connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.3)
+            connection.execute("PRAGMA query_only=ON")
+            connection.execute("PRAGMA trusted_schema=OFF")
+            if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_meta'").fetchone():
+                return
+            metadata = dict(connection.execute("SELECT key,value FROM history_meta"))
+            if metadata.get("codexHomeKey") != digest("codex-home", str(self.codex_home.resolve())):
+                return
+            epoch = metadata.get("epoch")
+            if not isinstance(epoch, str) or not re.fullmatch("[0-9a-f]{32}", epoch):
+                raise ValueError("共享事件来源标识无效")
+            key = "sharedCodexEvents.cursor"
+            previous = json.loads(self.db.get(key, "{}"))
+            cursor = previous.get("cursor", 0) if previous.get("epoch") == epoch else 0
+            if type(cursor) is not int or cursor < 0:
+                cursor = 0
+            # 事件只补日志缺少的审批和中断, 不重复导入 Token 工具或轮次
+            rows = connection.execute("SELECT sequence,payload FROM events WHERE sequence>? AND observed>=? ORDER BY sequence LIMIT 1001",
+                                      (cursor, self.cutoff.timestamp())).fetchall()
+            for sequence, payload in rows[:1000]:
+                if time.monotonic() >= self.deadline:
+                    self.scan_complete = False
+                    break
+                if len(payload) > 4096:
+                    raise ValueError("共享事件记录过大")
+                value = json.loads(payload)
+                record = self.shared_codex_record(value)
+                if record is None:
+                    raise ValueError("共享事件记录无效")
+                self.db.put(record)
+                cursor = sequence
+            if len(rows) > 1000:
+                self.scan_complete = False
+            self.db.set(key, encode(dict(epoch=epoch, cursor=cursor)))
+        except (OSError, sqlite3.Error, ValueError, TypeError, AttributeError):
+            self.scan_complete = False
+            self.warnings.add("共享 Codex 事件暂时无法读取, 原有日志统计已保留")
+        finally:
+            if connection is not None:
+                connection.close()
+
+    @staticmethod
+    def shared_codex_record(value):
+        if not isinstance(value, dict) or value.get("kind") not in ("sharedPermission", "sharedInterrupt"):
+            return None
+        if value.get("provider") != "codex" or value.get("auth") != "unknown":
+            return None
+        if any(not isinstance(value.get(key), str) or not re.fullmatch("[0-9a-f]{64}", value[key]) for key in ("id", "session")):
+            return None
+        at = value.get("observedAt")
+        if isinstance(at, bool) or not isinstance(at, (int, float)) or not math.isfinite(at) or not 0 < at <= time.time() + 60:
+            return None
+        day = dt.datetime.fromtimestamp(at, dt.timezone.utc).strftime("%Y-%m-%d")
+        if value.get("day") != day or not re.fullmatch("20[0-9]{2}-[01][0-9]-[0-3][0-9]", day):
+            return None
+        permission = value["kind"] == "sharedPermission"
+        expected = {field: int(permission and field == "permissions") for field in COUNTERS}
+        if any(type(value.get(field)) is not int or value[field] != count for field, count in expected.items()):
+            return None
+        if value.get("state") != ("" if permission else "interrupted"):
+            return None
+        if any(not isinstance(value.get(key), str) or len(value[key]) > 120 for key in ("model", "project")):
+            return None
+        return {**expected, **{key: value[key] for key in ("id", "provider", "auth", "day", "session", "kind", "state", "observedAt")},
+                "model": text(value["model"]), "project": text(value["project"])}
 
     def read_claude_quota_cache(self):
         path = self.claude_home / "ccline/.api_usage_cache.json"

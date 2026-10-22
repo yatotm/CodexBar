@@ -48,21 +48,25 @@ CodexBar 是面向 macOS 15+ 的 `LSUIElement` 菜单栏应用，使用 Swift 6,
 
 ## 架构与编码约定
 
-启动时必须先调用 `WorkflowHookEventRecorder.handleIfRequested()` 方法。`--hook-event` 模式从 `stdin` 接收事件，按需有界读取 rollout 元数据，加锁写入 JSONL 并立即退出，不初始化 UI，失败也不能阻断 Codex。Handler 超时按事件从 `hookTimeoutSeconds(for:)` 取得，`SessionEnd` 和 `Interrupt` 为 3 秒，其他事件为 5 秒。普通模式由 `CodexBarAppDelegate` 统一装配长期服务。
+`CodexBarMain.main()` 必须先调用 `WorkflowHookEventRecorder.handleIfRequested()`，再取得与 bundle ID 对应的单实例锁，最后进入 SwiftUI。`--hook-event` 模式从 `stdin` 接收事件，按需有界读取 rollout 元数据，加锁写入 JSONL 并立即退出，不初始化 UI，失败也不能阻断 Codex。Handler 超时按事件从 `hookTimeoutSeconds(for:)` 取得，`SessionEnd` 和 `Interrupt` 为 3 秒，其他事件为 5 秒。普通模式由 `CodexBarAppDelegate` 统一装配长期服务。
 
 工程默认采用 `MainActor` 隔离。UI, Controller, ViewModel 和 Settings 依赖默认隔离，共享可变状态放入 actor，DTO 和跨 actor 值类型按需添加 `nonisolated` 标记，禁止在主 actor 执行阻塞 I/O。类型命名使用 `UpperCamelCase` 风格，成员命名使用 `lowerCamelCase` 风格。注释只解释非显然的生命周期、焦点、actor 或系统 API 约束。
 
-保持三条数据链路独立：app-server 额度与用量、Hook 历史聚合、`CodexActivityMonitor` 实时任务。helper 只能执行固定的睡眠控制和自动重置唤醒计划，不得增加网络、任意命令执行或额外文件访问。账户主链路必须检查当前 app-server 的实际版本不低于 `0.145.0`。修改 Hook 配置时必须保留用户和其他应用已有的 handler。启用和校验 Hook 必须额外检查当前 app-server 的实际版本不低于 `0.150.0`。新增网络访问或日志数据前先核对隐私边界。
+保持额度、历史账本与实时任务链路独立。Codex 账户和任务统一要求共享 app-server 的实际握手版本不低于 `0.162.0`，不能用磁盘 CLI 版本代替。通过 `$CODEX_HOME/app-server-control/app-server-control.sock` 连接；只有明确缺少端点时才运行有界的 `codex app-server daemon start`。重连与退出只关闭自己的连接，禁止停止共享后台或用户会话。
 
-自动重置默认关闭，提前量可选 15 分钟、30 分钟、1 小时、2 小时、4 小时或 6 小时，默认 30 分钟。状态机只处理新鲜响应明确列出的 `available + codexRateLimits + expiresAt` 凭证，每轮连续重试最多 5 分钟。CodexBarHelper 只接收有限时间戳，使用固定 owner 和固定 `wake` 类型维护一个系统事件；目标变化、功能关闭、App 退出、对应 XPC 连接断开或 helper 启动时必须收敛并清理该事件。修改 owner 或事件类型属于清理兼容性问题。
+每台机器的 `SharedCodexCollector.py` 订阅自己机器的共享后台，Mac 经本地管道或 SSH 接收脱敏任务快照。仅订阅已加载会话，不恢复历史会话、不自动答复审批、不设置模型。Claude 保持本地日志与 Hook 采集，不请求 Anthropic 账户接口。新后台健康后仅撤除 CodexBar 自己的旧 Codex handler，保留其他 handler、原始 Hook JSONL、schema `9` 聚合、用量数据库和价值账本。旧 Hook 分流与解析仅供历史兼容，不再安装或自动修复 Codex Hook。
+
+helper 只能执行固定的睡眠控制和自动重置唤醒计划，不得增加网络、任意命令执行或额外文件访问。新增网络访问或日志数据前先核对隐私边界。公开 Codex 服务状态仅在对应面板可见且睡眠门禁允许时刷新，不携带账号凭据。
+
+自动重置默认关闭，提前量可选 15 分钟、30 分钟、1 小时、2 小时、4 小时或 6 小时，默认 30 分钟。状态机只处理新鲜响应明确列出的 `available + codexRateLimits + expiresAt` 凭证，每轮连续重试最多 5 分钟，每张凭证独立记录预算；所有网络等待与消费共用截止时间，最迟为过期前 60 秒。取消后先等待旧评估与断言清理，再开启新一轮。CodexBarHelper 只接收有限时间戳，使用固定 owner 和固定 `wake` 类型维护一个系统事件；目标变化、功能关闭、App 退出、对应 XPC 连接断开或 helper 启动时必须收敛并清理该事件。修改 owner 或事件类型属于清理兼容性问题。
 
 自动重置和防睡眠从关闭切换为开启时必须先显示确认框。确认文案按 `HelperStatus` 展示：`.notRegistered` 和 `.notFound` 使用 `需要安装并授权 CodexBar Helper 后台运行`，`.requiresApproval` 使用 `已安装 CodexBar Helper 但需要授权允许后台运行`，`.enabled` 只显示对应功能说明。确认后写入用户意图并触发 helper 注册，Helper 授权系统设置仅由设置行的 `打开系统设置` 按钮显式打开。两个开关关闭时不显示状态说明。自动重置子面板入口仅在开关开启且 helper 状态为 `.enabled` 时显示，条件失效时关闭已展开面板。
 
 缺少 session ID 的 Hook 事件使用匿名 project key。匿名任务保留在实时快照和 UI 中，活动卡片与任务中心统一显示橙色 `person.crop.circle.dashed` 图标，`help` 为 `匿名任务不参与防睡眠`。匿名任务不发布任务通知或触觉反馈，不参与防睡眠和异常会话保护，不生成保护状态持久化标识。活动卡片的 `+N` 只显示其他活跃任务总数。
 
-`CodexActivityMonitor` 的异常会话保护跟随防睡眠主开关，只判定非匿名运行中任务，等待批准任务不参与判定。静默阈值可选 30 分钟, 1, 2 或 4 小时，默认 1 小时。Hook bootstrap、系统睡眠、唤醒恢复或 Hook 数据源不可用期间必须暂停判定，数据恢复后统一无通知对账。
+`CodexActivityMonitor` 的异常会话保护跟随防睡眠主开关，只判定非匿名运行中任务，等待批准任务不参与判定。静默阈值可选 30 分钟, 1, 2 或 4 小时，默认 1 小时。共享快照恢复、系统睡眠或来源不可用期间必须暂停判定，数据恢复后统一无通知对账。心跳只续健康状态，不得更新任务进展时间；异步提问与等待子 Agent 不等于阻塞审批。
 
-`HookEventTailReader.drainNow()` 是读取屏障，每个调用方必须等待一轮在本次请求之后开始的读取。系统唤醒只有在该轮读取成功后才执行 rollout 生命周期对账并恢复异常会话保护判定。reader 更换时丢弃旧结果，数据源不可用或任务取消时不得使用旧快照继续判定。
+共享采集器的断线任务只显示“状态待确认”，不得伪造终止。连接代次变化时丢弃旧结果，首次与重连的历史终态不重播通知或流光。`HookEventTailReader.drainNow()` 的屏障约束只用于旧链路的历史兼容测试。
 
 异常会话保护记录由 `ActivityProtectionStateStore` 保存在 `~/Library/Application Support/CodexBar-yatotm/ActivityProtection/state.json`，只包含哈希任务标识和时间戳，最长保留到最后进展后的 24 小时。Debug 与 Release 通过 `flock` 共用该文件，当前 schema 为 `1`。修改格式或身份计算属于兼容性问题。
 

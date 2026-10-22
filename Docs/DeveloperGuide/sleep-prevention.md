@@ -102,17 +102,23 @@ App 和 helper 都使用单调递增 generation：
 
 ## 生效条件
 
+设置提供“关闭、手动、随任务”三种选择，继续使用 `KeepAlive.isEnabled` 和 `KeepAlive.mode`。新安装默认手动模式，但主开关默认关闭；旧安装保留原有按任务行为。
+
+手动模式不依赖 Hook、活动连接或任务数量，任务变化也不重置手动时长。随任务模式只跟随本机 Codex；远端任务和 Claude 展示不直接接管本机电源策略。
+
 [`KeepAliveController.swift`](../../CodexBar/Services/KeepAlive/KeepAliveController.swift) 只有在以下条件全部成立时才建立防睡眠：
 
 - 防睡眠主开关已开启
-- Hook 已启用且校验通过
-- 至少存在一个符合设置的实时任务
+- 随任务模式下，活动源已恢复且连接健康，即 `CodexActivityMonitor.isMonitoringAvailable == true`
+- 随任务模式下，至少存在一个符合设置的实时任务
 - CodexBarHelper 已安装并可连接
 - 未触发低电量阈值
 - 未达到单次最长防睡眠时长
 - App 不在终止流程
 
-等待批准任务默认不计入有效任务，用户可以单独开启。异常会话保护抑制的任务也不再维持防睡眠。
+审批和明确阻塞的提问默认不计入有效任务，用户可以单独开启等待时防睡眠。非阻塞提问和仍有子 Agent 工作的任务继续按运行任务处理。异常会话保护抑制的任务不再维持防睡眠。
+
+活动源断线、休眠或尚未完成恢复时，随任务模式释放防睡眠效果但保留用户开关；恢复可信快照后再按当前任务求值。不能拿旧任务快照继续保持唤醒。
 
 `KeepAliveController` 会先从运行中和等待批准快照中排除 `isAnonymous` 任务。只有非匿名任务能够进入运行任务集合，启动新一轮最长时长计时或维持防睡眠。
 
@@ -122,7 +128,7 @@ App 和 helper 都使用单调递增 generation：
 | --- | --- |
 | `notStarted` | 服务尚未启动 |
 | `userOff` | 用户关闭主开关 |
-| `hookDisabled` | Hook 不可工作 |
+| `activityUnavailable` | 活动源未恢复或连接不健康 |
 | `noTasks` | 没有符合条件的任务 |
 | `helperUnavailable` | CodexBarHelper 未安装或不可连接 |
 | `helperRefreshing` | CodexBarHelper 状态正在恢复或确认 |
@@ -146,7 +152,7 @@ CodexBarHelper 通过 `SMAppService` 注册为 LaunchDaemon。App 和 CodexBarHe
 
 - 设置或撤销 App 租约
 - 查询 CodexBarHelper 运行和拥有状态
-- App 更新后重置 CodexBarHelper 状态
+- App 更新后按所有权与有效租约对账
 - 设置或取消 CodexBar 固定 owner 的下一次自动重置 `wake` 事件
 
 自动重置与防睡眠共用 helper 注册和系统批准状态，但使用独立 XPC 连接。开启自动重置时，即使防睡眠主开关关闭，也会尝试注册 helper；尚未批准时，自动重置设置行会提供相同的状态和“打开系统设置”入口。
@@ -179,7 +185,7 @@ CodexBarHelper 通过 `SMAppService` 注册为 LaunchDaemon。App 和 CodexBarHe
 
 ## CodexBarHelper 权限边界
 
-[`CodexBarHelper/main.swift`](../../CodexBarHelper/main.swift) 以 root 运行，但能力被刻意限制：
+[`HelperRuntime.swift`](../../CodexBarHelper/HelperRuntime.swift) 以 root 运行，但能力被刻意限制：
 
 - 系统睡眠切换只执行固定路径 `/usr/bin/pmset`
 - 只使用固定参数读取或切换 `disablesleep`
@@ -280,10 +286,10 @@ App 正常退出时先取消自动重置唤醒计划，再撤销租约和 IOKit 
 
 ### 正常退出
 
-`applicationShouldTerminate` 不能在未确认释放时直接返回允许。`prepareForTermination()` 会先停止新重试，取消可能存在的自动重置唤醒计划，再请求释放可能存在的租约，然后等待 helper 回读结果：
+`applicationShouldTerminate` 先冻结 `AutoResetController`，防止清理期间重排唤醒，再等待 `KeepAliveController.prepareForTermination()`。后者停止新重试，取消可能存在的自动重置唤醒计划，再请求释放可能存在的租约，然后等待 helper 回读结果：
 
 - 释放成功时继续终止
-- 释放失败时取消本次终止，恢复正常条件求值和重试
+- 释放失败时取消本次终止，同时恢复自动重置评估、防睡眠条件求值和重试
 
 强制退出时，helper 在 15 秒 watchdog 宽限结束后撤销失联客户端的租约。
 
@@ -332,6 +338,8 @@ helper 会分别检查 lease、ownership 记录和实测 `SleepDisabled`
 
 任务集合使用稳定 task ID 判断“新任务”和“等待后恢复”，而不是只比较数量。如果一个任务结束同时另一个任务开始，数量仍为 1，但新的任务应得到完整时长预算。
 
+手动模式的时长由模式和时长设置决定，任务开始、结束或等待不会重新起算。
+
 ### 电池读取状态
 
 电池读取使用 `unavailable`, `unreadable` 和 `present` 三态，不能压成一个可选值：
@@ -367,6 +375,8 @@ helper 会分别检查 lease、ownership 记录和实测 `SleepDisabled`
 
 assertion 名称使用 ASCII。某些系统版本中带中文的名称会在 `pmset -g assertions` 中显示为空，使诊断信息失去标识。
 
+释放显示断言失败时保留对应 ID，按 1、2、5 秒有限重试，不能只停节拍就假装资源已释放。重新开启会取消旧释放任务，避免迟到重试释放当前生效的断言；`kIOReturnNotFound` 视为已经释放。
+
 ## 恢复系统电源管理
 
 任务结束、关闭功能、低电量或达到时长上限时，CodexBar 释放租约和 App assertion。Helper 仅在持有恢复责任且无其他租约时恢复系统睡眠设置，外部来源的设置保持原样。
@@ -396,13 +406,19 @@ assertion 名称使用 ASCII。某些系统版本中带中文的名称会在 `pm
 
 App 更新可能改变内嵌 CodexBarHelper 的签名或内容。App 会记录 CodexBarHelper fingerprint，检测变化后通过 `SMAppService` 和重置接口刷新安装状态。
 
+更新后的 `resetSleepAfterUpdate` 不再无条件写 `SleepDisabled=0`：有效租约继续保持，外部设置保持原样，只有本应用拥有且没有有效租约的状态才恢复。恢复或持久化失败不提交完成指纹，后续可以继续修复。
+
+Helper 身份、现有签名授权、`Contents/Resources/CodexBarHelper`、LaunchDaemon plist 和所有权文件路径均保持不变，不增加单独的管理 App。
+
+`PmsetRunner` 只通过 `BoundedProcess` 执行固定参数，超时后有限等待、终止和排空；未退出的旧命令不能与下一次写入重叠。
+
 验证更新时需要同时检查：
 
 - CodexBarHelper 位于 App 包的正确位置
 - LaunchDaemon plist 与 Debug 或 Release bundle ID 匹配
 - App 和 CodexBarHelper 签名匹配预期
 - 首次系统授权流程可完成
-- 更新后旧 owned 状态能够安全恢复
+- 更新保留外部状态和有效租约，旧 owned 恢复失败可以重试
 - 更新前自动重置唤醒计划已取消，新 helper 就绪后按当前目标重新登记
 
 ## 手动验证矩阵
@@ -412,7 +428,9 @@ App 更新可能改变内嵌 CodexBarHelper 的签名或内容。App 会记录 C
 - 无外接显示器且合盖运行时，记录解除防睡眠后系统实际睡眠的时机
 - 手动关闭、任务结束、低电量和时长上限均正确释放租约与断言
 - 运行任务开始和结束时，App assertion 与 CodexBarHelper 租约同步切换
-- 等待批准设置关闭和开启时，有效任务判断正确
+- 等待设置关闭和开启时，审批、阻塞提问、非阻塞提问及子 Agent 等待分类正确
+- 活动源断开后随任务模式释放，恢复后按新快照重新判断，手动模式不受该门槛影响
+- 显示断言释放失败后有限重试，重新开启不会被旧释放任务关闭
 - 外部先设置 `disablesleep 1` 时，CodexBar 不声明所有权也不恢复为 `0`
 - App 正常退出时恢复 owned 状态
 - App 强制退出或 XPC 断开后，watchdog 恢复 owned 状态
@@ -421,7 +439,7 @@ App 更新可能改变内嵌 CodexBarHelper 的签名或内容。App 会记录 C
 - 开启操作只触发 helper 注册，Helper 授权系统设置仅由设置行的 `打开系统设置` 按钮打开
 - 自动重置选项入口只在开关开启且 helper 已批准时显示，条件失效后已展开面板关闭
 - 自动重置开启且防睡眠关闭时仍能完成 helper 注册与批准
-- 未来阈值和重试只保留一个固定 owner 的 `wake` 事件，替换时不影响其他 owner
+- 首次执行和最终复查只保留一个固定 owner 的 `wake` 事件，普通冷却不额外唤醒，替换时不影响其他 owner
 - 自动重置关闭、目标变化和正常退出时回读确认计划清零
 - 自动重置 XPC 连接断开或 helper 重启时清理遗留计划
 - `Scripts/cleanup.swift` 只在固定 owner 的计划确认清零后注销 helper
@@ -439,4 +457,9 @@ App 更新可能改变内嵌 CodexBarHelper 的签名或内容。App 会记录 C
 - [`KeepAliveDurationLimiter.swift`](../../CodexBar/Services/KeepAlive/KeepAliveDurationLimiter.swift)
 - [`PowerSourceMonitor.swift`](../../CodexBar/Services/KeepAlive/PowerSourceMonitor.swift)
 - [`CodexBarHelperXPC.swift`](../../Shared/CodexBarHelperXPC.swift)
-- [`CodexBarHelper/main.swift`](../../CodexBarHelper/main.swift)
+- [`HelperRuntime.swift`](../../CodexBarHelper/HelperRuntime.swift)
+- [`OwnershipStore.swift`](../../CodexBarHelper/OwnershipStore.swift)
+- [`Pmset.swift`](../../CodexBarHelper/Pmset.swift)
+- [`BoundedProcess.swift`](../../Shared/BoundedProcess.swift)
+
+隔离 Helper 回归通过 `bash Scripts/test-helper.sh` 执行，使用内存所有权和模拟 pmset，不需要 root、不注册服务、不修改真实电源状态。临时构建位于 `/tmp`，结束后自动清理。

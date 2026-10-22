@@ -102,17 +102,23 @@ Both app and helper use monotonically increasing generations:
 
 ## Activation Conditions
 
+Settings offers Off, Manual, and Follow Tasks, retaining `KeepAlive.isEnabled` and `KeepAlive.mode`. New installations default to Manual mode with the feature off; existing installations retain task-following behavior.
+
+Manual mode does not depend on Hooks, activity connectivity, or task count, and task changes do not restart its duration. Follow Tasks uses local Codex activity; remote and Claude task presentation does not directly control the Mac's power policy.
+
 [`KeepAliveController.swift`](../../../CodexBar/Services/KeepAlive/KeepAliveController.swift) establishes sleep prevention only when all conditions hold:
 
 - Prevent System Sleep is enabled
-- Hook is enabled and validated
-- At least one live task qualifies under settings
+- In Follow Tasks mode, the activity source has recovered and is healthy: `CodexActivityMonitor.isMonitoringAvailable == true`
+- In Follow Tasks mode, at least one live task qualifies under settings
 - CodexBarHelper is installed and connectable
 - The low-battery threshold is not active
 - The per-period maximum duration has not been reached
 - The app is not terminating
 
-Waiting-for-approval tasks do not count by default but can be enabled separately. Tasks suppressed by Activity Protection no longer maintain sleep prevention.
+Approval waits and explicitly blocking questions do not qualify by default; the waiting option can include them. Nonblocking questions and tasks with working subagents remain running. Tasks suppressed by Activity Protection do not maintain sleep prevention.
+
+Disconnected, sleeping, or recovering activity sources release task-based prevention without rewriting user intent. Resume only after trusted snapshots recover; an old task snapshot cannot justify keeping the Mac awake.
 
 `KeepAliveController` first removes `isAnonymous` tasks from running and waiting snapshots. Only non-anonymous tasks can enter active sets, begin a new duration period, or keep sleep prevention alive.
 
@@ -122,7 +128,7 @@ The controller publishes an explicit blocking reason:
 | --- | --- |
 | `notStarted` | Service has not started |
 | `userOff` | User turned off the master switch |
-| `hookDisabled` | Hook is not operational |
+| `activityUnavailable` | Activity source is not recovered or healthy |
 | `noTasks` | No task qualifies |
 | `helperUnavailable` | CodexBarHelper is not installed or connectable |
 | `helperRefreshing` | CodexBarHelper state is recovering or being confirmed |
@@ -146,7 +152,7 @@ The interface exposes only four capability classes:
 
 - Set or revoke an app lease
 - Query helper runtime and ownership state
-- Reset helper state after an app update
+- Reconcile ownership and valid leases after an app update
 - Set or cancel the next Automatic Reset `wake` event for CodexBar's fixed owner
 
 Automatic Reset and sleep prevention share helper registration and macOS approval but use separate XPC connections. Enabling Automatic Reset attempts helper registration even when Prevent System Sleep is off; while approval is pending, its setting row shows the same state and `Open System Settings` entry.
@@ -179,7 +185,7 @@ Each app process creates a stable `clientSessionID` that survives XPC reconnecti
 
 ## CodexBarHelper Privilege Boundary
 
-[`CodexBarHelper/main.swift`](../../../CodexBarHelper/main.swift) runs as root but is intentionally constrained:
+[`HelperRuntime.swift`](../../../CodexBarHelper/HelperRuntime.swift) runs as root but is intentionally constrained:
 
 - System sleep switching invokes only fixed `/usr/bin/pmset`
 - It uses only fixed arguments to read or toggle `disablesleep`
@@ -280,10 +286,10 @@ Normal app exit first cancels the Automatic Reset wake schedule, then revokes th
 
 ### Normal Exit
 
-`applicationShouldTerminate` cannot approve exit before confirmed release. `prepareForTermination()` stops new retries, cancels a possible Automatic Reset wake schedule, requests release of a possible lease, and waits for helper read-back:
+`applicationShouldTerminate` first freezes `AutoResetController` so cleanup cannot race a new wake schedule, then waits for `KeepAliveController.prepareForTermination()`. That method stops new retries, cancels a possible Automatic Reset wake schedule, requests release of a possible lease, and waits for helper read-back:
 
 - Continue termination after successful release
-- Cancel this termination and resume normal condition evaluation and retries after failure
+- Cancel termination and resume both Automatic Reset evaluation and sleep-prevention conditions and retries after failure
 
 On forced exit, the helper revokes the disconnected client’s lease after the 15-second watchdog grace period.
 
@@ -332,6 +338,8 @@ When low battery or duration limit stops prevention, notification must follow co
 
 The task set uses stable task IDs to detect “new task” and “resumed from waiting,” not count alone. If one task ends as another starts, count remains one, but the new task deserves a full budget.
 
+Manual-mode duration is controlled by mode and duration settings; starting, ending, or waiting tasks do not restart it.
+
 ### Battery Read States
 
 Battery reads use `unavailable`, `unreadable`, and `present` rather than one optional value:
@@ -367,6 +375,8 @@ A failed display assertion records its own error without overriding primary slee
 
 Assertion names use ASCII. On some system versions, Chinese names appear empty in `pmset -g assertions` and lose diagnostic identity.
 
+A failed display-assertion release retains its ID and retries after 1, 2, and 5 seconds. Stopping the activity tick alone does not mean resources were released. Reenabling cancels the old release task so a late retry cannot release the active assertion; `kIOReturnNotFound` counts as already released.
+
 ## Restoring System Power Management
 
 When tasks finish, the feature is disabled, the battery runs low, or the duration limit is reached, CodexBar releases its lease and app assertions. The helper restores system sleep settings only when it has restoration responsibility and no other leases remain. Settings owned by external sources remain unchanged.
@@ -396,13 +406,19 @@ Automatic Reset wake scheduling uses a separate bounded synchronization policy:
 
 An app update may change the bundled helper's signature or content. The app records a CodexBarHelper fingerprint and refreshes installation through `SMAppService` and the reset interface after detecting change.
 
+`resetSleepAfterUpdate` no longer writes `SleepDisabled=0` unconditionally. Valid leases remain active, external settings remain intact, and restoration applies only to state owned by the app with no valid lease. A restoration or persistence failure does not commit the completion fingerprint, allowing later recovery.
+
+Helper identity, existing signing approval, `Contents/Resources/CodexBarHelper`, LaunchDaemon plists, and ownership paths remain unchanged. No separate manager app is introduced.
+
+`PmsetRunner` executes only fixed arguments through `BoundedProcess`, with bounded termination and output draining. A previous command that has not exited cannot overlap a later write.
+
 Validation must cover:
 
 - CodexBarHelper is in the correct app-bundle location
 - LaunchDaemon plist matches the Debug or Release bundle ID
 - App and helper signatures match expectations
 - First-time system authorization completes
-- Old owned state restores safely after update
+- Updates retain external settings and valid leases, and failed owned-state recovery can retry
 - Automatic Reset wake schedules are canceled before update and recreated from the current target after the new helper is ready
 
 ## Manual Validation Matrix
@@ -412,7 +428,9 @@ Validation must cover:
 - With the lid open, task completion restores the configured system idle-sleep policy
 - With the lid closed and no external displays, record when the system actually sleeps after task completion
 - Disabling sleep prevention, low battery, and the duration limit release leases and assertions without requesting software sleep
-- Eligible-task decisions are correct with Keep Awake While Waiting off and on
+- Approval waits, blocking questions, nonblocking questions, and subagent waits are classified correctly with the waiting option off and on
+- Activity loss releases task-based prevention; recovery uses fresh state, while Manual mode remains independent
+- Failed display releases retry finitely and cannot disable a newly reenabled assertion
 - If an external source sets `disablesleep 1` first, CodexBar neither claims ownership nor restores `0`
 - Normal app exit restores owned state
 - Forced exit or XPC disconnect lets the watchdog restore owned state
@@ -421,7 +439,7 @@ Validation must cover:
 - Enabling only triggers helper registration; authorization settings opens solely from `Open System Settings` on the row
 - Automatic Reset options appear only when enabled and approved and close when that condition fails
 - Automatic Reset can register and gain approval while sleep prevention remains off
-- Future thresholds and retries retain one `wake` event for the fixed owner and do not affect other owners when replaced
+- The initial attempt and final check retain one fixed-owner `wake` event; ordinary cooldown does not wake the Mac, and replacement leaves other owners untouched
 - Disabling Automatic Reset, changing its target, and normal exit each confirm the schedule is empty by read-back
 - An Automatic Reset XPC disconnect or helper restart cleans stale schedules
 - `Scripts/cleanup.swift` unregisters the helper only after the fixed-owner schedule is confirmed empty
@@ -439,4 +457,9 @@ Validation must cover:
 - [`KeepAliveDurationLimiter.swift`](../../../CodexBar/Services/KeepAlive/KeepAliveDurationLimiter.swift)
 - [`PowerSourceMonitor.swift`](../../../CodexBar/Services/KeepAlive/PowerSourceMonitor.swift)
 - [`CodexBarHelperXPC.swift`](../../../Shared/CodexBarHelperXPC.swift)
-- [`CodexBarHelper/main.swift`](../../../CodexBarHelper/main.swift)
+- [`HelperRuntime.swift`](../../../CodexBarHelper/HelperRuntime.swift)
+- [`OwnershipStore.swift`](../../../CodexBarHelper/OwnershipStore.swift)
+- [`Pmset.swift`](../../../CodexBarHelper/Pmset.swift)
+- [`BoundedProcess.swift`](../../../Shared/BoundedProcess.swift)
+
+Run isolated helper regressions with `bash Scripts/test-helper.sh`. They use in-memory ownership and simulated pmset, require no root privileges, register no service, and never change real power settings. Temporary builds under `/tmp` are removed on completion.

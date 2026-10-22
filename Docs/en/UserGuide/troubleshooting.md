@@ -11,25 +11,20 @@
 
 ## The Main Panel Says “Not Signed In”
 
-1. Open the Codex CLI, ChatGPT App, or Codex App currently in use
+1. Open the Codex CLI used on that machine
 2. Sign in to Codex
 3. Double-click the account icon in the CodexBar main panel to refresh
 4. If it still says you are not signed in, quit and reopen CodexBar
 
-Automatic mode prefers the global Codex CLI. The `In Use` indicator on the About page identifies the actual source, which you can change with the Source selector.
+About separates the running shared service from CLI/App disk versions. Source selection only launches a missing service; it does not switch the account or restart existing tasks.
 
 ## The Main Panel Says “Initialization Failed”
 
-Check the connection error in `Settings > About`, confirm Codex is installed at an available path, and review proxy settings. Click `Reconnect` after fixing the issue. If it persists, open Logs for details.
+Check the connection error in `Settings > About`, confirm the shared service actually runs `0.162.0` or later, and review Codex sign-in, network, and proxy settings. Click `Reconnect` after fixing the issue. If it persists, open Logs for details.
 
 ## Proxy Configuration or Connection Failures
 
-Open `Settings > Advanced > Proxy` and use `Test Connection` to check the draft. Server and port are required; authentication also requires a username. Invalid fields are outlined in red with a short reason beside the test button.
-
-- If About reports an invalid server or username, correct and save the settings, or turn the proxy off
-- If the configuration cannot be read, use `⋯ > Delete Configuration` at the top right of the dialog
-- A correctly formatted but unreachable proxy can still be saved and enabled; use Test Connection to check connectivity
-- HTTPS requires the proxy endpoint itself to support TLS and present a valid certificate
+First confirm Codex CLI works on the same machine. The new connection uses the official service's network environment, not legacy app-specific proxy preferences. Check Codex configuration and `CODEX_HOME`, then reconnect in About. This only reconnects CodexBar and does not replace a running service.
 
 ## Rate Limits or Tokens Appear Dimmed
 
@@ -37,26 +32,16 @@ A dimmed value means that the current read failed and CodexBar fell back to cach
 
 Double-click the account icon to retry. If data remains faded, check the connection error in About or open Logs.
 
-## CodexBar Hook Cannot Be Enabled or Validated
+## Existing Hook Configuration After Upgrading
 
-| Message | Action |
-| --- | --- |
-| A newer Codex version is required | Update Codex, then click `Reconnect` in About |
-| Codex Hook is globally disabled | Re-enable `features.hooks` in Codex configuration |
-| CodexBar Hook is incomplete | Reopen Settings for automatic repair; if needed, turn Hook off and back on |
-| CodexBar Hook is untrusted | Re-enable Hook and review Codex’s trust prompts |
-| Unexpected CodexBar Hook source | Verify the selected Codex source and the location of `CODEX_HOME` |
-| Invalid `hooks.json` format | Repair the file’s JSON format and retry |
-| Cannot validate Codex Hook | Reopen Settings after the Codex connection recovers |
-
-The default configuration file is `~/.codex/hooks.json`. If `CODEX_HOME` is set, use `hooks.json` in that directory.
+Codex collection no longer requires a Hook switch; existing Hook history is retained. Preserve handlers owned by you and other apps. Claude Hooks are still managed by source integration, so check that machine's integration rather than toggling Codex Hooks.
 
 ## Live Tasks Do Not Appear
 
-1. Confirm that CodexBar Hook is enabled with no error
+1. Confirm the local shared service is connected, or the remote/Claude source has live tasks enabled
 2. Confirm that `Tasks` is enabled under `General > Main Panel Layout`
 3. Start a new Codex task to generate live events
-4. Open Settings to trigger Hook validation again
+4. Reconnect local Codex in About; for SSH check the collector and that machine’s shared service, or Claude’s passive Hooks
 
 Restarting CodexBar does not replay old task notifications.
 
@@ -67,7 +52,7 @@ Check in this order:
 1. `System Notifications` is enabled
 2. macOS allows notifications from CodexBar
 3. The relevant notification option is enabled
-4. CodexBar Hook is valid for task notifications
+4. The task source is connected and producing new events
 5. The completed task reached the selected duration threshold
 6. The notification sound is not set to silent
 
@@ -77,15 +62,15 @@ Haptic feedback does not require macOS notification permission, but it does requ
 
 Check in this order:
 
-1. CodexBar Hook is valid
+1. Follow Tasks has a connected local Codex shared service; Manual mode needs no task source
 2. `Prevent System Sleep` is enabled
-3. A task is currently running
+3. Follow Tasks has an eligible local Codex task
 4. If only waiting tasks exist, `Keep Awake While Waiting` is enabled
 5. Settings does not report that CodexBar needs approval to run in the background
 6. Low Battery Protection is not active
 7. The Keep-Awake Limit has not been reached
 
-The coffee cup indicates that system sleep is actually being prevented. An enabled switch without a coffee cup is not necessarily an error.
+The keep-awake indicator indicates that system sleep is actually being prevented. An enabled switch without a keep-awake indicator is not necessarily an error.
 
 If Settings says `System sleep is disabled by another source`, CodexBar does not overwrite that source.
 
@@ -111,7 +96,7 @@ Temporary failures retry for up to 5 minutes per round; later refreshes may try 
 
 ## CodexBar Still Shows the Old Version After Updating Codex
 
-Click `Reconnect` in About to use the updated Codex.
+About lists CLI/App disk versions separately from the running shared service. Updating files does not immediately replace that service, and Reconnect only reconnects the client. Finish active tasks and update or restart the service through Codex itself, then reconnect to read its new version.
 
 ## Using the Logs Window
 
@@ -124,7 +109,7 @@ The Logs window retains the latest 500 Codex interactions from the current run.
 
 Each entry includes request time, method, status, and response time. Expand it to inspect a request, response, or error preview.
 
-You can view or copy the full content in a separate window. It cannot be recovered after you clear the log or quit the app.
+Formatting and layout run in the background. New entries do not force you back to the top while reading history. Full content can be previewed or copied; clearing the log or quitting the app removes it.
 
 ## Report a Problem
 

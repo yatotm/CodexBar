@@ -30,7 +30,7 @@ final class CodexNotificationService: NSObject {
     private var submittingDedupKeys = Set<String>()
 
     /// 阈值穿越判定的会话内上一帧剩余比例, key 为 account|limitId|windowId
-    private var lastRemainingPercents: [String: Int] = [:]
+    private var lowQuotaObservations: [String: LowQuotaObservation] = [:]
 
     /// 低额度判定依据的两个设置项
     /// 订阅回调跑在 @Published 的 willSet, 那时属性还是旧值, 只有回调参数是新的
@@ -164,6 +164,7 @@ final class CodexNotificationService: NSObject {
     }
 
     func notifyRemoteActivity(_ task: RemoteActivityTask, sourceName: String) {
+        performTaskHapticFeedbackIfEnabled()
         guard settings.canDeliver else { return }
         let waiting = task.state == "waiting"
         let duration = task.updatedAt - task.startedAt
@@ -341,7 +342,7 @@ final class CodexNotificationService: NSObject {
 
     private func resetLowQuotaObservation(for snapshot: CodexQuotaSnapshot) {
         forEachQuotaWindowWithData(in: snapshot) { _, _, stateKey in
-            lastRemainingPercents.removeValue(forKey: stateKey)
+            lowQuotaObservations.removeValue(forKey: stateKey)
         }
     }
 
@@ -366,19 +367,14 @@ final class CodexNotificationService: NSObject {
             return
         }
 
-        let previousRemainingPercent = lastRemainingPercents[stateKey]
-        lastRemainingPercents[stateKey] = window.remainingPercent
+        let crossedThreshold = lowQuotaObservations[stateKey, default: LowQuotaObservation()].observe(
+            remainingPercent: window.remainingPercent, resetsAt: window.resetsAt,
+            thresholdPercent: lowQuota.thresholdPercent
+        )
 
         guard let resetsAt = window.resetsAt,
-              window.remainingPercent <= lowQuota.thresholdPercent,
+              crossedThreshold,
               lowQuota.isEnabled else {
-            return
-        }
-
-        // 穿越判定: 上一帧高于阈值才提醒; 会话内首次观察即低于也视为穿越
-        // (App 可能在跌破后才启动), 持久化去重键保证每周期只发一次
-        if let previousRemainingPercent,
-           previousRemainingPercent <= lowQuota.thresholdPercent {
             return
         }
 
@@ -401,7 +397,7 @@ final class CodexNotificationService: NSObject {
             sound: settings.lowQuotaSound,
             dedupKey: dedupKey,
             onSubmissionFailure: { [weak self] in
-                self?.lastRemainingPercents.removeValue(forKey: stateKey)
+                self?.lowQuotaObservations.removeValue(forKey: stateKey)
             }
         )
     }
@@ -580,7 +576,7 @@ final class CodexNotificationService: NSObject {
                 return false
             }
 
-            return abs(TimeInterval(existingEpoch) - TimeInterval(resetEpoch)) <= Self.lowQuotaResetTolerance
+            return LowQuotaObservation.matchesReset(existingEpoch, resetEpoch)
         }
 
         if let existingKey = sentDedupKeys.first(where: matchesReset) {
@@ -770,11 +766,34 @@ final class CodexNotificationService: NSObject {
     private static let taskHapticPulseCount = 10
     private static let taskHapticPulseInterval = Duration.milliseconds(100)
     private static let notificationSubmissionRetryCount = 1
-    private static let lowQuotaResetTolerance: TimeInterval = 60
     private static let sentKeysLimit = 300
     private static let sentKeysKey = "Notification.sentKeys"
     private static let legacyResetDedupKeyPrefix = "reset|"
     private static let legacyPendingResetReminderKey = "Notification.pendingResetReminders"
+
+    struct LowQuotaObservation {
+        private var remainingPercent: Int?
+        private var resetEpoch: Int?
+
+        mutating func observe(remainingPercent: Int, resetsAt: Date?, thresholdPercent: Int) -> Bool {
+            let newResetEpoch = resetsAt.map { Int($0.timeIntervalSince1970) }
+            let isSameCycle = resetEpoch.flatMap { previous in
+                newResetEpoch.map { Self.matchesReset(previous, $0) }
+            } ?? false
+            let previousRemaining = isSameCycle ? self.remainingPercent : nil
+            // 使用固定锚点, 不能让多次小偏移累积成跨周期容差
+            if !isSameCycle {
+                resetEpoch = newResetEpoch
+            }
+            self.remainingPercent = remainingPercent
+            return newResetEpoch != nil && remainingPercent <= thresholdPercent
+                && (previousRemaining.map { $0 > thresholdPercent } ?? true)
+        }
+
+        static func matchesReset(_ lhs: Int, _ rhs: Int) -> Bool {
+            abs(TimeInterval(lhs) - TimeInterval(rhs)) <= 60
+        }
+    }
 
     /// 单个额度窗口的重置观察状态: 记录大于 0 的消耗, 归零时消费并发送
     private struct QuotaWindowResetObservation {

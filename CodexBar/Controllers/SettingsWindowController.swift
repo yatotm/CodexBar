@@ -81,13 +81,11 @@ final class SettingsWindowController: HostingWindowController {
     override func makeWindow() -> NSWindow {
         let hostingController = NSHostingController(
             rootView: AppSettingsView(
-                proxySettings: proxySettings,
                 codexHookSettings: codexHookSettings,
                 globalHotKeySettings: globalHotKeySettings,
                 menuBarQuotaSettings: menuBarQuotaSettings,
                 mainPanelSettings: mainPanelSettings,
                 taskGlowSettings: taskGlowSettings,
-                activityPresentation: activityPresentation,
                 notificationSettings: notificationSettings,
                 autoResetSettings: autoResetSettings,
                 keepAliveController: keepAliveController,
@@ -153,7 +151,6 @@ final class SettingsWindowController: HostingWindowController {
 
     private func refreshSettingsState() {
         notificationSettings.refreshAuthorizationStatus()
-        codexHookSettings.reconcileInstalledHooks()
         codexCLINotificationSettings.refresh()
         menuBarQuotaSettings.refresh()
         mainPanelSettings.refresh()
@@ -204,11 +201,10 @@ final class SettingsWindowController: HostingWindowController {
                 willShow: { [codexCLINotificationSettings] in
                     codexCLINotificationSettings.refresh()
                 },
-                contentProvider: { [notificationSettings, mainPanelSettings, codexHookSettings, codexCLINotificationSettings, autoResetSettings, keepAliveController] in
+                contentProvider: { [notificationSettings, mainPanelSettings, codexCLINotificationSettings, autoResetSettings, keepAliveController] in
                     NotificationOptionsView(
                         notificationSettings: notificationSettings,
                         mainPanelSettings: mainPanelSettings,
-                        codexHookSettings: codexHookSettings,
                         codexCLINotificationSettings: codexCLINotificationSettings,
                         autoResetSettings: autoResetSettings,
                         keepAliveController: keepAliveController
@@ -219,8 +215,7 @@ final class SettingsWindowController: HostingWindowController {
                 // 防睡眠只订这两个派生值: 订整个控制器会让任务每起停一次都白重算一次高度
                 contentChanges: Publishers.MergeMany([
                     notificationSettings.objectWillChange.eraseToAnyPublisher(),
-                    mainPanelSettings.$hasRemoteActivitySource.map { _ in () }.eraseToAnyPublisher(),
-                    codexHookSettings.objectWillChange.eraseToAnyPublisher(),
+                    mainPanelSettings.$hasActivitySource.map { _ in () }.eraseToAnyPublisher(),
                     autoResetSettings.$isEnabled
                         .map { _ in () }
                         .eraseToAnyPublisher(),
@@ -265,10 +260,9 @@ final class SettingsWindowController: HostingWindowController {
             willShow: { [mainPanelSettings] in
                 mainPanelSettings.refresh()
             },
-            contentProvider: { [mainPanelSettings, codexHookSettings, mainPanelUndoManager] in
+            contentProvider: { [mainPanelSettings, mainPanelUndoManager] in
                 MainPanelOptionsView(
                     settings: mainPanelSettings,
-                    codexHookSettings: codexHookSettings,
                     undoManager: mainPanelUndoManager
                 )
             }

@@ -35,19 +35,19 @@ Codex account polling supports 1, 2, 3, 5, or 10-minute intervals and follows th
 - See every rate-limit window, its remaining allowance, and reset time
 - Check available credits and banked resets
 - Automatically use banked resets from 15 minutes to 6 hours before they expire, with a default lead time of 30 minutes; CodexBar can wake your Mac at the scheduled time and revalidate availability before use
-- Show a selected rate-limit window directly beside the menu bar icon
+- Show the remaining Codex 7d allowance beside the menu bar icon
 
 ### Understand your Codex usage
 
 - Track total tokens, your highest daily usage, and usage streaks
 - See your longest task duration
 - Review 30 weeks of daily token usage in a heatmap
-- Enable CodexBar Hook for daily session, turn, tool call, subagent, and other activity metrics
+- Combine the shared service and device logs for daily activity metrics while retaining existing Hook history
 
 ### Keep track of active tasks
 
-- Menu bar status dots distinguish running tasks, tasks waiting for approval, and recently completed tasks
-- The main panel shows the current task, project, model, reasoning effort, and elapsed time
+- Menu bar status dots distinguish running tasks, tasks awaiting a reply, and recently completed tasks
+- The main panel shows the task, project, model, reasoning effort, elapsed time, and recorded tokens; available stages, plan progress, and subagent status add detail
 - Task Center brings concurrent, recently completed, and recently terminated tasks together
 - Receive alerts for completed tasks, approval requests, and stalled tasks
 - Optional task glow covers local and remote Codex and Claude, with configurable colors, speed, brightness, and end duration
@@ -64,7 +64,8 @@ Codex account polling supports 1, 2, 3, 5, or 10-minute intervals and follows th
 - Runs as a menu bar app without taking up space in the Dock
 - Supports a global keyboard shortcut, launch at login, and automatic updates
 - Provides Simplified Chinese and English interfaces
-- Configurable HTTP/HTTPS proxy for the Codex service
+- Reuses the official shared Codex service on each machine, including its connection and proxy configuration
+- Shows official Codex service status; checks pause while the panel is hidden or the Mac sleeps
 
 ### Multi-machine usage and subscription estimates
 
@@ -96,9 +97,8 @@ bash Scripts/build-local.sh
 ## Requirements
 
 - macOS 15.0 or later
-- [Codex CLI](https://github.com/openai/codex) installed and signed in, or ChatGPT App or Codex App with bundled Codex installed
-- The running Codex version must be `0.145.0` or later
-- Live tasks and other Hook features require the running Codex version to be `0.150.0` or later
+- [Codex CLI](https://github.com/openai/codex) installed and signed in, with shared service version `0.162.0` or later
+- Remote Codex live collection has the same requirement; Claude continues using local logs and passive Hooks
 - Log collection requires Python 3.9 or later, with no extra packages
 - Claude quotas require matching records in local client caches
 
@@ -107,7 +107,7 @@ bash Scripts/build-local.sh
 1. Launch CodexBar and find its icon in the menu bar
 2. Left-click the icon to view your account, rate limits, and token usage
 3. Right-click or Control-click the icon to open Settings, Logs, or the Quit menu
-4. Enable CodexBar Hook under `Settings > Advanced` to unlock live tasks, task notifications, sleep prevention, and Hook metrics
+4. Local Codex connects automatically; add SSH sources and connect remote Codex or Claude through Live Tasks in Usage Center
 
 The default global shortcut is `⌘⇧W`. You can record a different shortcut or disable it in Settings.
 
@@ -115,13 +115,13 @@ The default global shortcut is `⌘⇧W`. You can record a different shortcut or
 
 | Document | Contents |
 | --- | --- |
-| [User Guide](Docs/en/UserGuide/README.md) | Installation, main panel, Hook, notifications, sleep prevention, sync, settings, and troubleshooting |
+| [User Guide](Docs/en/UserGuide/README.md) | Installation, main panel, live tasks, notifications, sleep prevention, sync, settings, and troubleshooting |
 | [Developer Guide](Docs/en/DeveloperGuide/README.md) | Architecture, data flows, core state machines, storage, privacy boundaries, and development validation |
 | [Documentation Index](Docs/en/README.md) | Complete documentation index |
 
 ## Privacy
 
-Raw Hook events and live tasks are processed locally. iCloud has been removed; configured SSH/HTTPS sources provide cross-device statistics. Account and usage data come through the local Codex app-server, which connects to the service; update checks use Sparkle.
+Each machine processes shared-service activity and logs locally, retaining existing Hook history. iCloud has been removed; configured SSH/HTTPS sources transfer filtered statistics. Account data uses the official shared Codex service; update checks use this fork’s Sparkle feed. Public OpenAI status checks send no account credentials. Claude collection makes no Anthropic requests.
 
 See [Data, Sync, and Privacy](Docs/en/UserGuide/sync-data-privacy.md) for complete details about data access, local storage, and network boundaries.
 

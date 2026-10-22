@@ -13,7 +13,7 @@ final class KeepAliveController: ObservableObject {
     @Published private(set) var isPreventingSleep = false
     @Published private(set) var sleepPreventionSource = CodexBarSleepPreventionSource.none
     @Published private(set) var lowBatteryThreshold: LowBatteryThreshold
-    /// 等待批准的任务算不算"有任务", 决定审批期间要不要继续挡住睡眠
+    /// 是否将审批等待和明确阻塞的提问计入防睡眠
     @Published private(set) var keepsAwakeWhileWaiting: Bool
     /// 防睡眠生效期间是否连屏幕一起留住, 顺带压住屏保与闲置锁屏
     @Published private(set) var keepsDisplayAwake: Bool
@@ -89,7 +89,6 @@ final class KeepAliveController: ObservableObject {
     }
 
     private let activityMonitor: CodexActivityMonitor
-    private let codexHookSettings: CodexHookSettings
     private let defaults: UserDefaults
     private let systemSleepService = SystemSleepService()
     private let powerSourceMonitor = PowerSourceMonitor()
@@ -134,30 +133,27 @@ final class KeepAliveController: ObservableObject {
     private var isStarted = false
     private var isPreparingForTermination = false
     private var lastLoggedSleepConditions: SleepConditions?
-    /// codexHookSettings.isOperable 的最新值, 由订阅维护
-    /// 不直接读那个属性: 订阅回调跑在 willSet, 那时它还是改动前的值
-    private var isHookEnabled: Bool
+    /// 订阅参数是发布后的可用状态, 不能在 willSet 回读监控器的旧值
+    private var isActivityMonitoringAvailable: Bool
 
     // MARK: - 生命周期
 
     init(
         activityMonitor: CodexActivityMonitor,
-        codexHookSettings: CodexHookSettings,
         defaults: UserDefaults = .standard
     ) {
         self.activityMonitor = activityMonitor
-        self.codexHookSettings = codexHookSettings
         self.defaults = defaults
         // 旧安装保留按任务行为, 新安装可直接选择手动防睡眠
         mode = defaults.string(forKey: "KeepAlive.mode").flatMap(Mode.init(rawValue:))
             ?? (defaults.object(forKey: Self.enabledKey) == nil ? .manual : .tasks)
         durationLimiter = KeepAliveDurationLimiter(defaults: defaults)
-        isHookEnabled = codexHookSettings.isOperable
+        isActivityMonitoringAvailable = activityMonitor.isMonitoringAvailable
         isEnabled = KeepAliveHelperConfiguration.supportsHelper && defaults.bool(forKey: Self.enabledKey)
         // 默认关闭: 老版本升上来的用户不该多出一条中断任务的路径
         lowBatteryThreshold = (defaults.object(forKey: Self.lowBatteryThresholdKey) as? Int)
             .flatMap(LowBatteryThreshold.init(rawValue:)) ?? .off
-        // 同样默认关闭: 等待批准没有终点, 开着它意味着无人值守时机器可能整夜不睡
+        // 同样默认关闭: 等待回应可能持续到用户返回, 避免无人值守时持续防睡眠
         keepsAwakeWhileWaiting = defaults.bool(forKey: Self.keepsAwakeWhileWaitingKey)
         // 默认关闭: 它会让人离开后机器一直停在解锁状态, 这个取舍只能由用户自己做
         keepsDisplayAwake = defaults.bool(forKey: Self.keepsDisplayAwakeKey)
@@ -176,18 +172,12 @@ final class KeepAliveController: ObservableObject {
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
-        // Hook 是本功能的依赖, 不是用户意图
-        // 只重新求值当前该不该防止系统睡眠, 绝不改写用户保存的开关
-        // 看 isOperable 那两个输入而不是只看 isEnabled: Codex 那边全局关掉 hooks
-        // 或者不信任我们的 handler 时事件送不过来, 任务恒为空, 防睡眠也就不该显示成可用
-        // @Published 在 willSet 就发信号, 此刻回读 codexHookSettings.isOperable 会拿到
-        // 正在变的那一项的旧值; CombineLatest 的两个参数都是各自的新值, 所以只认闭包参数
-        Publishers.CombineLatest(codexHookSettings.$isEnabled, codexHookSettings.$isVerified)
-            .map { $0 && $1 }
+        // 仅在来源已恢复且连接健康时跟随任务, 临时断线不改写用户开关
+        activityMonitor.$isMonitoringAvailable
             .removeDuplicates()
-            .sink { [weak self] isOperable in
-                self?.isHookEnabled = isOperable
-                self?.reconcileSleepState(trigger: .hookChanged)
+            .sink { [weak self] available in
+                self?.isActivityMonitoringAvailable = available
+                self?.reconcileSleepState(trigger: .statusRefresh)
             }
             .store(in: &cancellables)
 
@@ -302,8 +292,8 @@ final class KeepAliveController: ObservableObject {
     // MARK: - 设置入口
 
     func setEnabled(_ enabled: Bool) {
-        // 与 sleepBlockReason 读同一份镜像, 类内只保留一个 Hook 状态的真相来源
-        guard !enabled || (KeepAliveHelperConfiguration.supportsHelper && (mode == .manual || isHookEnabled)) else {
+        // 与 sleepBlockReason 读同一份镜像, 类内只保留一个活动源状态的真相来源
+        guard !enabled || (KeepAliveHelperConfiguration.supportsHelper && (mode == .manual || isActivityMonitoringAvailable)) else {
             return
         }
         guard enabled != isEnabled else {
@@ -346,10 +336,10 @@ final class KeepAliveController: ObservableObject {
             return
         }
 
-        AppLog.keepAlive.notice("KeepAlive 等待批准时保持防睡眠变更: enabled=\(enabled ? 1 : 0)")
+        AppLog.keepAlive.notice("KeepAlive 等待回应时保持防睡眠变更: enabled=\(enabled ? 1 : 0)")
         keepsAwakeWhileWaiting = enabled
         defaults.set(enabled, forKey: Self.keepsAwakeWhileWaitingKey)
-        // 快照不会因为改设置重发一次, 正等着批准的那些任务只能在这里重新求值
+        // 快照不会因为改设置重发一次, 等待中的任务只能在这里重新求值
         reconcileSleepState(trigger: .settings)
     }
 
@@ -796,10 +786,10 @@ final class KeepAliveController: ObservableObject {
     }
 
     /// 通知面板那两行的置灰依据
-    /// 输入分散在三条路径上 (用户开关与 Hook 走 reconcileSleepState, 电量与阈值走 updateBatteryState,
+    /// 输入分散在三条路径上 (用户开关与活动源走 reconcileSleepState, 电量与阈值走 updateBatteryState,
     /// 上限走 setMaximumDuration), 所以规则只写这一份, 三处都调它
     private func publishNotificationDependencies() {
-        let isKeepAliveUsable = isEnabled && (mode == .manual || isHookEnabled)
+        let isKeepAliveUsable = isEnabled && (mode == .manual || isActivityMonitoringAvailable)
         assign(
             isKeepAliveUsable && hasBattery && lowBatteryThreshold != .off,
             to: \.isLowBatteryProtectionEnabled
@@ -819,7 +809,7 @@ final class KeepAliveController: ObservableObject {
         let conditions = SleepConditions(
             blockReason: blockReason,
             enabled: isEnabled,
-            hook: isHookEnabled,
+            activity: isActivityMonitoringAvailable,
             tasks: hasKeepAliveTasks,
             helper: helperStatus,
             refreshing: isRefreshingHelper,
@@ -839,7 +829,7 @@ final class KeepAliveController: ObservableObject {
             "trigger=\(triggerName)",
             "want=\(blockReason == nil ? 1 : 0)",
             "enabled=\(conditions.enabled ? 1 : 0)",
-            "hook=\(conditions.hook ? 1 : 0)",
+            "activity=\(conditions.activity ? 1 : 0)",
             "tasks=\(conditions.tasks ? 1 : 0)",
             "helper=\(helperName)",
             "refreshing=\(conditions.refreshing ? 1 : 0)",
@@ -1337,8 +1327,10 @@ final class KeepAliveController: ObservableObject {
     /// 让一个附加效果的失败显示成防睡眠本身出错
     private func reconcileDisplayAwake() {
         let shouldKeepAwake = keepsDisplayAwake && isActivelyPreventingSleep
-        guard shouldKeepAwake != systemSleepService.isPreventingDisplaySleep else {
-            return
+        if shouldKeepAwake {
+            guard !systemSleepService.isPreventingDisplaySleep else { return }
+        } else {
+            guard systemSleepService.hasDisplaySleepResources else { return }
         }
 
         guard shouldKeepAwake else {
@@ -1433,7 +1425,7 @@ final class KeepAliveController: ObservableObject {
         sleepBlockReason == nil
     }
 
-    /// 等待批准算不算"有任务"由用户开关决定, 快照与设置两条路径共用这一份规则
+    /// 等待回应算不算"有任务"由用户开关决定, 快照与设置两条路径共用这一份规则
     private var hasKeepAliveTasks: Bool {
         mode == .manual || hasRunningTasks || (keepsAwakeWhileWaiting && !waitingTaskIDs.isEmpty)
     }
@@ -1450,10 +1442,10 @@ final class KeepAliveController: ObservableObject {
         if !isEnabled {
             return .userOff
         }
-        if mode == .tasks, !isHookEnabled {
-            return .hookDisabled
+        if mode == .tasks, !isActivityMonitoringAvailable {
+            return .activityUnavailable
         }
-        // 先检查依赖, 避免 Hook 恢复任务前以 noTasks 提前放出未授权 Helper 的设置入口
+        // 先检查依赖, 避免活动源恢复任务前以 noTasks 提前放出未授权 Helper 的设置入口
         if helperStatus != .enabled {
             return .helperUnavailable
         }

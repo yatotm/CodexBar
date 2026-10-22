@@ -1,48 +1,46 @@
-# Live Tasks and CodexBar Hook
+# Live Tasks and Collection
 
 [简体中文](../../UserGuide/activity-and-hook.md) | English
 
-CodexBar Hook provides live task status, task notifications, haptics, task-based sleep prevention, and daily session, turn, and tool-call statistics. It also enables syncing and rebuilding those daily statistics.
+Codex tasks come from the official shared service on each machine. Local, SSH, and Claude tasks share the original task card. Claude continues using local logs and passive Hooks without Anthropic requests. Task-based sleep prevention still follows local Codex only.
 
-## Enable Hook
+## Connect Tasks
 
-1. Open `Settings > Advanced`
-2. Enable `CodexBar Hook` and wait for validation
-3. Start a Codex task and check its status in the main panel
+1. Install and sign in to Codex locally; check that Settings > About shows a connected shared service running `0.162.0` or later
+2. Show Tasks under `Settings > General > Main Panel Layout`
+3. Connect remote Codex and Claude through Live Tasks in each Usage Center source
 
-Hook requires the Codex currently in use to be `0.150.0` or later. If the version warning remains after upgrading, click `Reconnect` in `Settings > About`. For other errors, see [Troubleshooting](troubleshooting.md#codexbar-hook-cannot-be-enabled-or-validated).
+Codex no longer needs a CodexBar Hook switch. Each remote collector saves its own data and syncs through SSH, continuing while the Mac sleeps or disconnects. See the [multi-machine guide](../../UserGuide/usage-center.md#实时任务)
 
-CodexBar automatically checks and repairs enabled Hook configuration. Enabling or disabling it preserves Hooks belonging to you and other apps.
+CodexBar disconnects only its own client. It does not stop the shared service or interrupt other Codex sessions.
 
 ## Task States
 
 | State | Meaning |
 | --- | --- |
-| Running | Codex is processing the task |
-| Waiting for Approval | You need to approve the next action |
+| Running | Thinking, replying, using tools, or waiting for subagents |
+| Awaiting Reply | An approval request or question still needs a response |
 | Recently Completed | A turn ended; its result is not necessarily successful |
-| Recently Terminated | The task was interrupted; no completion notification is sent |
+| Recently Terminated | The task was interrupted or failed; no completion notification is sent |
 
-Subagent activity is combined with its parent task. Internal automatic-review tasks do not appear separately or trigger task alerts or sleep prevention; their activity still contributes to daily statistics.
+Subagents stay with their parent. A finished main response does not mark the group complete while subagents are running. Background and blocking questions are handled separately; waiting for subagents alone is not an approval wait.
 
-Tasks whose session cannot be identified show an orange anonymous icon. You can view them, but they do not trigger notifications or haptics, prevent sleep, or participate in Stalled Task Protection.
+When available, the compact status line includes plan progress, pending replies, and subagent counts. Hover for full details and the latest event. Model, reasoning effort, and machine keep the same order.
 
-[Stalled Task Protection](sleep-prevention.md#stalled-task-protection) may hide running tasks that stop making progress. They reappear when progress resumes.
+Anonymous tasks remain visible but do not trigger notifications, haptics, sleep prevention, or stalled-task protection. Reconnection reconciles current state without replaying historical completion alerts.
+
+[Stalled Task Protection](sleep-prevention.md#stalled-task-protection) may hide local running tasks that stop making progress; they reappear when progress resumes.
 
 ## Daily Statistics
 
-Hover over a day in the main panel heatmap to view sessions, turns, tool calls, permission requests, context compactions, subagents, and the most-used model.
+Hover over a day to see the sessions, turns, tools, approvals, compactions, subagents, and models actually recorded. Missing fields remain unknown rather than becoming zero.
 
-Sessions and turns are deduplicated within each day; activity continuing into another day counts toward that day. Paired records such as tool-call events may be incomplete, so statistics reflect the activity CodexBar actually observed.
+Sessions and turns are deduplicated by day. Live snapshots and historical usage remain separate; cumulative task tokens are not added again to the usage ledger.
 
-## Disable Hook
+## Existing Hook History
 
-Disabling Hook stops updates to live tasks, task notifications, haptics, sleep prevention, Hook statistics, and their cross-device sync. Account, quota, and token heatmap features remain available.
+Existing Hook events, daily aggregates, Usage Center databases, and valuation history are retained. No uninstall or history reset is required. Rebuild Data still recalculates retained legacy Hook records; it does not rebuild remote databases or modify account quotas.
 
-Hook records task information such as time, model, tool name, and project, without saving prompt, reply, or tool input/output content. See [Data, Sync, and Privacy](sync-data-privacy.md) for retention and sync details.
+Claude still uses passive Hooks, preserving handlers owned by you and other apps. See [Data, Sync, and Privacy](sync-data-privacy.md) for retention and transfer boundaries.
 
-Back to the [User Guide](README.md).
-
-## Fork behavior
-
-Live tasks and task control described here apply to local Codex only. Remote and Claude usage records do not drive activity monitoring, sleep prevention, or task notifications.
+Back to the [User Guide](README.md)

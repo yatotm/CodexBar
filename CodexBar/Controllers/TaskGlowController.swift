@@ -7,7 +7,6 @@ import QuartzCore
 final class TaskGlowController {
     private let settings: TaskGlowSettings
     private let activityPresentation: ActivityPresentationModel
-    private let hookSettings: CodexHookSettings
     private var appearance: TaskGlowAppearance
     private var cancellables = Set<AnyCancellable>()
     private var panels: [TaskGlowPanel] = []
@@ -25,12 +24,10 @@ final class TaskGlowController {
 
     init(
         settings: TaskGlowSettings,
-        activityPresentation: ActivityPresentationModel,
-        hookSettings: CodexHookSettings
+        activityPresentation: ActivityPresentationModel
     ) {
         self.settings = settings
         self.activityPresentation = activityPresentation
-        self.hookSettings = hookSettings
         appearance = settings.appearance
         motionClock.setAnimationSpeed(appearance.animationSpeed)
     }
@@ -42,18 +39,16 @@ final class TaskGlowController {
 
     func start() {
         guard cancellables.isEmpty else { return }
-        Publishers.CombineLatest3(
+        Publishers.CombineLatest(
             settings.$isEnabled,
-            hookSettings.$isEnabled,
-            hookSettings.$isVerified.combineLatest(activityPresentation.$hasRemoteActivitySource)
+            activityPresentation.$hasActivitySource
         )
-        .sink { [weak self] enabled, hookEnabled, availability in
-            let (hookVerified, hasRemote) = availability
+        .sink { [weak self] enabled, hasSource in
             guard let self else { return }
-            if !enabled || ((!hookEnabled || !hookVerified) && !hasRemote) {
+            if !enabled || !hasSource {
                 cancelPreview()
             }
-            isEnabled = enabled && ((hookEnabled && hookVerified) || hasRemote)
+            isEnabled = enabled && hasSource
             consume(CodexActivityPresentationUpdate(snapshot: activityPresentation.statusItemSnapshot, terminalEvents: []))
         }
         .store(in: &cancellables)
@@ -124,7 +119,7 @@ final class TaskGlowController {
             }
             return
         }
-        guard isEnabled, hookSettings.isOperable || activityPresentation.hasRemoteActivitySource,
+        guard isEnabled, activityPresentation.hasActivitySource,
               !isSystemSleeping, !isDisplaySleeping, isSessionActive else { return }
         let role: TaskGlowColorRole
         switch request {

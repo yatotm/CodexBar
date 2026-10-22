@@ -298,6 +298,7 @@ def main():
     parser.add_argument("--pid", type=int)
     parser.add_argument("--preset", choices=PRESETS, default="standard")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--label", default="default", help="Short scenario label for capture directories and reports")
     parser.add_argument("--workload", default="Natural workload; UI and active tasks uncontrolled")
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--cpu-mean-budget", type=float)
@@ -305,6 +306,8 @@ def main():
     parser.add_argument("--render", type=Path, help="Regenerate HTML from an existing results.json without profiling")
     args = parser.parse_args()
     if args.render:
+        if args.label != "default":
+            parser.error("--label applies to recording, not --render")
         data = json.loads(args.render.read_text())
         destination = args.output or args.render.parent / "report.html"
         write_report(data, destination)
@@ -313,14 +316,24 @@ def main():
     for value in (args.cpu_mean_budget, args.footprint_budget):
         if value is not None and (not 0 < value < float("inf")):
             parser.error("Budgets must be finite positive numbers")
-    output = (args.output or ROOT / "Build/Performance" / dt.datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", args.label):
+        parser.error("--label must contain 1-64 letters, digits, underscores or hyphens")
+    try:
+        info = plistlib.loads((args.app / "Contents/Info.plist").read_bytes())
+        version, build = str(info["CFBundleShortVersionString"]), str(info["CFBundleVersion"])
+        if not all(re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", value) for value in (version, build)):
+            raise ValueError("Invalid app version/build")
+    except (OSError, ValueError, KeyError, plistlib.InvalidFileException) as error:
+        parser.error(f"Cannot read target app version: {error}")
+    name = f"{version}({build})-{args.preset}-{args.label}-{dt.datetime.now():%Y%m%d-%H%M%S}"
+    output = (args.output or ROOT / "Build/Performance" / name).resolve()
     try:
         output.mkdir(parents=True, exist_ok=False)
     except OSError as error:
         parser.error(f"Cannot create a new output directory: {error}")
     os.chmod(output, 0o700)
     data = {"format_version": VERSION, "started": now(), "state": "running", "errors": [],
-            "config": {"preset": args.preset, "workload": args.workload,
+            "config": {"preset": args.preset, "label": args.label, "workload": args.workload,
                        "cpu_mean_budget": args.cpu_mean_budget, "footprint_budget": args.footprint_budget},
             "phases": [], "environment": {"os": platform.mac_ver()[0], "arch": platform.machine()},
             "target": {"name": args.app.stem}}

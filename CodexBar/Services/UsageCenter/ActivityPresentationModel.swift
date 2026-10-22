@@ -7,7 +7,7 @@ import Foundation
 final class ActivityPresentationModel: ObservableObject {
     @Published private(set) var snapshot = CodexActivitySnapshot.empty
     @Published private(set) var statusItemSnapshot = CodexActivitySnapshot.empty
-    @Published private(set) var hasRemoteActivitySource = false
+    @Published private(set) var hasActivitySource = false
     private let presentationSubject = PassthroughSubject<CodexActivityPresentationUpdate, Never>()
     var presentationPublisher: AnyPublisher<CodexActivityPresentationUpdate, Never> {
         presentationSubject.eraseToAnyPublisher()
@@ -65,12 +65,12 @@ final class ActivityPresentationModel: ObservableObject {
         scope: UsageMenuScope
     ) {
         let now = Date()
-        let hasRemote = sources.contains { source in
-            source.isEnabled && enabled.contains(source.id) && source.validationError == nil
-                && (source.transport == .ssh || (source.transport == .local && source.includesClaude))
+        let hasSource = sources.contains { source in
+            source.isEnabled && source.validationError == nil && source.transport != .https
+                && ((source.transport == .local && source.includesCodex) || enabled.contains(source.id))
         }
-        if hasRemoteActivitySource != hasRemote {
-            hasRemoteActivitySource = hasRemote
+        if hasActivitySource != hasSource {
+            hasActivitySource = hasSource
         }
         let result = Self.merge(local: local, tasks: tasks, states: states, enabled: enabled, sources: sources, scope: scope, now: now)
         if snapshot != result {
@@ -119,6 +119,10 @@ final class ActivityPresentationModel: ObservableObject {
                 task.machineName = "本机"
                 return task
             }
+            unknown = local.unconfirmedTasks.map { var task = $0
+                task.machineName = "本机"
+                return task
+            }
             completions = local.recentCompletions.map { var task = $0
                 task.machineName = "本机"
                 return task
@@ -142,13 +146,9 @@ final class ActivityPresentationModel: ObservableObject {
                 let model = task.modelName ?? "未知模型"
                 let machine = source.transport == .local ? "本机" : source.name
                 let updated = Date(timeIntervalSince1970: task.updatedAt)
-                let row = CodexActivityTaskSnapshot(
-                    id: id, isAnonymous: false, latestEvent: latestEvent(task),
-                    projectName: task.project.isEmpty ? nil : task.project, modelName: model, effort: task.effort, toolName: task.toolName,
-                    startedAt: Date(timeIntervalSince1970: task.startedAt), stateChangedAt: task.stateChangedAt.map { Date(timeIntervalSince1970: $0) } ?? updated,
-                    showsPreciseDuration: true, activeSubagentCount: task.activeSubagentCount, machineName: machine, tokenUsage: task.tokenUsage
-                )
-                if (task.isActive && states[source.id] != "实时连接") || task.state == "unknown" {
+                let row = taskSnapshot(task, id: id, machine: machine)
+                let health = states[RemoteActivityController.connectionKey(source.id, provider: task.provider)] ?? states[source.id]
+                if (task.isActive && health != "实时连接") || task.state == "unknown" {
                     unknown.append(row)
                 } else {
                     switch task.state {
@@ -162,7 +162,7 @@ final class ActivityPresentationModel: ObservableObject {
                             modelName: model,
                             effort: task.effort,
                             completedAt: updated,
-                            duration: task.updatedAt - task.startedAt, machineName: machine, tokenUsage: task.tokenUsage
+                            duration: task.lifecycleComplete == false ? nil : task.updatedAt - task.startedAt, machineName: machine, tokenUsage: row.tokenUsage
                         ))
                     case "ended":
                         terminations.append(.init(
@@ -172,7 +172,7 @@ final class ActivityPresentationModel: ObservableObject {
                             modelName: model,
                             effort: task.effort,
                             terminatedAt: updated,
-                            duration: task.updatedAt - task.startedAt, machineName: machine, tokenUsage: task.tokenUsage
+                            duration: task.lifecycleComplete == false ? nil : task.updatedAt - task.startedAt, machineName: machine, tokenUsage: row.tokenUsage
                         ))
                     default: break
                     }
@@ -189,7 +189,62 @@ final class ActivityPresentationModel: ObservableObject {
         return result
     }
 
-    private static func latestEvent(_ task: RemoteActivityTask) -> CodexActivityEvent {
+    static func taskSnapshot(_ task: RemoteActivityTask, id: UUID, machine: String? = nil) -> CodexActivityTaskSnapshot {
+        CodexActivityTaskSnapshot(
+            id: id, isAnonymous: false, latestEvent: latestEvent(task),
+            projectName: task.project.isEmpty ? nil : task.project, modelName: task.modelName,
+            effort: task.effort, toolName: readableToolName(task.toolName),
+            startedAt: Date(timeIntervalSince1970: task.startedAt),
+            stateChangedAt: Date(timeIntervalSince1970: task.stateChangedAt ?? task.updatedAt),
+            showsPreciseDuration: task.lifecycleComplete != false, activeSubagentCount: task.activeSubagentCount,
+            machineName: machine, tokenUsage: task.tokenUsageComplete == false ? nil : task.tokenUsage,
+            stageTitle: stageTitle(task), recentEvent: recentEventTitle(task.recentEvent),
+            planCompleted: task.planCompleted, planTotal: task.planTotal,
+            pendingInputCount: task.pendingInputCount, hasBlockingInputRequest: task.hasBlockingInputRequest
+        )
+    }
+
+    private static func stageTitle(_ task: RemoteActivityTask) -> String? {
+        switch task.stage {
+        case "processing": String(localized: "activity.stage.processing", defaultValue: "处理中")
+        case "thinking": String(localized: "activity.event.thinking")
+        case "answering", "replying": String(localized: "activity.stage.answering", defaultValue: "正在回复")
+        case "tool":
+            readableToolName(task.toolName).map { String(localized: "activity.event.using-named-tool", defaultValue: "\($0)") }
+                ?? String(localized: "activity.event.using-tool")
+        case "compacting": String(localized: "activity.event.compacting-context")
+        case "waiting-approval": String(localized: "activity.status.waiting-for-approval")
+        case "waiting-input": String(localized: "activity.stage.waiting-input", defaultValue: "等待回应")
+        case "recovering-auth": String(localized: "activity.stage.recovering-auth", defaultValue: "恢复登录")
+        case "retrying": String(localized: "activity.stage.retrying", defaultValue: "正在重试")
+        case "agent-waiting": String(localized: "activity.stage.agent-waiting", defaultValue: "子任务运行中")
+        default: nil
+        }
+    }
+
+    private static func readableToolName(_ name: String?) -> String? {
+        switch name {
+        case "commandExecution": String(localized: "activity.tool.terminal", defaultValue: "终端")
+        case "fileChange": String(localized: "activity.tool.files", defaultValue: "文件修改")
+        case "webSearch": String(localized: "activity.tool.search", defaultValue: "联网搜索")
+        case "mcpToolCall", "dynamicToolCall", "collabAgentToolCall": nil
+        default: name
+        }
+    }
+
+    private static func recentEventTitle(_ event: String?) -> String? {
+        switch event {
+        case "tool-completed": String(localized: "activity.event.tool-completed")
+        case "tool-failed": String(localized: "activity.recent.tool-failed", defaultValue: "工具调用失败")
+        case "agent-started": String(localized: "activity.event.starting-subagent")
+        case "agent-completed": String(localized: "activity.event.subagent-completed")
+        case "agent-interrupted": String(localized: "activity.recent.agent-interrupted", defaultValue: "子任务已中断")
+        case "agent-failed": String(localized: "activity.recent.agent-failed", defaultValue: "子任务执行失败")
+        default: nil
+        }
+    }
+
+    static func latestEvent(_ task: RemoteActivityTask) -> CodexActivityEvent {
         if task.state == "waiting" {
             return .approvalRequested
         }
@@ -206,7 +261,7 @@ final class ActivityPresentationModel: ObservableObject {
         }
     }
 
-    private static func taskID(source: String, task: String, startedAt: TimeInterval) -> UUID {
+    static func taskID(source: String, task: String, startedAt: TimeInterval) -> UUID {
         let bytes = Array(SHA256.hash(data: Data("\(source)\u{0}\(task)\u{0}\(startedAt)".utf8)).prefix(16))
         return UUID(uuid: (
             bytes[0],

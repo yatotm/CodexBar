@@ -17,13 +17,12 @@ struct MainPanelEntranceAnimationsSettingsRow: View {
 
 struct TaskGlowSettingsRow: View {
     @ObservedObject var settings: TaskGlowSettings
-    @ObservedObject var codexHookSettings: CodexHookSettings
-    @ObservedObject var activityPresentation: ActivityPresentationModel
+    @ObservedObject var mainPanelSettings: MainPanelSettings
     let onOptionsAction: (SettingsOptionsPanelAction) -> Void
     @State private var anchorProvider = ScreenFrameProvider()
 
     private var isAvailable: Bool {
-        (codexHookSettings.isOperable && !codexHookSettings.isUpdating) || activityPresentation.hasRemoteActivitySource
+        mainPanelSettings.hasActivitySource
     }
 
     private var canShowOptions: Bool {

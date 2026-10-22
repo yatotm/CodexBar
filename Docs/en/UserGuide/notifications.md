@@ -19,8 +19,8 @@ System Notifications is off by default. Turning it off disables all CodexBar sys
 
 | Notification | Trigger | Default option | Additional requirement |
 | --- | --- | --- | --- |
-| Task completed | A task finishes after running for at least the selected duration | On, 1 minute | CodexBar Hook |
-| Waiting for approval | A task starts waiting for user approval | On | CodexBar Hook |
+| Task completed | A task finishes after running for at least the selected duration | On, 1 minute | Shared service or live integration |
+| Awaiting reply | A task has an outstanding approval request or question | On | Shared service or live integration |
 | Low rate limit | Remaining quota reaches the alert threshold | On, 10% | None |
 | Rate limit reset | A rate-limit window previously observed as consumed returns to an unconsumed state | On | None |
 | Banked resets expiring | Banked resets enter the 7-day expiration window | On | Available banked resets |
@@ -28,7 +28,7 @@ System Notifications is off by default. Turning it off disables all CodexBar sys
 | Automatic Reset failed | Authentication failure pauses the task, a protocol error stops it, or this Mac explicitly observes expiration | Shares the success-notification setting | Automatic Reset, its notification option, and System Notifications |
 | Low Battery Protection | Low Battery Protection successfully restores system sleep | On | Sleep prevention and Low Battery Protection |
 | Keep-awake limit | The time limit is reached and system sleep is successfully restored | On | Sleep prevention and a finite time limit |
-| Stalled Task Protection | A running task makes no progress for the selected protection interval | Fixed behavior | CodexBar Hook and Prevent System Sleep |
+| Stalled Task Protection | A running task makes no progress for the selected protection interval | Fixed behavior | Local Codex shared service and Prevent System Sleep |
 
 Stalled Task Protection has no separate notification option and uses the default system sound.
 
@@ -61,7 +61,7 @@ Each configurable notification can use:
 
 - Default notification sound
 - No sound
-- Any system alert sound available on the current Mac
+- macOS system sounds and local custom sounds in the separate Custom group
 - CodexBar's built-in Modern and Material sounds
 
 You can preview any sound other than the default or silent options in Settings.
@@ -72,7 +72,7 @@ If a saved sound is unavailable on the current Mac, CodexBar falls back to the d
 
 `Task Haptic Feedback` is off by default. When enabled, the trackpad vibrates when a task finishes or starts waiting for approval.
 
-Haptic feedback does not require macOS notification permission, but it still follows CodexBar's System Notifications switch and CodexBar Hook status.
+Haptic feedback does not require macOS notification permission, but it still follows CodexBar's System Notifications switch and task-source availability.
 
 ## Codex TUI Notifications
 
@@ -89,4 +89,4 @@ Back to the [User Guide](README.md)
 
 ## Fork behavior
 
-These notifications use local Codex state. Adding remote or Claude history to Usage Center does not extend task notifications to those sources.
+Live Codex and Claude tasks across enabled sources share task notification and haptic settings. Merely adding historical usage does not create task alerts; reconnection does not replay old events.

@@ -3,10 +3,13 @@ import Combine
 import Foundation
 import os
 
-/// 从本机 Hook JSONL 维护进程内实时任务状态, 是菜单栏; 活动卡片; 通知和触觉反馈的唯一任务状态来源
+/// 本机任务的展示, 通知与电源状态共用同一份快照
 @MainActor
 final class CodexActivityMonitor: ObservableObject {
     @Published private(set) var snapshot = CodexActivitySnapshot.empty
+    @Published private(set) var isMonitoringAvailable = false
+    let usesSharedBackend: Bool
+    var sharedUnconfirmedTasks: [CodexActivityTaskSnapshot] = []
 
     var transitionPublisher: AnyPublisher<CodexActivityTransition, Never> {
         transitionSubject.eraseToAnyPublisher()
@@ -54,7 +57,7 @@ final class CodexActivityMonitor: ObservableObject {
     var activityProtectionRecords: [String: ActivityProtectionRecord] = [:]
     private var activityProtectionStateLoadTask: Task<Void, Never>?
     var activityProtectionPersistenceTask: Task<Void, Never>?
-    private var isActivityProtectionStateLoaded = false
+    var isActivityProtectionStateLoaded = false
     var isActivityProtectionEnabled = false
     var isActivitySourceHealthy = false
     var isActivityProtectionRecoveryInProgress = false
@@ -73,11 +76,13 @@ final class CodexActivityMonitor: ObservableObject {
     init(
         codexHookSettings: CodexHookSettings,
         activityProtectionSettings: ActivityProtectionSettings,
-        activityProtectionStateStore: ActivityProtectionStateStore = ActivityProtectionStateStore()
+        activityProtectionStateStore: ActivityProtectionStateStore = ActivityProtectionStateStore(),
+        usesSharedBackend: Bool = false
     ) {
         self.codexHookSettings = codexHookSettings
         self.activityProtectionSettings = activityProtectionSettings
         self.activityProtectionStateStore = activityProtectionStateStore
+        self.usesSharedBackend = usesSharedBackend
     }
 
     func start() {
@@ -88,13 +93,15 @@ final class CodexActivityMonitor: ObservableObject {
 
         loadActivityProtectionState()
 
-        Publishers.CombineLatest(codexHookSettings.$isEnabled, codexHookSettings.$isVerified)
-            .map { $0 && $1 }
-            .removeDuplicates()
-            .sink { [weak self] isOperable in
-                self?.requestMonitoringEnabled(isOperable)
-            }
-            .store(in: &cancellables)
+        if !usesSharedBackend {
+            Publishers.CombineLatest(codexHookSettings.$isEnabled, codexHookSettings.$isVerified)
+                .map { $0 && $1 }
+                .removeDuplicates()
+                .sink { [weak self] isOperable in
+                    self?.requestMonitoringEnabled(isOperable)
+                }
+                .store(in: &cancellables)
+        }
 
         activityProtectionSettings.$inactivityDuration
             .dropFirst()
@@ -113,6 +120,9 @@ final class CodexActivityMonitor: ObservableObject {
                     return
                 }
                 isSystemSleeping = true
+                if usesSharedBackend {
+                    receiveSharedTasks([], available: false, bootstrap: true)
+                }
                 recoveryTask?.cancel()
                 beginActivityProtectionRecovery()
                 AppLog.activity.notice("异常任务判定已暂停: reason=systemSleep")
@@ -130,7 +140,9 @@ final class CodexActivityMonitor: ObservableObject {
                     "事件重读已触发: trigger=\(LogTrigger.wake.rawValue, privacy: .public)"
                 )
                 isSystemSleeping = false
-                requestActivityRecovery()
+                if !usesSharedBackend {
+                    requestActivityRecovery()
+                }
             }
             .store(in: &cancellables)
 
@@ -154,25 +166,13 @@ final class CodexActivityMonitor: ObservableObject {
         stopReaderAndClearState()
     }
 
-    private func loadActivityProtectionState() {
-        guard !isActivityProtectionStateLoaded,
-              activityProtectionStateLoadTask == nil else {
-            return
+    func updateSharedSourceHealth(_ requested: Bool) -> Bool {
+        let available = requested && !isSystemSleeping
+        if isMonitoringAvailable != available {
+            isMonitoringAvailable = available
         }
-
-        activityProtectionStateLoadTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-            let records = await activityProtectionStateStore.load()
-            guard isStarted, !Task.isCancelled else {
-                return
-            }
-            activityProtectionRecords = records
-            isActivityProtectionStateLoaded = true
-            activityProtectionStateLoadTask = nil
-            setMonitoringEnabled(requestedMonitoringEnabled)
-        }
+        isActivitySourceHealthy = available
+        return available
     }
 
     private func requestMonitoringEnabled(_ isEnabled: Bool) {
@@ -184,6 +184,8 @@ final class CodexActivityMonitor: ObservableObject {
     }
 
     private func setMonitoringEnabled(_ isOperable: Bool) {
+        guard !usesSharedBackend else { return }
+        isMonitoringAvailable = isOperable
         guard isOperable else {
             AppLog.activity.notice("任务监控已停止: reason=hookInoperable")
             stopReaderAndClearState()
@@ -219,6 +221,8 @@ final class CodexActivityMonitor: ObservableObject {
     }
 
     private func stopReaderAndClearState() {
+        isMonitoringAvailable = false
+        sharedUnconfirmedTasks = []
         tailReaderGeneration &+= 1
         recoveryTask?.cancel()
         recoveryTask = nil
@@ -1207,12 +1211,15 @@ final class CodexActivityMonitor: ObservableObject {
         let recentCompletions = completions.sorted(by: Self.recentFirst(\.completedAt, \.id))
         let recentTerminations = terminations.sorted(by: Self.recentFirst(\.terminatedAt, \.id))
 
-        let newSnapshot = CodexActivitySnapshot(
+        var newSnapshot = CodexActivitySnapshot(
             waitingTasks: waitingTasks.map(\.snapshot),
             runningTasks: runningTasks.map(\.snapshot),
             recentCompletions: recentCompletions,
             recentTerminations: recentTerminations
         )
+        if usesSharedBackend {
+            newSnapshot.unconfirmedTasks = sharedUnconfirmedTasks
+        }
         let events = pendingTerminalPresentationEvents.filter { terminalTaskKeyByID[$0.id] != nil }
         pendingTerminalPresentationEvents.removeAll()
         let didChange = newSnapshot != snapshot
@@ -1225,25 +1232,6 @@ final class CodexActivityMonitor: ObservableObject {
 
         scheduleNextCleanup(now: now)
         scheduleNextInactivityCheck(now: now)
-    }
-
-    private func sortedTasks(in state: CodexActivityTaskState) -> [CodexActivityTask] {
-        tasks.values
-            .filter { $0.state == state }
-            .sorted(by: Self.recentFirst(\.lastActivityAt, \.displayID))
-    }
-
-    /// 时间相同再按 UUID 字符串排序(Swift sort 不稳定), 保证快照对 SwiftUI diff 稳定
-    private static func recentFirst<Element>(
-        _ date: KeyPath<Element, Date>,
-        _ id: KeyPath<Element, UUID>
-    ) -> (Element, Element) -> Bool {
-        { lhs, rhs in
-            if lhs[keyPath: date] != rhs[keyPath: date] {
-                return lhs[keyPath: date] > rhs[keyPath: date]
-            }
-            return lhs[keyPath: id].uuidString < rhs[keyPath: id].uuidString
-        }
     }
 
     private func pruneExpiredState(now: Date) {
@@ -1259,6 +1247,10 @@ final class CodexActivityMonitor: ObservableObject {
             )
         }
         tasks = tasks.filter { $0.value.lastActivityAt > activityCutoff }
+        if usesSharedBackend {
+            let retainedIDs = Set(tasks.values.map(\.displayID))
+            sharedUnconfirmedTasks.removeAll { !retainedIDs.contains($0.id) }
+        }
 
         removeExpiredActivityProtectionRecords(now: now)
 
@@ -1331,6 +1323,52 @@ final class CodexActivityMonitor: ObservableObject {
 }
 
 private extension CodexActivityMonitor {
+    func loadActivityProtectionState() {
+        guard !isActivityProtectionStateLoaded,
+              activityProtectionStateLoadTask == nil else {
+            return
+        }
+
+        activityProtectionStateLoadTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            let records = await activityProtectionStateStore.load()
+            guard isStarted, !Task.isCancelled else {
+                return
+            }
+            activityProtectionRecords = records
+            isActivityProtectionStateLoaded = true
+            activityProtectionStateLoadTask = nil
+            if usesSharedBackend {
+                applyPersistedActivityProtection(now: Date())
+                reconcileActivityProtection(now: Date(), sendsNotification: false)
+            } else {
+                setMonitoringEnabled(requestedMonitoringEnabled)
+            }
+        }
+    }
+
+    func sortedTasks(in state: CodexActivityTaskState) -> [CodexActivityTask] {
+        guard !usesSharedBackend || isMonitoringAvailable else { return [] }
+        return tasks.values
+            .filter { $0.state == state }
+            .sorted(by: Self.recentFirst(\.lastActivityAt, \.displayID))
+    }
+
+    /// 时间相同再按 UUID 字符串排序(Swift sort 不稳定), 保证快照对 SwiftUI diff 稳定
+    static func recentFirst<Element>(
+        _ date: KeyPath<Element, Date>,
+        _ id: KeyPath<Element, UUID>
+    ) -> (Element, Element) -> Bool {
+        { lhs, rhs in
+            if lhs[keyPath: date] != rhs[keyPath: date] {
+                return lhs[keyPath: date] > rhs[keyPath: date]
+            }
+            return lhs[keyPath: id].uuidString < rhs[keyPath: id].uuidString
+        }
+    }
+
     func resumePromptInSameTurn(from event: WorkflowHookEvent, existing: CodexActivityTask?) -> Bool {
         guard var task = existing, let turnId = event.turnId, task.associatedTurnId == turnId else { return false }
         task.resumeExecution(from: event, latestEvent: .promptSubmitted)

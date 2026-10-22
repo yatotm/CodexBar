@@ -22,9 +22,9 @@ swiftlint
 
 | 功能 | 主要位置 | 实现说明 |
 | --- | --- | --- |
-| app-server、代理、自动重置 | `Services/CodexStatus` 与对应 Settings | [app-server 数据链路](app-server.md) |
-| Hook 安装与统计 | `CodexHookSettings`、`WorkflowService`、聚合模型 | [Hook 采集与历史聚合](hook-and-aggregation.md) |
-| 实时任务与异常保护 | `CodexActivityMonitor` 和 readers | [实时任务监控](activity-monitor.md) |
+| 共享 app-server、自动重置 | `Services/CodexStatus` 与对应 Settings | [app-server 数据链路](app-server.md) |
+| 旧 Hook 历史 | `CodexHookSettings`、`WorkflowService`、聚合模型 | [Hook 采集与历史聚合](hook-and-aggregation.md) |
+| 实时任务与异常保护 | `SharedCodexCollector.py`、`RemoteActivityController`、`CodexActivityMonitor` | [实时任务监控](activity-monitor.md) |
 | 防睡眠与系统唤醒 | `KeepAliveController`、`AutoResetWakeScheduler`、helper | [防睡眠系统](sleep-prevention.md) |
 | 通知与音效 | `CodexNotificationService`、通知 Settings | [通知系统](notifications.md) |
 | 同步 | `UsageCollectorClient` 与本地维护调度器 | [多设备统计边界](sync.md) |
@@ -58,9 +58,9 @@ swiftlint
 | --- | --- |
 | 菜单与窗口 | 快速开关、淡出中重开、popover/fallback、多屏与 Space、设置和日志焦点、通知点击和快捷键 |
 | Hook 与聚合 | 保留已有 handler、最低版本、并发追加、半行和损坏行、文件替换与截断、完整重建 |
-| 实时任务 | bootstrap 不补通知、等待审批、迟到终态、匿名任务、唤醒读取屏障失败与恢复 |
+| 实时任务 | 首次与重连不补通知、阻塞/异步问题、子任务归属、独立来源健康、唤醒恢复 |
 | 通知 | 授权拒绝与恢复、阈值跨越、同周期去重、任务恢复撤回、声音缺失 |
-| 代理 | 首次配置、启停、无效配置停用、损坏记录删除、测试取消、快速操作与失败回滚 |
+| 共享后台 | 已运行后台连接、端点缺失启动、实际最低版本、取消与截止时间、退出不影响 CLI |
 | 同步 | SSH/HTTPS 多设备合并、断网恢复、本机重建 |
 | 系统电源与 helper | 首次授权、任务运行/等待切换、低电量、时长上限、外部睡眠来源、异常退出与重启 |
 | 自动重置唤醒 | 计划替换、关闭与退出清理、连接中断、helper 重启、注销前清零、到点重新读取 |
@@ -94,14 +94,14 @@ Release 系统日志：
 
 Debug 使用 `io.github.yatotm.codexbar.debug`，helper 的 subsystem 使用对应 helper bundle ID。
 
-App 内日志窗口保留最近 500 条 app-server 交互。代理配置错误在系统日志的 `settings` 分类中，临时代理测试不写交互日志。
+App 内日志窗口保留最近 500 条 app-server 交互。日志预览排版在后台，格式化取消与窗口关闭后不提交旧内容。
 
 | 问题 | 查看内容 |
 | --- | --- |
 | 额度未刷新 | handshake、method、retry、stale |
-| Hook 未生效 | hooks 配置、版本、信任与完整性 |
-| 任务未结束 | reader generation、rollout 对账、数据源健康 |
-| 同步缺数据 | zone、fetch、upload、replacement、prune 阶段 |
+| 实时后台不可用 | 实际 daemon 版本、socket、监听器服务、连接健康与 SSH 状态 |
+| 任务未结束 | 根轮次、共享状态对账、连接代次与数据源健康 |
+| 同步缺数据 | 来源配置、SSH、epoch/cursor、增量日志与保留期 |
 | 通知未出现 | authorization、kind、duplicate、obsolete |
 | 防睡眠未生效 | block reason、helper 注册、XPC generation、source |
 | 自动重置未执行 | target、threshold、retry window、wake schedule |
@@ -171,3 +171,5 @@ defaults write io.github.yatotm.codexbar.build signingIdentity -string "证书 S
 | `BARK_ICON_URL` | 通知图标的 HTTPS 地址，可选 |
 
 `SELF_LOGIN` 仓库变量可指定需要排除的账号，默认使用仓库所有者。缺少设备密钥时跳过发送；配置完成并推送工作流后，可在 Actions 手动运行 `Issue notification` 验证。发送内容为 Issue 标题和链接，设备密钥通过 HTTPS POST 请求体传送，不写入 URL 或日志。
+
+共享协议测试用 `python3 -B -m unittest discover -s Tests -p 'test_shared_codex_collector.py'`，Helper 隔离测试用 `bash Scripts/test-helper.sh`。它们不得调用真实模型、修改系统电源或消费真实重置卡。

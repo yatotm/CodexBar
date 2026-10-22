@@ -1,6 +1,13 @@
-# Linux 定时采集与统计服务
+# 远程采集与实时监听
 
-推荐在 VPS 上每 5 分钟自主采集，Mac 通过 SSH 只读取已有结果。采集程序由 systemd 定时启动，运行完退出，不需要常驻 Docker 或公开端口。Docker/HTTPS 保留为多客户端访问时的可选部署方式。
+日志统计仍每 5 分钟采集一次，Mac 通过 SSH 读取结果。Codex 实时任务由独立的小型监听器接入该机器自己的共享后台服务；Claude 继续使用本地日志和 Hook。两条链路可以同时运行，不需要公开端口或部署 Docker。
+
+| 链路 | 负责内容 | 运行方式 |
+| --- | --- | --- |
+| 日志采集 | Token、模型、热力图、额度历史和价值估算 | 定时启动，完成后退出 |
+| 共享服务监听 | Codex 任务阶段、子 Agent、审批和计划进度 | 本机持续监听，SSH 转发去正文的快照 |
+
+Mac 合盖或断网不影响远端记录。恢复连接后读取最新状态，历史用量继续从日志补齐。Docker/HTTPS 保留为多客户端访问历史统计时的可选方式。
 
 ## 安装定时任务
 
@@ -41,6 +48,44 @@ sudo python3 Collector/install-timer.py --uninstall
 ```
 
 移除任务会停止采集并删除本程序的系统单元，保留采集脚本和统计数据库。重新运行安装命令可以恢复；安装器拒绝覆盖不属于本程序的同名单元，也不会自动切换已安装任务的数据目录。
+
+## Codex 共享服务监听
+
+要求该机器正在运行的 Codex 共享服务为 `0.162.0` 或更新版本。监听器连接本机 Unix socket，只观察已加载会话，不启动模型任务、不回答审批，也不管理官方后台服务的退出。仅升级 CLI 安装文件，不能代替运行中服务的版本检查。
+
+在 Mac 的来源设置中启用实时任务，会安装对应机器的监听器。手动安装时，以 Codex 日志拥有者身份从仓库根目录执行：
+
+```bash
+python3 CodexBar/Resources/SharedCodexCollector.py install
+```
+
+自定义 Codex 目录使用 `--codex-home`，与原日志来源保持一致。安装器保留现有配置，不会自动更换已安装实例的数据目录。Linux 的 root 用户使用系统服务，普通用户使用用户服务；macOS 使用当前图形登录用户的 LaunchAgent，不修改系统睡眠设置。
+
+| 项目 | 位置或名称 |
+| --- | --- |
+| 监听脚本与安装记录 | `~/.local/share/codexbar-shared-codex/` |
+| 独立状态库 | `~/.local/state/codexbar-shared-codex/shared-activity-v1.sqlite` |
+| Linux 服务 | `codexbar-shared-codex.service` |
+| macOS LaunchAgent | `io.github.yatotm.codexbar.shared-codex` |
+
+任务主要通过服务端推送更新。定时核对用于补漏，空闲会话不会每 5 秒重新读取；没有变化时不重复写入任务快照。断开时活跃任务显示为状态待确认，不伪造完成，重连恢复的旧终态不重复通知。
+
+Token 和价值估算继续使用原日志数据库。新状态库仅额外保留去重的审批、中断元数据，原日志采集器按相同 Codex 目录只读导入，最长保留 210 天；不重复计入 Token、工具和轮次。会话标识沿用原哈希算法，不增加虚假的会话数。
+
+确认新监听器正常后，下面的命令可撤除本项目旧的 Codex 实时 Hook；只有新服务健康才会执行，其他程序的 Hook、Claude 配置、原日志和统计数据库均保留：
+
+```bash
+python3 CodexBar/Resources/SharedCodexCollector.py install --retire-legacy-hooks
+```
+
+查看快照或移除监听器：
+
+```bash
+python3 CodexBar/Resources/SharedCodexCollector.py snapshot
+python3 CodexBar/Resources/SharedCodexCollector.py uninstall
+```
+
+移除只停止 CodexBar 自己的 Python 监听服务，保留数据库，官方 Codex 后台服务和正在执行的任务不受影响。
 
 ## 可选的 HTTP 服务
 
@@ -108,6 +153,7 @@ python3 Collector/server.py \
 
 ```bash
 python3 -m unittest discover -s Tests -p 'test_usage_*.py' -v
+python3 -m unittest discover -s Tests -p 'test_shared_codex_collector.py' -v
 ```
 
 ## 周限历史补充

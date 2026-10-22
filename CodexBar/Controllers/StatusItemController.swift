@@ -21,6 +21,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let keepAliveController: KeepAliveController
     private let proxySettings: CodexProxySettings
     private let appUpdater: AppUpdater
+    private let serviceStatusMonitor = CodexServiceStatusMonitor()
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
     private let menuSurfaceVisibility = MenuSurfaceVisibilityState()
@@ -276,7 +277,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // 订阅时 CombineLatest 会同步发出当前值, 初始图标由订阅路径统一渲染
         observeViewModel()
         observeWorkflowMaintenanceState()
-        codexHookSettings.reconcileInstalledHooks()
         observeMainPanelHookState()
         viewModel.startAutoRefresh()
     }
@@ -291,17 +291,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         statusToolTipTask?.cancel()
         workflowMaintenanceScheduler.cancel()
         setAuxiliaryWindowKeyFocus(true)
+        globalHotKeySettings.configureRegistration(nil)
         globalHotKeyController.uninstall()
+        registeredHotKeyShortcut = nil
         cancellables.removeAll()
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
     func setWorkflowMaintenanceAllowed(_ allowed: Bool) {
-        let enabled = allowed && codexHookSettings.isEnabled
-        workflowMaintenanceScheduler.setAutomaticMaintenanceEnabled(enabled)
-        if enabled {
+        workflowMaintenanceScheduler.setAutomaticMaintenanceEnabled(allowed)
+        if allowed {
             workflowMaintenanceScheduler.requestMaintenance(trigger: .wake)
         }
+        updateServiceStatusAvailability()
     }
 
     func openSettingsFromCommand() {
@@ -364,6 +366,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     // MARK: - 订阅与全局快捷键
 
     private func observeViewModel() {
+        Publishers.CombineLatest3(menuSurfaceVisibility.$isVisible, mainPanelSettings.$layout, usageCenterViewModel.$menuScope)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateServiceStatusAvailability() }
+            .store(in: &cancellables)
         let hasQuotaSnapshot = viewModel.$snapshot
             .map { $0 != nil }
             .removeDuplicates()
@@ -422,15 +428,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                     return
                 }
                 refreshWorkflowIfHookEnabled()
-            }
-            .store(in: &cancellables)
-
-        hasQuotaSnapshot
-            .sink { [weak self] isAvailable in
-                guard let self, !isAvailable else {
-                    return
-                }
-                activityCenterPanelController.hide(immediate: true)
+                Task { await serviceStatusMonitor.refresh() }
             }
             .store(in: &cancellables)
 
@@ -453,69 +451,39 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func observeWorkflowMaintenanceState() {
-        codexHookSettings.$isEnabled
-            .removeDuplicates()
-            .sink { [weak self] isEnabled in
-                guard let self else {
-                    return
-                }
-
-                workflowMaintenanceScheduler.setAutomaticMaintenanceEnabled(isEnabled && !viewModel.isRefreshSuspended)
-                if isEnabled, !viewModel.isRefreshSuspended {
-                    // 回调跑在 willSet, codexHookSettings.isEnabled 此刻还是旧值, 只能用参数
-                    workflowMaintenanceScheduler.requestMaintenance(trigger: .hookEnabled)
-                } else if !isEnabled {
-                    workflowMaintenanceScheduler.clearPendingMaintenance()
-                    activityCenterPanelController.hide(immediate: true)
-                }
-            }
-            .store(in: &cancellables)
+        setWorkflowMaintenanceAllowed(!viewModel.isRefreshSuspended)
     }
 
     private func observeMainPanelHookState() {
-        codexHookSettings.$isEnabled
+        usageCenterViewModel.$sources
             .combineLatest(usageCenterViewModel.remoteActivity.$enabledSourceIDs)
-            .sink { [weak self] isEnabled, sourceIDs in
-                self?.mainPanelSettings.updateHookEnabled(isEnabled, hasRemote: !sourceIDs.isEmpty)
+            .sink { [weak self] sources, sourceIDs in
+                guard !sources.isEmpty else { return }
+                let local = sources.contains { $0.transport == .local && $0.isEnabled && $0.includesCodex && $0.validationError == nil }
+                let remote = sources.contains { $0.isEnabled && $0.transport != .https && sourceIDs.contains($0.id) && $0.validationError == nil }
+                self?.mainPanelSettings.updateActivitySources(local: local, hasRemote: remote)
             }
             .store(in: &cancellables)
     }
 
     private func observeGlobalHotKeySettings() {
-        globalHotKeySettings.$shortcut
-            .removeDuplicates()
-            .sink { [weak self] shortcut in
-                self?.applyGlobalHotKey(shortcut)
-            }
-            .store(in: &cancellables)
+        globalHotKeySettings.configureRegistration { [weak self] shortcut in
+            self?.applyGlobalHotKey(shortcut)
+        }
     }
 
-    private func applyGlobalHotKey(_ shortcut: GlobalHotKeyShortcut?) {
-        guard shortcut != registeredHotKeyShortcut else {
-            return
-        }
-
+    private func applyGlobalHotKey(_ shortcut: GlobalHotKeyShortcut?) -> String? {
+        guard shortcut != registeredHotKeyShortcut else { return nil }
         guard let shortcut else {
             globalHotKeyController.uninstall()
             registeredHotKeyShortcut = nil
-            return
+            return nil
         }
-
-        if globalHotKeyController.install(shortcut: shortcut) {
-            registeredHotKeyShortcut = shortcut
-            globalHotKeySettings.clearError()
-            return
+        guard globalHotKeyController.install(shortcut: shortcut) else {
+            return hotKeyConflictMessage(for: shortcut)
         }
-
-        let message = hotKeyConflictMessage(for: shortcut)
-        guard let previousShortcut = registeredHotKeyShortcut else {
-            // 启动阶段冲突时还没有成功注册过任何快捷键
-            // 此时 restoreShortcut(nil) 会清空用户保存的配置, 只能提示冲突
-            globalHotKeySettings.setRegistrationError(message)
-            return
-        }
-
-        globalHotKeySettings.restoreShortcut(previousShortcut, message: message)
+        registeredHotKeyShortcut = shortcut
+        return nil
     }
 
     private func hotKeyConflictMessage(for shortcut: GlobalHotKeyShortcut) -> String {
@@ -973,14 +941,17 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     // MARK: - 刷新与同步
 
     private func refreshWorkflowIfHookEnabled() {
-        // 配置和信任仍随额度对账, 本地聚合保持独立的分钟级维护
-        codexHookSettings.reconcileInstalledHooks()
-        guard codexHookSettings.isEnabled else {
-            workflowMaintenanceScheduler.clearPendingMaintenance()
-            return
-        }
-
+        // 旧 Hook 历史仍可读, 不再自愈已经撤除的采集配置
         workflowViewModel.refreshIfNeeded()
+    }
+
+    private func updateServiceStatusAvailability() {
+        let enabled = menuSurfaceVisibility.isVisible && !viewModel.isRefreshSuspended
+            && mainPanelSettings.layout.isVisible(.serviceStatus) && usageCenterViewModel.menuScope != .claude
+        serviceStatusMonitor.setEnabled(enabled)
+        if enabled {
+            Task { await serviceStatusMonitor.refresh() }
+        }
     }
 
     // MARK: - 侧边面板
@@ -1136,7 +1107,7 @@ private extension StatusItemController {
             viewModel: viewModel,
             usageCenterViewModel: usageCenterViewModel,
             workflowViewModel: workflowViewModel,
-            codexHookSettings: codexHookSettings,
+            serviceStatusMonitor: serviceStatusMonitor,
             mainPanelSettings: mainPanelSettings,
             activityPresentation: activityPresentation,
             keepAliveController: keepAliveController,

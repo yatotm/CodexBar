@@ -8,15 +8,15 @@ This fork has removed iCloud/CloudKit, including settings, menu indicators, enti
 
 ## Transferred data
 
-Logs are parsed on the machine that owns them. Only filtered metadata is exported: timestamps, models, tokens, event counts, quota observations, project display names, and hashed identities. Conversation bodies, tool arguments and output, full working directories, and login tokens are excluded.
+Shared-service activity and logs are processed on the machine that owns them. Only filtered metadata is exported: timestamps, models, tokens, event counts, quota observations, project display names, and hashed identities. Conversation bodies, tool arguments and output, full working directories, and login tokens are excluded.
 
 Claude collection is passive. Official Codex analytics uses existing local OAuth only with the official host, without browser cookies or credential renewal.
 
 ## Local storage
 
-Data lives under `~/Library/Application Support/CodexBar-yatotm`. Hook events and daily aggregates retain 210 days; daily session and turn identities retain three days. Usage Center uses SQLite; analytics caches are isolated by account. Activity protection stores hashed identities for at most 24 hours after last progress.
+App caches primarily live under `~/Library/Application Support/CodexBar-yatotm`; the shared collector uses `~/.local/state/codexbar-shared-codex/`. Existing Hook events and daily aggregates retain 210 days; daily session and turn identities retain three days. Usage Center uses SQLite; analytics caches are isolated by account. Activity protection stores hashed identities for at most 24 hours after last progress.
 
-Preferences include proxy configuration and its plaintext password. HTTPS collector tokens use Keychain. The latest 500 app-server requests and responses remain only in process memory and may contain account details.
+Legacy proxy preferences and their plaintext password remain for rollback, but the new connection does not read them. HTTPS collector tokens use Keychain. The latest 500 app-server requests and responses remain only in process memory and may contain account details.
 
 ## Rebuild data
 
@@ -24,7 +24,7 @@ Settings > Advanced > Rebuild Data recalculates local Hook statistics from retai
 
 ## Network access
 
-Connections are limited to the local Codex service, official account analytics, configured SSH/HTTPS sources, and this fork's GitHub update feed. Proxy settings affect the Codex service, not system networking or other applications. Review interaction logs before sharing them.
+Connections cover each machine’s local shared Codex service, official account analytics, the public OpenAI status page, configured SSH/HTTPS sources, and this fork's update feed. Public status checks use no credentials or cookies. Codex requests follow the official service's network and proxy configuration; reconnecting only disconnects this client. Review interaction logs before sharing them.
 
 Regular web Chat conversations are outside Codex log statistics, and dollar estimates are not bills.
 

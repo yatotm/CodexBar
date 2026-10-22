@@ -57,3 +57,5 @@ The following guides currently use Chinese:
 - [Migration](../../UserGuide/migration.md)
 - [Implementation and verification](../../DeveloperGuide/usage-center.md)
 - [Independent releases](../../DeveloperGuide/releasing.md)
+
+- [Upstream adaptation audit](../../DeveloperGuide/upstream-adaptation.md): shared-daemon migration and per-commit decisions

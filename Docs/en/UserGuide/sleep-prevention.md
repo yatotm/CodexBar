@@ -8,11 +8,11 @@ CodexBar can keep your Mac awake manually or while eligible local Codex tasks ru
 
 ## Enable and Activate
 
-1. In `Settings > Advanced > Prevent System Sleep`, select Manual or Follow Tasks; Follow Tasks also requires CodexBar Hook
+1. In `Settings > Advanced > Prevent System Sleep`, select Manual or Follow Tasks; Follow Tasks needs a connected local Codex shared service
 2. Confirm enabling sleep prevention
 3. If background approval is required, click `Open System Settings` and allow CodexBar to run in the background
 
-Sleep prevention requires CodexBar and its authorized background service to be running. Follow Tasks also requires a working Hook and an eligible local Codex task. Low battery or the duration limit stops it; when conditions recover, task state determines whether it resumes. The coffee cup in the main panel indicates that sleep prevention is active.
+Sleep prevention requires CodexBar and its authorized background service to be running. Follow Tasks also requires a connected local Codex shared service and an eligible task. Low battery or the duration limit stops it; when conditions recover, task state determines whether it resumes. The keep-awake indicator in the main panel indicates that sleep prevention is active.
 
 Anonymous tasks and tasks hidden by Stalled Task Protection do not prevent sleep.
 
@@ -32,7 +32,7 @@ Low Battery Protection is hidden on Macs without a built-in battery.
 
 ## Waiting and Display Wake
 
-By default, only running tasks prevent sleep. Enabling the waiting option keeps the Mac awake while approval requests are unattended, until the duration limit is reached or task state changes.
+By default, only running tasks prevent sleep. The waiting option also covers blocking approval requests or questions until the time limit or a state change. Nonblocking questions and waiting for subagents remain running work.
 
 Keep Display Awake works only while sleep prevention is active and may leave the screen unlocked after you step away.
 

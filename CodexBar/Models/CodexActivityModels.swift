@@ -43,6 +43,12 @@ nonisolated struct CodexActivityTaskSnapshot: Equatable, Identifiable {
     let activeSubagentCount: Int?
     var machineName: String?
     var tokenUsage: CodexTokenUsage?
+    var stageTitle: String?
+    var recentEvent: String?
+    var planCompleted: Int?
+    var planTotal: Int?
+    var pendingInputCount: Int?
+    var hasBlockingInputRequest: Bool?
 }
 
 /// 最近确认结束的任务; 完成只表示一轮任务结束, 不代表执行成功

@@ -1,352 +1,90 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+写作、兼容性、验证与 Git 规则遵循 [AGENTS.md](AGENTS.md)
 
-写作、构建、Git 与兼容性规则遵循 [AGENTS.md](AGENTS.md)
+## 项目与构建
 
-## 项目概述
+这是 `yatotm/CodexBar`，面向 macOS `15+` 的 Swift `6` 菜单栏应用。保留上游原生 UI，增加 Claude、多机器统计和 Codex 周期价值估算，没有 iCloud 同步。
 
-CodexBar 是一个 macOS 菜单栏应用，以 `LSUIElement` 方式运行，没有 Dock 图标，展示本机 Codex 的账号状态、额度、Token 用量、实时任务和工作流统计。技术栈为 Swift 6 + SwiftUI + AppKit + MVVM，唯一外部依赖是 Sparkle `2.9.6+`（SwiftPM）。最低系统版本为 macOS `15.0`
+只有 `CodexBar` scheme，包含 App、`CodexBarHelper`、无宿主 `CodexBarTests` 三个 target。默认隔离为 `MainActor`；I/O 放在 actor、后台线程或独立采集进程。
 
-Xcode 工程有三个 target：主 App `CodexBar`、随 App 嵌入的 root helper `CodexBarHelper` 和无宿主 Swift Testing target `CodexBarTests`。
-
-App Sandbox 未开启，需要启动本机 `codex` 进程、读取用户 Codex 登录状态、写入用户级 Hook 配置。本 fork 已移除 CloudKit 服务和 entitlement。
-
-## 常用命令
-
-```bash
-# 日常编译验证 (唯一 scheme 是 CodexBar)
-xcodebuild -project CodexBar.xcodeproj -scheme CodexBar -destination 'generic/platform=macOS' build
-
-# 格式化: 配置在 .swiftformat, 覆盖整个仓库 (Swift 6 语言模式, 4 空格缩进)
+```sh
+bash Scripts/test-local.sh
+bash Scripts/verify-usage-center.sh
+bash Scripts/test-helper.sh
+python3 -B -m unittest discover -s Tests -p 'test_shared_codex_collector.py'
 swiftformat .
-
-# Lint: 配置在 .swiftlint.yml, included 只有 CodexBar/
-# 即 Shared/ CodexBarHelper/ Scripts/ 不在 lint 范围内
 swiftlint
-
-# 查看系统日志; zsh 里 log 会和 shell 冲突, 必须写完整路径
-# Debug 版把 subsystem 换成 io.github.yatotm.codexbar.debug, helper 进程另带 .helper 后缀
-# BEGINSWITH 会同时命中 Debug 与 Release, 要分版本得用 == 或 IN
-/usr/bin/log stream --predicate 'subsystem == "io.github.yatotm.codexbar"' --style compact
-/usr/bin/log show --predicate 'subsystem == "io.github.yatotm.codexbar"' --last 30m --style compact
-
-# 发布流程 (需要 Developer ID 凭据, 不要当普通本地验证跑)
-Scripts/build.sh    # Release archive + Developer ID 导出 + notarize + staple + Gatekeeper 校验
-Scripts/dmg.sh      # 打包 DMG
-Scripts/appcast.sh  # sign_update 签名并写入 appcast.xml
-
-# 注销 KeepAlive LaunchDaemon; 清理前需先退出所有 CodexBar 实例
-# 不带参数时同时处理 Release 与 Debug 两套
-# 常用: --release / --debug 限定范围, --check 只验证目标不真的注销
-# 签名身份取环境变量 CODEXBAR_CLEANUP_SIGN_IDENTITY, 默认 Apple Development
-Scripts/cleanup.swift --help
 ```
 
-日常调试直接用 `open CodexBar.xcodeproj` 在 Xcode 中运行 Debug scheme。Debug 产物使用 `io.github.yatotm.codexbar.debug` 这个 bundle ID，与 Release 安装版可以共存，排查防睡眠问题时要确认自己查看的是哪一套 helper。
+日常打包用 `Scripts/build-local.sh`，沿用 `io.github.yatotm.codexbar.build` 域的 `signingIdentity`。不要用临时签名覆盖开发签名。通过 `CODEXBAR_LOCAL_OUTPUT`、`CODEXBAR_TEST_OUTPUT` 将产物放到项目外的临时目录，验证后清理。
 
-`Scripts/build.sh` 会先清空 `Build/` 目录，成功后只保留最终的 `.app` 文件。凭据推荐使用 keychain profile，先运行一次 `xcrun notarytool store-credentials "codexbar-notary" --apple-id "<Apple ID>" --team-id "<Team ID>"` 保存凭据，之后构建时加上 `--notary-profile codexbar-notary`
+Debug 与 Release 的 bundle ID 分别为 `io.github.yatotm.codexbar.debug` 和 `io.github.yatotm.codexbar`，helper 对应追加 `.helper`。正式安装在 `/Applications/CodexBar.app`。创建 tag、推送或发布需本次用户授权。
 
-Debug 与 Release 使用不同 bundle ID，分别是 `io.github.yatotm.codexbar.debug` 与 `io.github.yatotm.codexbar`。helper 相应带 `.debug.helper` 与 `.helper` 后缀，所以 `CodexBarHelper/` 下有两份 LaunchDaemon plist，`cleanup.swift` 也需要同时处理两套。
+## 启动分流
 
-## Git 补充规则
+`CodexBarMain.main()` 先处理 `--hook-event`，再取得 `AppInstanceLock`，最后进入 SwiftUI。锁按 bundle ID 隔离，不传给子进程。旧 Hook 调用仍快速写入 JSONL 并退出，不初始化 UI，也不因 App 已运行而丢事件。
 
-- 普通提交和本地构建不触发发布，创建 tag 或 Release 必须先获得用户针对本次的明确同意
-- 分发工作流仅保留手动触发和显式确认入口
+`CodexBarAppDelegate` 是长期服务装配点。普通启动不再安装或修复 Codex Hook；新采集器健康后仅撤除自己的旧 handler，保留原始日志、聚合、偏好与其他应用配置。
 
-- 功能、修复和发布类提交必须写 body；简单文档或杂项可以只写标题
-- commit message 使用半角标点，行末不加标点，行内标点后留一个英文空格
-- 多条 body bullet 连续排列，使用同一个 `-m` 参数或通过 `git commit -F` 传入文件
+## 三条数据链路
 
-## 架构
+| 链路 | 来源 | 边界 |
+| --- | --- | --- |
+| 账号、额度、重置卡 | 本机共享 app-server | 实际握手版本至少 `0.162.0`，自动重置只相信新鲜账户响应 |
+| 实时任务 | 各机器共享后台、Claude 本地 Hook | 只传白名单元数据，Mac 经管道或 SSH 接收 |
+| 历史与估值 | 会话日志、旧 Hook 聚合、官方账号日明细 | 请求级去重和认证归属独立维护；实时任务 Token 不入价值账本 |
 
-### 启动分流（关键设计）
+### 共享后台
 
-`CodexBar/App/CodexBarApp.swift` 的 `init()` 最先调用 `WorkflowHookEventRecorder.handleIfRequested()`
+`CodexSharedSocket` 与 `SharedCodexCollector.py` 连接 `$CODEX_HOME/app-server-control/app-server-control.sock`。账户仍由 `CodexStatusService` 提供，自动重置请求共用 `AppServerRequestBudget` 的单调截止时间。
 
-- 带 `--hook-event` 启动 -> **Hook 子进程模式**：从 `stdin` 读取 JSON payload，按需有界读取 rollout 元数据，在 `flock` 锁内追加一行 JSONL 后立即调用 `exit(EXIT_SUCCESS)` 退出，绝不初始化菜单栏 UI；写入失败时静默吞掉，不阻断 Codex
-- Hook handler 超时统一由 `WorkflowHookEventRecorder.hookTimeoutSeconds(for:)` 提供，`SessionEnd` 是 3 秒，其他事件是 5 秒；等锁预算固定比对应事件超时少 2 秒，当前分别是 1 秒和 3 秒
-- 普通启动 -> `Controllers/CodexBarAppDelegate.swift` 中的 `CodexBarAppDelegate` 创建全部长期对象，再由 `StatusItemController.install()` 装配菜单栏；AppDelegate 是唯一的装配点，新增服务在这里注入
+只有端点明确缺失时才用选定 CLI 启动官方 daemon。重连、切换启动器和退出 App 都不能停止共享后台。旧 App 专用代理偏好保留供回退，当前网络环境由官方后台管理。
 
-### 三条数据链路
+采集器只订阅 `thread/loaded/list` 和 `thread/read` 确认已加载的会话，不恢复历史会话、不自动批准、不发模型请求。快照与补充事件保存到独立 SQLite 库，不迁移旧数据库。
 
-**链路一：app-server（额度/用量）**
+### 任务、恢复与电源
 
-`CodexStatusService`（actor） -> `CodexCLIResolver` 解析 `codex` 可执行文件，PATH 全局优先，回退 `/Applications/ChatGPT.app` 或 `Codex.app` 内置 -> 启动 `codex app-server --listen stdio://` -> `AppServerSession` 执行 stdio JSON-RPC -> 合成 `CodexQuotaSnapshot` -> `CodexStatusViewModel` 发布给 UI
+`RemoteActivityController` 按机器及提供方维护独立连接与健康状态。一台机器的 Codex 断线不能影响 Claude。
 
-- 额度刷新默认 60 秒，可选 1、2、3、5 或 10 分钟；请求超时为 20 秒，连接最长复用 1 小时，让后台升级的 `codex` 二进制有机会生效
-- 主要方法有 `initialize`、`account/read`、`account/rateLimits/read`、`account/usage/read`、`config/read`、`config/batchWrite`、`hooks/list`
-- `SIGPIPE` 被忽略，app-server 退出后写管道由 write 抛错走重建路径
-- `stdout` 可能混有无关日志行，`AppServerSession` 先用轻量 `RPCIDEnvelope` 匹配 `id`，再完整解码
+本机 Codex 交给 `CodexActivityMonitor.receiveSharedTasks`，统一驱动本机通知、触觉与防睡眠。`ActivityPresentationModel` 合并所有来源，标签只过滤面板，菜单栏图标始终汇总全部任务。远端任务不控制本机电源。
 
-代理配置由 AppDelegate 持有的 `CodexProxySettings` 管理，配置和密码保存在当前构建的 UserDefaults 中，key 为 `CodexProxy.configuration`。只支持 HTTP/HTTPS，可选 Basic 认证，不使用 Keychain。停用保留字段，无法读取的记录可从配置窗口清除。
+主任务等待子 Agent 时仍为运行中；审批或明确阻塞的提问才进入等待状态，异步问题只显示待回应数量。元数据顺序为模型、思考深度、机器名。未知 Token 不填零，恢复的历史终态不重播提醒。
 
-- 开关在异步提交前更新显示状态并禁用，重复操作被忽略，提交失败恢复原状态
-- `CodexStatusService.applyProxy` 保存后关闭旧连接并清空缓存，随后触发刷新
-- 手动和到期重连均先关闭旧连接，新连接失败后保持断开
-- 代理测试使用草稿启动独立进程，请求共享 8 秒截止时间，取消后旧结果不得提交
-- 配置错误写入 `AppLog.settings`，正式 RPC 响应中的代理 URL 认证信息脱敏后才进入内存交互日志
+`SystemConnectionGate` 在睡眠或合盖且无工作外屏时断开连接，物理屏、虚拟屏和镜像屏统一处理。DarkWake 不解除显示器恢复门槛。远端继续记录，Mac 恢复后静默对账。
 
-**链路二：Hook 统计（历史聚合）**
+### 历史与价值
 
-Hook 子进程按天写入 `~/Library/Application Support/CodexBar-yatotm/HookEvents/events/YYYY-MM-DD.jsonl` 这类文件，主 App 的 `WorkflowService`（actor）增量聚合出 `daily.jsonl` 与 `WorkflowSnapshot`，供热力图详情面板展示。本地维护与重建由 `WorkflowMaintenanceScheduler` 串行调度，不再初始化云服务。
+`UsageCollector.py` 仍增量解析 Token、模型、Fast、认证归属。共享采集只补权限请求、中断事件，固定 ID 幂等导入，不重复加入 Token、工具、轮次。
 
-- `WorkflowStorage` 管理的存储目录含 `events/`、`daily.jsonl`、`stats.lock`、`maintenance.json`、`Sync/` 五项
-- 原始事件文件与 daily 聚合统一保留 210 天，聚合里的会话与轮次标识只保留 3 天，到期后只留下去重计数
-- `WorkflowDailyAccumulator` 的全量与增量路径始终在内存收集完整 ID，只有 `finalized(identifierStorage:)` 才决定保留或压缩；已压缩的日期收到新事件时不能安全去重，必须降级为从原始 JSONL 完整重建
-- `WorkflowMaintenanceState.currentAggregationSchema` 是原始事件到 daily 聚合的算法版本；缺少版本按 0 处理，版本不一致时把仍有原始事件的日期全部标脏并走通用完整重建，不写字段级历史迁移
-- 需要从原始事件重新计算的聚合算法、输出字段、字段含义或去重规则变化时，必须递增 `currentAggregationSchema`，统一走相同的完整重建入口
-- daily 中的 Hook 计数字段都是可选值；`nil` 表示来源版本没有提供或无法确认，明确的 `0` 才表示已知没有对应事件，解码和重建都不能把两者混为一谈
+旧 Hook 原始记录和聚合保留 `210` 天，schema 为 `9`。`WorkflowService` 可重建旧历史，不能把新共享事件当旧 Hook 回放。改变原始 Hook 聚合语义仍须递增 schema。
 
-**链路三：实时任务，由 `CodexActivityMonitor` 驱动**
+价值以本机 OAuth 账号为范围。官方明细完整时采用官方数据，缺失时整段使用同账号设备日志；补齐后整段替换，不能相加。按实际重置划分周期，不能按预计时间提前分段。
 
-`CodexActivityMonitor` 是本机 Codex 菜单栏图标、活动卡片、通知、触觉反馈和按任务防睡眠的**唯一任务状态来源**，由两个 reader 供料。
+## 防睡眠与自动重置
 
-- `HookEventTailReader`（actor）的 bootstrap 覆盖滚动 24 小时并作为单次事务发送，之后按当日文件 offset 增量 tail，同时向下游报告数据源健康状态
-- `CodexSessionLifecycleReader`（actor）增量读取 `~/.codex/sessions` 与 `archived_sessions` 下的 rollout JSONL，只提取 turn 生命周期与最近进展时间，不解码会话或工具内容
-- 任务监控只在 `codexHookSettings.isOperable` 为 `true` 时运行，即本地已安装且最近一次明确校验没有失败；链路失效时立即停 reader 并清空实时状态
-- `SessionEnd` 没有 `turn_id`，收到后按 session 把对应任务立即移出活跃列表并放进 5 秒终态确认窗口；rollout 在窗口内补回准确的完成或终止分类，超时后按终止处理
-- `HookEventTailReader.drainNow()` 是读取屏障，每个调用方等待一轮在本次请求之后开始的读取，返回 `completed`、`sourceUnavailable` 或 `cancelled`
-- 缺少 session ID 的 Hook 事件使用匿名 project key，`isAnonymous` 会保留到活动快照、完成记录和终止记录；活动卡片和任务中心显示橙色 `person.crop.circle.dashed` 图标，`help` 为 `匿名任务不参与防睡眠`，`+N` 只显示其他活跃任务总数
-- 匿名任务不向通知消费者发布等待或完成 transition，不触发触觉反馈，不参与 KeepAlive 或异常会话保护，`activityProtectionIdentifier` 为 `nil`
+防睡眠为关闭、手动、随任务三种模式。手动模式不依赖任务，随任务只消费本机可信状态。断线和状态待确认不阻止睡眠。
 
-系统唤醒时，`NSWorkspace.didWakeNotification` 先暂停异常会话保护。读取屏障成功时重置生命周期解析回退，并在完成 rollout 对账后恢复判定；数据源不可用时继续由 source health 门槛暂停，reader generation 变化时直接丢弃旧结果。
+App 的 IOPM 断言处理空闲睡眠，签名 helper 的固定 `pmset` 操作处理合盖睡眠。保留 helper 身份、授权、所有权 schema、XPC 与 wake owner，不增加独立管理 App。更新时只恢复自己取得且无有效租约的电源状态。
 
-#### 异常会话保护
+自动重置默认关闭。每张凭证独立限制重试预算，取消后等待清理，再开始新评估。消费前再次检查账号身份、幂等键及过期前 `60` 秒的截止时间；测试不得调用真实重置。
 
-- `CodexActivityProtection.swift` 管理异常会话保护状态机，`ActivityProtectionSettings` 只保存静默阈值；保护开关跟随用户保存的 KeepAlive 主开关，不依赖 helper 是否已获系统授权
-- 静默阈值可选 30 分钟, 1, 2 或 4 小时，默认 1 小时，UserDefaults key 固定为 `KeepAlive.abnormalTaskInactivitySeconds`
-- 候选只包含非匿名 `.running` 任务，`.waitingApproval` 不参与异常判定；`lastProgressAt` 同时吸收 Hook 顶层事件、子 Agent 事件与 rollout 行时间
-- 达到阈值后先更新内存候选记录并加入串行持久化队列，再提交本地通知；通知使用系统默认声音且不重试。通知处理返回或 3 秒宽限到期后重新校验候选，仍有效时隐藏任务；隐藏不等待磁盘写入成功
-- 通知以 task ID 与 attempt ID 共同标识，候选失效或任务恢复、终止、完成、过期时会撤回仍可识别的待处理和已送达通知；迟到的提交结果不得影响新的 attempt
-- 隐藏任务不进入 `CodexActivitySnapshot` 的运行中与等待批准列表，因而不参与 UI 和 KeepAlive 的活跃任务计算；后续进展会恢复任务并清除保护记录
-- KeepAlive 关闭时恢复当前进程内所有隐藏任务并撤回通知，已经隐藏任务的持久化记录保留；再次开启后按当前阈值和最近进展时间无通知对账
-- 判定要求监控已启动、KeepAlive 已开启、reader 存在、bootstrap 已结束、不在睡眠或唤醒恢复阶段且 Hook 数据源健康；进入不满足条件的阶段时会取消计时器和在途通知 attempt
-- 静默定时器使用 `SuspendingClock`，系统时间变化由 `NSSystemClockDidChange` 触发无通知重算；系统睡眠期间暂停判定，唤醒完成 Hook 读取和 rollout 对账后再恢复
-- `ActivityProtectionStateStore` 把记录写入 `~/Library/Application Support/CodexBar-yatotm/ActivityProtection/state.json`，字段只有 SHA-256 任务标识与 `lastProgressAt`、`markedAt`、`expiresAt`，最长保留到最后进展后的 24 小时
-- Debug 与 Release 共用状态文件，actor 串行化进程内访问，`flock` 保护跨进程读写，文件权限固定为 `0600`，当前 schema 为 `1`；状态在 task reader 启动前完成加载
-- 持久化操作按 `activityProtectionPersistenceTask` 串行排队，条件删除用 `markedAt` 防止旧 attempt 删除新记录，终态与保留期清理执行无条件删除
+异常任务保护只处理本机可信运行中任务，心跳不算进展，恢复后无通知对账。新旧任务沿用同一保护哈希，`ActivityProtection/state.json` 仍为 schema `1`，只含哈希与时间戳。
 
-### 系统电源控制与 root helper
+## UI 与性能
 
-两套机制叠加，职责不同：
+保留 `NSPopover` 与备用 `NSPanel`，AppKit 固定顶边调整窗口高度，不叠加逐帧 SwiftUI 高度动画。额度入场动画独立保留；任务文字不使用持续闪动或粒子。
 
-- `SystemSleepService` 用进程内 `IOPMAssertion` 建立 `PreventUserIdleSystemSleep` 断言，只挡空闲睡眠，不需要提权；断言名必须是 ASCII，否则 `pmset -g assertions` 显示不出标识
-- `CodexBarHelper` 是 root LaunchDaemon，通过 XPC 接受 `setSleepPreventionRequested` 和 `setAutoResetWakeSchedule` 请求；前者执行 `/usr/bin/pmset -a disablesleep` 覆盖合盖睡眠，后者使用固定 owner 和 `wake` 类型维护自动重置系统唤醒事件
+任务时间线只在可见时更新，卡片自行订阅任务变化。日志 JSON 格式化、高亮和 TextKit 排版移到后台，取消后不提交旧结果，内存日志保持有界。
 
-防睡眠链路：`KeepAliveController`（MainActor）订阅 `activityMonitor.$snapshot` 以及合成 `codexHookSettings.isOperable` 的两个发布值 -> `SMAppService.daemon(plistName:)` 注册 -> `NSXPCConnection` -> helper
+设置子面板共享焦点、撤销栈与 `SettingsOptionsPanelController`。首次展示、点击区域、收缩文字清理和窗口焦点需手动验证。见 [UI 与生命周期](Docs/DeveloperGuide/ui-and-lifecycle.md)
 
-自动重置唤醒链路：`AutoResetController` -> `KeepAliveController` -> `AutoResetWakeScheduler` -> 独立 `NSXPCConnection` -> helper
+## 隐私与外部交互
 
-关键约束：
+- Claude 不主动访问 Anthropic；状态栏只包装已有命令，失败不阻塞 CLI
+- 公开 Codex 服务状态不带凭据，面板可见时随额度刷新
+- SSH 不转发 Agent、不自动接受主机密钥、不开放公网端口
+- 不记录 OAuth token、对话正文、工具参数或输出；系统日志只写结果、计数、时间
+- Sparkle、更新日志及发布通道使用 fork 地址，保留上游署名与 GPL 许可
 
-- `shouldDisableSleep` 由 `sleepBlockReason == nil` 派生，要求服务已启动、App 未退出、主开关与 Hook 可用、存在符合条件的任务、helper 已批准且未刷新、低电量与时长上限均未阻断；依赖变化保留用户保存的 `isEnabled`
-- `hasRunningTasks` 只表示非匿名且仍可见的运行中任务；`hasKeepAliveTasks` 在此基础上纳入 `keepsAwakeWhileWaiting` 开启时的非匿名等待任务，被异常会话保护隐藏的任务不参与防睡眠
-- Hook 状态在类内只认 `isHookEnabled` 这份镜像，它跟的是 `codexHookSettings.isOperable`；不要回读那个属性，订阅回调跑在 `willSet`，那一刻它的两个输入里正在变的那一项还是旧值，只能认 `CombineLatest` 给的闭包参数
-- 新增拦截条件一律加进 `sleepBlockReason` 的顺序判断里，它和 `shouldDisableSleep` 同源，顺带保证日志的 `reason=` 不会漏项
-- UI 用的 `isLowBatteryBlocking` 与 `canShowOptions` 由 `reconcileSleepState` 从 `sleepBlockReason` 单点派生，新增拦截条件时 `allowsOptions` 那个穷举 `switch` 会强制表态，于是不会出现入口亮着却点不动
-- `hasRunningTasks` 与 `isRefreshingHelper` 都不带 `@Published` 标注，它们变得比结论频繁，各自发信号会把整个设置页拖着一起重算
-- helper 只做固定的系统电源操作；不要给 root helper 增加网络、任意命令执行或其他文件访问能力
-- helper 注册需求由防睡眠主开关与自动重置请求共同决定；自动重置开启时即使防睡眠关闭也要完成 `SMAppService` 注册和系统批准，设置行复用注册错误并单独展示唤醒计划同步错误
-- 自动重置与防睡眠从关闭切换为开启时统一通过 `HelperFeatureConfirmation` 显示确认；`.notRegistered` 与 `.notFound` 提示需要安装并授权后台运行，`.requiresApproval` 提示已安装但仍需授权，`.enabled` 只显示功能说明
-- `ensureHelperRegistration()` 只负责注册与刷新 helper；Helper 授权系统设置仅由设置行的 `打开系统设置` 按钮调用 `openSystemSettings()` 打开，两个功能的开启动作不直接切换到系统设置
-- `AutoResetWakeScheduler` 与防睡眠租约使用独立 XPC 连接，只同步下一次唤醒时间；距现在不超过 5 秒的时间不交给 helper，由 App 内定时任务直接进入到点执行路径
-- helper 把自动重置事件 owner 固定为 `CodexBarHelperIPC.machServiceName + ".auto-reset"`，事件类型固定为 `kIOPMAutoWake`；替换时先取消这个 owner 的全部旧事件，设置后回读必须恰好得到一个 1 秒容差内的目标事件，取消后回读必须为空；修改 owner 或类型属于清理兼容性问题
-- 唤醒连接关闭时 helper 立即取消该连接拥有的事件，取消失败后清除内存所有者并每 5 秒继续收敛；helper 启动时在开放 listener 前按立即、250 毫秒、1 秒清理遗留事件，`SIGTERM` 与 `SIGINT` 退出前也执行取消
-- App 同步唤醒计划失败后按 2/4/8/16/32/64 秒重试；App 正常退出或 helper 更新前按立即、250 毫秒、1 秒取消，失败就保留错误并取消本次退出或更新
-- `Scripts/cleanup.swift` 注销 helper 前先通过 XPC 取消固定 owner 的事件并回读；事件仍存在时必须停止注销，不能让系统计划失去最后一个具备清理能力的进程
-- 调用方校验由 XPC 层强制；helper 启动时用 `SecCodeCopySelf` 读自身签名，拼出形如 `anchor apple generic and certificate leaf[subject.OU] = "<team>" and identifier "<主 App identifier>"` 的 requirement 字符串，交给 `NSXPCListener.setConnectionCodeSigningRequirement` 生效；没有逐次连接的 audit token 检查，改签名或改 bundle ID 会直接连不上
-- 所有权记录固定放在 `/Library/Application Support/CodexBar-yatotm/helper-state.json`，由 root 在同目录写临时文件，完成 `F_FULLFSYNC` 后原子替换并同步目录，权限固定为 `0600`；只持久化 `idle`、`owned`、`restoring` 三态，`external` 只是任务期间的运行态，不落盘也不承担恢复责任
-- 当前值为 0 时必须先写 `owned` 再写 `pmset 1`；释放时必须先写 `restoring` 再写 `pmset 0`；两次 pmset 都要重新读取 `pmset -g` 确认实际值，只有确认为 0 才能记回 `idle`
-- 任务开始时实际值已为 1 就返回 `external`，不写 `pmset`；helper 每 5 秒观察一次，如果其他来源在任务期间改回 0，helper 立即按上一条顺序取得所有权
-- helper 取得所有权后每 5 秒检查一次实际值与磁盘 transaction，值被改成 0 时重新写回 1，记录缺失、损坏或 transaction 不一致时先修复记录；修复失败也必须继续尝试恢复为 0
-- 没有活跃租约时停止短轮询，只保留 60 秒异常恢复检查；所有短轮询使用 1 秒 leeway
-- 每个 App 进程持有一个跨 XPC 重连不变的 client session ID，请求再带单调递增的 `generation`；helper 只释放对应进程的租约并拒绝延迟到达的旧 `generation`，不允许旧连接覆盖新状态
-- 异常断连后租约宽限 15 秒；同一 App 在宽限内重连会续上原租约，watchdog 只会释放仍处于断连状态的那一个 client session
-- helper 以 `owned` 或 `restoring` 启动时先恢复为 0 再接受新接管；以 `idle` 启动时不修改当前值，因为那个值可能属于其他来源
-- 更新 helper 前 App 冻结新防睡眠请求和自动重置唤醒同步，确认固定唤醒事件已取消后执行 unregister/register；旧 helper 终止时负责恢复 owned 睡眠状态，新 helper 就绪后对当前指纹执行一次 `resetSleepAfterUpdate` 并收到状态回复才完成更新，系统仍在等待首次批准时除外
-- 切换失败按 2/4/8...256 秒重试，列表耗尽即放弃（延时累计约 8.5 分钟，每轮再等一次超时约 10 分钟），瞬时抖动能自愈，权限类故障不该无限重试
-- XPC 请求带超时并汇进同一条重试路径；launchd 拉不起 helper 时 XPC 方法既不回复也不触发 `errorHandler`，没有它界面会显示防睡眠开着而实际没生效，日志里只剩没有配对回复的 `Helper XPC 请求已发送`
-- 超时取值放在 `CodexBarHelperIPC.requestTimeoutSeconds` 而不是控制器里，它与 `watchdogGraceSeconds` 是一对：必须更小，App 先放手 helper 才能靠 watchdog 兜底，分处两个 module 会让人改了一边不知道另一边
-- 开发期间用 `xcodebuild` 覆盖正在运行的 App bundle 可能使 launchd 注册信息与磁盘上的 helper 不一致；重启 App 后通过 `KeepAliveHelperConfiguration.registrationNeedsRefresh(defaults:)` 检查指纹并刷新注册
-- helper 回传 `none`、`external`、`codexBar` 来源与操作后的实测值；App 只能在 `codexBar` 且实测为 0 时宣称系统睡眠设置已恢复，不主动请求系统睡眠，`external` 和 `none` 都只释放进程内断言
-- App 退出由 `applicationShouldTerminate` 返回 `terminateLater`，先取消自动重置唤醒计划，再释放防睡眠租约；两项都经 helper 回读确认后才继续退出，任一失败都会取消本次退出并恢复协调
-- `pmset` 是没有来源和引用计数的全局布尔值；CodexBar 取得所有权后如果另一个 App 也开始依赖这个 1，释放时仍会恢复为 0，系统层没有无歧义的方法判断另一个 App 的意图
-- 低电量保护由 `PowerSourceMonitor` 供数，它只报事实（有没有内置电池、电量、是否靠电池供电），不知道阈值；读数保持 `unavailable`、`unreadable`、`present` 三态，把读取失败折叠成“没有电池”会让设置项凭空消失且保护静默失效
-- 见过一次内置电池就记住 `hasSeenBattery`，之后读到空列表只能返回 `unreadable`；硬件不会中途消失，空列表只是 IOKit 重新枚举时的缺口，当成台式机会当场撤掉保护
-- `hasSeenBattery` 只活在进程内不持久化，每次启动重新判定；笔记本启动时撞上枚举缺口会短暂显示成没有电池，由下一次电源通知自愈，而持久化会让从笔记本备份恢复的台式机永远多出低电量设置项
-- `IOPSNotificationCreateRunLoopSource` 注册失败时降级成 60 秒轮询并记 `action=poll`；只靠 `didWakeNotification` 补读不够，防睡眠生效的机器按定义就不会睡，那条通知永远不来
-- 首次读取在 `start()` 里单独判一次并记 `stage=start` 这条，不能改走 `refresh()` 那条路：后者按变化过滤，而读数初始值就是 `unreadable` 本身，首读失败会被静默吞掉，之后只留下一条没有配对失败行的恢复日志
-- 防睡眠上限累计的是**真正挡住睡眠**的那段时间，`begin` 起表 `pause` 收表，收表之后机器睡着或被低电量拦下都不占用户的上限
-- 上限计时用 `SuspendingClock` 而不是 `Date`，后者受系统时间调整影响且系统睡眠期间照走；排计时器的 `Task.sleep` 同样要传 `SuspendingClock`，否则睡一夜醒来会当场判定到期
-- 低电量是**纯条件**判定，不设“低过电”的粘滞标志：电量会回升，充上电就该自动恢复防睡眠；`hasReachedMaximumDuration` 之所以是粘滞标志只因为累计只增不减，两者不要照抄
-- 低电量必须同时满足在用电池与电量低于阈值，只看百分比会让“剩 5% 插上电再跑任务”当场被判低电量；判定用 `Power Source State`，不能用 `Is Charging`（接电停充时它也是 `false`）
-- 电量读不到时维持上一次的判定，从没读到过就是不触发：误触发会当场断掉用户任务，漏触发最坏也有系统强制睡眠兜底
-- 已经在低电量保护中时读数失败不清零，否则一次瞬时失败会绕过滞回，让防睡眠反复开关并重发通知
-- 低电量通知只在 `isActivelyPreventingSleep` 为真且来源是 `codexBar` 时排队，外部来源不说“已恢复系统睡眠”；日志无条件记并用 `action=release|none` 区分，百分比只有那一条能看到
-- 排队的通知要等 helper 恢复睡眠的 XPC 回复确认成功才发得出去，恢复失败走重试直至放弃，提前说“已恢复系统睡眠”会把用户骗去合盖然后把电耗干
-- 通知提交完成前保留空闲断言，`await` 返回后再释放，避免系统先进入空闲睡眠
-- 那次 `await` 之后要重认一次 `generation` 再走 `finishSleepRestore` 这一步，挂起期间可能已有新的禁用请求接管，否则会释放掉刚建立的空闲断言
-- 设置页那句低电量说明看 `isLowBatteryBlocking` 而不是 `isLowBatteryActive`，后者在没有任务时也成立，那时无话可说
-- 触发与解除用 `阈值` 与 `阈值 + 5%` 两道门槛，否则电量在阈值附近抖动会反复切换 pmset
-- 一轮低电量通知的终点是电量回到 `阈值 + 5%` 或者用户改了阈值，由 `hasNotifiedLowBattery` 记住；只看是否接电会让适配器接触不良时每翻一次供电状态就重发一条
-- `hasNotifiedLowBattery` 只在通知真的提交成功之后才置位，打在入队处或提交前都会让没送达的那一条吃掉整轮配额，使这一轮之后真正触发的低电量再也提醒不了
-- `hasNotifiedLowBattery` 只管通知不管判定，与上面“纯条件”不冲突：电量回到解除门槛以下再跌破仍算同一轮，不会重复提醒
-- `SleepConditions` 里只放 `battery` 布尔，放电量百分比会让每掉 1% 刷一条变化日志；真实电量只在触发那一条单独记
-- 状态只呈现在主面板活动卡片右侧的咖啡杯标记（带 tooltip），由 `KeepAliveController.isActivelyPreventingSleep` 驱动，`sleepPreventionSource` 区分外部来源与 CodexBar 所有权，卡片折叠成“暂无数据”时标记要跟着一起收
-- 设置页那一行说明只在异常、外部来源、低电量生效或达到上限时出现，CodexBar 自己正常持有所有权时整行收起，`keepAliveCaption` 返回 `nil` 即代表收起
-- 最长防睡眠时间、异常会话保护阈值与低电量阈值都在防睡眠子面板里，台式机读不到电池时低电量那一行整行隐藏而不是置灰
-- 保持屏幕常亮跟 `isActivelyPreventingSleep` 走，由 `reconcileDisplayAwake` 单点切换，于是低电量拦下、达到上限、任务结束时屏幕都跟着放开
-- 显示断言只保证屏幕不睡，屏保与闲置锁屏跟的是系统 idle 计时，要靠 30 秒一次的 `IOPMAssertionDeclareUserActivity` 压住，两者缺一不可
-- 声明用户活动复用同一个 assertion ID，每次传 `null` 会新建一条，`pmset -g assertions` 里会堆成一串同名断言
-- 逐次声明不记日志，建立与释放各一条就够还原状态；两条断言都是进程级的，App 退出或崩溃时系统自动收回，不经过 helper
-- **菜单栏图标不承载防睡眠状态**，它要保持模板渲染让系统按菜单栏外观着色，自行着色在深浅和带染色的菜单栏下都会失控
-
-### 自动重置
-
-- `AutoResetSettings` 默认关闭，提前量可选 15 分钟、30 分钟、1 小时、2 小时、4 小时、6 小时，缺失或无效值回退 30 分钟
-- `AutoResetController` 只处理新鲜 `account/rateLimits/read` 明确列出的 `available + codexRateLimits + expiresAt` 凭证，按过期时间和 ID 排序后一次只处理最早目标；数量不能反推缺失明细
-- App 启动、用户开启、系统唤醒和计划到点都会执行新鲜读取；阈值尚未到时重新调度，已经进入窗口且尚未过期时立即尝试
-- `creditId` 决定跨设备幂等键和通知身份，`expiresAt` 只是可变调度数据；同一 ID 的时间变化要取消当前阈值或重试并按新时间重排，不能换幂等身份
-- 阈值触发后单轮重试窗口固定为 5 分钟；暂时错误按 15/30/60/120/300 秒计算下一次退避，但落在截止点及之后的重试不安排，`nothingToReset` 在过期前最后 10 分钟内按 60 秒间隔处理
-- 单轮结束只取消本地任务和系统唤醒，不把目标标记成永久失败；后续普通额度快照仍可为有效目标开启新一轮
-- `.auto`、`.retry` 和 `.wake` 评估期间建立独立的 `PreventUserIdleSystemSleep` assertion，读取与消费结束后立即释放；不建立显示断言，不修改 `SleepDisabled`
-- `reset` 与 `alreadyRedeemed` 都视为成功并通知；认证失败暂停当前目标，协议或参数错误停止当前目标，明确过期发送失败通知，目标从明细消失时静默停止
-- 原始 `creditId` 和确定性幂等键只在当前进程内存中存在；`UserDefaults` 只保存开关、提前量、通知选项和哈希去重 key，自动重置状态仅保存在本机
-
-### 通知
-
-- `CodexNotificationService` 是集中式的 `MainActor` 服务，订阅额度快照与实时活动，负责阈值穿越判定、去重、额度重置识别、触觉反馈和本地通知；dedup key 落 `UserDefaults`
-- 匿名任务在 transition 入口被过滤，不发送完成或等待批准通知，也不触发任务触觉反馈
-- `send` 是唯一的提交入口，返回一个 `Task<Bool, Never>?` 值，需要等通知真的发出去再做下一步的调用方 `await` 它的 `value` 即可；不要另开一条 async 通道，那会悄悄少掉去重、时效判定与提交失败回调三项能力
-- 去重判定留在 `send` 的同步段而不是挪进 `Task` 内部，这样连续两次调用的第二次一定被挡下，不依赖任务调度顺序
-- 异常会话保护通知只依赖通知总开关与系统授权，使用系统默认声音，`retryCount` 为 0；提交前后都调用 monitor 的 relevance 检查，过期通知立即撤回
-- `NotificationSettings` 管 CodexBar 自身通知；`CodexCLINotificationSettings` 是另一回事，它通过 app-server `config/read` 与 `config/batchWrite` 读写 Codex 自己的用户级 `config.toml`
-- 通知面板里带依赖的行一律显示为关闭并置灰而不是隐藏，任务类看 `codexHookSettings.isOperable`，低电量保护通知看 `KeepAliveController.isLowBatteryProtectionEnabled`（防睡眠可用、阈值开着，且这台机器确实有电池），防睡眠上限通知看 `KeepAliveController.isMaximumDurationEnabled`（防睡眠可用且不是无限制）；都不回写用户保存的开关
-- 两条防睡眠通知的依赖里都含“防睡眠可用”这一层，即防睡眠开关与 Hook 都开着，判定收在 `publishNotificationDependencies` 一处；只判各自的子设置会让防睡眠关着时这两行还亮着
-- 带依赖的行由 `KeepAliveController` 判定并派生成一个值，视图只读结论，不在各视图各写一遍 `!= .unlimited` 这类规则
-- 防睡眠上限通知与低电量通知共用同一个发送时机；达到上限是粘滞状态，一个计时周期只发一次，不需要低电量那种本轮已通知的锁存
-
-### 并发与隔离
-
-工程开启 `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` 设置，所有类型默认 `MainActor` 隔离。
-
-- UI、控制器、ViewModel、Settings、更新类直接依赖默认隔离，不需要额外标注
-- 服务共享状态用 actor 管理，包括 `CodexStatusService`、`WorkflowService`、`CodexCLIVersionService`、`HookEventTailReader`、`CodexSessionLifecycleReader`、`ActivityProtectionStateStore`
-- DTO、纯模型、静态工具、跨 actor 传递的类型必须显式标注 `nonisolated`
-- 跨进程写统计文件用 `stats.lock` 加 `flock` 保护，Hook 子进程有等待上限，主 App 无限等待；`RequestLogStorage` 用 `OSAllocatedUnfairLock`
-- 非 Sendable 的管道 IO 集中在 `PipeReadBuffer` 里，`JSONLineReader` 与 `PipeDrain` 复用它
-- 保留既有防重入与过期结果丢弃逻辑，例如 `RefreshTaskCoordinator` 只让最新 `generation` 提交结果
-- 不要用阻塞 I/O 或长耗时操作卡住 `MainActor`
-
-### 错误处理原则
-
-- `CodexFetchOutcome` 包含有数据、未登录、版本不满足要求和初始化失败四种结果。主面板显示对应状态，关于页面显示连接失败原因；完整请求与响应由 `RequestLogStorage` 保存在内存日志中，上限 500 条
-- app-server 之外的模块走 `Services/Support/AppLog.swift` 写系统日志，用户可见文案只留步骤名，错误码与 `localizedDescription` 这类细节进 `os_log`；现有 `category` 为 `app`、`keepalive`、`activity`、`workflow`、`sync`、`hooks`、`codexcli`、`settings`、`notification`，helper 进程另用 `helper`
-- 日志的目标是出问题时能从中重建当时的状态，所以不只记失败，状态转换、关键操作与决策依据同样要记；启动时由 `logLaunchState` 记一条含全部开关的基线，后续变更日志都是相对它的增量
-- 进程终止靠 `AppProcessDiagnostics` 补线索，它和 `logLaunchState` 一样挂在 `app` category 下，ObjC 异常当场留痕，其余终止方式靠下次启动补记一条 `App 上次非正常退出`
-- 那条补记只能用 `.notice` 级别，因为 kill 与强制退出和真崩溃无法区分，用 `.error` 会让按级别筛的排查开局就追一个不存在的故障
-- **级别只用 `.notice` 与 `.error`**，状态转换和降级决策用 `.notice`，失败用 `.error`；`.info` 与 `.debug` 只落在内存环形缓冲里，事后 `log show` 捞不全，一律不用
-- 详细度靠**结果字段化**而不是多记几条：一次操作只留开始与收尾两条，每一步的成功结果压成收尾那条里的一个字段，只有失败才单独发一条 `.error` 带 `stage=` 与 `detail=`；逐事件与逐快照这类高频路径仍然一律不记，例如两个 Reader 的 `try?` 文件 IO 失败是预期常态，记了会刷屏
-- 文案骨架是 `<主体><动作>: 字段=值; 字段=值`，标题只说发生了什么，理由进 `reason=`，处置进 `action=`；起止用 `开始` `完成` `失败`，中间状态用 `已<动作>`
-- 字段顺序固定为标识（`trigger`、`generation`、`date`）、输入、结果、`elapsed`、`reason`/`detail`；公共字段有 `trigger`、`result`、`reason`、`action`、`detail`、`code`（系统返回码）、`exit`（进程退出码）、`elapsed`，其中 `code` 与 `exit` 必须分开，不要用一个 `error=` 同时装 OSStatus、IOReturn 和退出码
-- 文案只描述事实，不写“用户做了什么”这类主语，也不写推论；字段值要可 `grep`，用枚举 `rawValue` 而不是中文句子，App 与 helper 两侧保持同一套格式
-- 词根固定，一个词能 `grep` 出整条链路：额度、统计刷新（调度层）、事件汇总（计算层）、同步、KeepAlive（防睡眠决策层）、空闲断言（进程内 `IOPMAssertion`）、显示断言（屏幕常亮那条 `IOPMAssertion`）、Helper 注册（`SMAppService`）、Helper XPC（`NSXPCConnection`）、系统睡眠（helper 的 pmset 效果）、电源监听（`PowerSourceMonitor`）、任务、Hook、codex、通知
-- 防睡眠日志按两套机制分组：`KeepAlive` 是两套共用的决策层，`空闲断言` 与 `显示断言` 是机制一，`Helper 注册`、`Helper XPC`、`系统睡眠` 是机制二的授权、传输、效果三层，故障定位就是在这几层里找
-- `trigger=` 由 `LogTrigger` 提供，从 UI 入口透传到服务层，用来区分同一条链路是被用户动作、定时轮询还是系统事件踢起来的。本地统计维护独立每分钟运行，并随 Hook、睡眠门禁与退出暂停
-- 变化检测类日志只在值真的变了才记，例如 `KeepAlive 条件已变化` 与 `Hook 配置已变化` 各自存一份上次的值，否则每次开面板都会刷一条
-- 设置项的变更日志照抄设置页那一行的标题，例如 `菜单栏额度指示变更`、`开机自动启动变更`，用户说“我改了那个开关”时能直接对上；只有本身带完整链路的才用链路词根，例如 Hook、同步、通知、KeepAlive、快捷键
-- 成对的操作要留成对的日志，例如 XPC 的发送与回复各记一条并带同一个 `generation`，缺一条就说明请求丢在途中
-- 耗时用 `LogDuration` 取，只加在收尾那一条上
-- `Logger` 的插值是 autoclosure，里面直接访问属性会被要求显式 `self`，而 `.swiftformat` 配了 `--self remove`，两边会打架；把属性先取到局部常量再插值即可，不需要 lint 豁免
-- 账号有效时 `rate limits` 和 `usage` 允许单独失败，复用同账号旧缓存并标记 `stale`，UI 显示为半透明，无缓存则该区域不显示；账号变化时整体丢弃缓存避免串号
-- 各 Settings 类把读取类错误与操作类错误分开存储，定时 `refresh` 不能抹掉用户操作或校验的结论，参见 `CodexHookSettings` 与 `KeepAliveController`
-- Hook 子进程任何失败都静默退出，优先保证不拖慢 Codex
-
-## UI 与窗口约定
-
-- 菜单栏按钮左键切换主面板；右键或 Control+点击打开上下文菜单；`⌘,` 打开自定义设置窗口，菜单面板打开时 `⌘L` 打开日志窗口；默认全局快捷键 `⌘⇧W` 由 `GlobalHotKeySettings` 与 `GlobalHotKeyController` 管理
-- 主面板是锚定 status item 的 `NSPopover` 弹窗，锚点不可信时回退到 `FallbackPanelController` 提供的屏幕顶部居中 `NSPanel` 面板，处理快捷键、屏幕选择和焦点时要保留这两个分支
-- `MenuSurfaceDismissMonitor` 将鼠标、键盘和激活事件汇总为关闭请求，`StatusItemController.popoverDidClose` 接收 AppKit 实际关闭回调；主动关闭容器前将 `activeMenuSurface` 设为 `none`，回调只对仍为当前容器的 popover 执行完整收尾
-- `MenuSurfaceFadeCoordinator` 同时调整内容视图和窗口透明度，淡入 0.24 秒、淡出 0.18 秒，只保留一个完成任务，新动画取消旧任务
-- popover 和备用面板分别持有 `MenuSurfaceAnimationState`，展示前允许动画，淡出期间保持开启，实际关闭后禁用；根视图在禁用时设置 `transaction.animation = nil` 和 `transaction.disablesAnimations = true`，后台刷新继续执行
-- 主面板的热力图详情、重置次数和任务中心使用 `borderless nonactivating child panel`；设置窗口的主面板布局、流光、通知、自动重置和防睡眠选项使用可获得键盘焦点的 `borderless child panel`
-- 设置窗口的子面板占同一位置，展开一个必须先 `hide(immediate: true)` 收掉其余的；动作走 `SettingsOptionsPanelAction` 并带上目标 `SettingsOptionsPanel`，互斥与 `closeAll` 都只写在 `SettingsWindowController.handleOptionsAction` 一处，新增面板不会漏配对
-- 面板控制器只在首次展开时构造，收起动作走 `existingOptionsPanelController` 而不触发构造：`NSHostingController` 与动态面板订阅会常驻到 App 结束，而用户可能一次子面板都没开过
-- 五个设置子面板的顶边对齐各自设置行，anchor 由设置页的 `ScreenFrameProvider` 随展开动作传出，定位走 `SidePanelSupport.anchoredPosition` 而不是宿主底边
-- 设置窗口的子面板要传 `clampsToSurfaceBottom: false` 让底边可以探出窗口，否则放不下时会把整个面板上推而错开主开关行；主面板那三个面板走默认的 `true`
-- 通知和防睡眠面板的高度会动态变化，前者随音效行增删，后者随 `hasBattery` 增删低电量那一行；自动重置面板只有固定的一行；resize 时要固定顶边向下生长，直接改 size 会保持底边不动而把顶边顶离主开关行
-- 内容变化订阅要保持最小：主面板布局固定 5 行、流光固定 7 行、自动重置面板固定 1 行，均不订高度变化；通知面板订 `notificationSettings` 与 `codexHookSettings` 的 `objectWillChange`，再加 `autoResetSettings.$isEnabled`、`KeepAliveController.$isLowBatteryProtectionEnabled` 与 `$isMaximumDurationEnabled`；防睡眠面板只订 `$hasBattery`；订整个防睡眠控制器会让任务每起停一次都白排一轮 resize
-- 置灰也会改高度：带音效的行置灰时音效子行跟着收起，所以每个置灰依赖都要有一个对应的订阅源
-- 增删行或改行的显示条件时要同步补上对应的订阅源，漏一项会让面板裁掉底部或留下空白
-- resize 的竖向夹紧走 `SidePanelSupport.clampedVertically`，与初次展开的 `position` 同一条规则，否则放不下时两边会把面板推向相反的边
-- 主面板布局入口始终可用；其他子面板入口只在开关开着且依赖就绪时出现，通知看 `NotificationSettings.canShowOptions`，自动重置要求 `AutoResetSettings.isEnabled` 且 `KeepAliveController.helperStatus == .enabled`，防睡眠看 `KeepAliveController.canShowOptions`；这些值只控制入口显隐，不回写用户保存的开关
-- 自动重置或防睡眠的子面板入口条件失效时，`AppSettingsView` 会发送对应的 `close` 动作收起已展开面板；关闭开关时对应设置行不显示状态说明
-- 五个设置子面板都只由滑杆按钮展开；单个面板的展开和条件失效收起分别使用 `toggle` 与 `close`，切换分页时使用 `closeAll`，开启主开关不自动弹出
-- 设置子面板展开时保留主设置窗口焦点，点击面板控件时先接管键盘，避免原生下拉菜单导致误收起；收起前结束原生编辑，保证颜色输入完成校验。`SidePanelSupport.orderOut` 只有在被关闭面板仍是 key window 时才把焦点还给父窗口；焦点已经转移时不得主动抢回
-- 侧边面板公共能力集中在 `Controllers/SidePanelSupport.swift`，重置次数、任务中心和设置子面板复用 `SidePanelDrawerPresenter`；热力图详情独立处理切边和延迟隐藏，复用 `SidePanelContentHost`、`SidePanelDrawerAnimator`、panel 工厂和定位夹紧
-- 热力图详情和共享抽屉在立即关闭或窗口已不可见时，重置动画并执行 `orderOut`、移除父子窗口关系；任务中心已结束逻辑展示时，立即关闭请求仍传递给 presenter
-- 设置窗口的子面板直接复用 `Controllers/SettingsOptionsPanelController.swift`，它在 presenter 之上补齐了装配、两套关闭观察者、顶边对齐定位和高度重算；新增设置子面板只要给它内容工厂，动态高度面板再提供内容变化来源，不要另写一层壳
-- 设置子面板的公共内边距、间距与外观度量从 `SettingsOptionsPanelMetrics` 取；通知、自动重置和防睡眠面板的下拉控件共用 `SettingsOptionsPicker`；主面板布局使用独立的 28 点拖拽行高且不使用下拉控件
-- 设置子面板的内容工厂必须走 `SettingsOptionsPanelController.makeContentController(_:rebuiltBy:)`，否则首次展开时原生 Switch 只剩一条空轨道；重建信号由它接在内容外面，内容视图不必知道 `SidePanelEntryCue`
-- 原因是 thumb 由 `WindowPortal` 投射而不是画在开关上，面板首次布局那一轮 portal 建不起来，而且不会自愈，只有一次内容重建才补得上；第二次展开正常是因为 hosting controller 常驻，复用了已经建好的那份
-- 开关首次绘制由内容重建处理；`SidePanelSupport` 中的 `@_optimize(none)` 用于规避编译器崩溃
-- 主面板的账户、任务中心、额度、Token 用量和底部状态由 `MainPanelSettings.layout` 统一保存顺序与显隐，模型始终保留至少一个区域；Hook 关闭时 `StatusItemController` 调用 `updateHookEnabled(_:)` 持久化关闭任务中心，任务中心原本是唯一可见区域时同步开启账户；设置面板只禁用任务中心开关，不能连带禁用拖拽手柄
-- 主面板布局排序由手柄上的自定义 `DragGesture` 驱动，悬浮副本跟手移动，其他行按预览顺序实时让位，松手后才通过 `setSectionOrder(_:)` 保存最终顺序；不要改回只在落点命中后换位的 `.draggable` 和 `.dropDestination`
-- 热力图详情面板跟随包含标题和方格矩阵的完整热力图区域定位，优先让两者顶边对齐；详情面板过高时通过 `SidePanelSupport.anchoredPosition` 上移到与主面板底边对齐，不能恢复为固定贴住主面板底边
-- `SettingsWindowController` 持有窗口组唯一的 `UndoManager`，设置主窗口和五个可聚焦子面板必须共享这一撤销栈，保证焦点切换后 `⌘Z` 与 `⌘⇧Z` 仍然有效；Hook 自动联动不注册为用户操作
-- 设置窗口高度跟随当前 tab 的完整内容，只在内容超过屏幕可见高度时允许滚动；首次构造时 SwiftUI 可能早于 `HostingWindowController.window` 赋值上报高度，`SettingsWindowController` 必须缓存最近测量并在窗口就绪后应用，不能用初始高度或延迟掩盖
-- 设置窗口（通用/高级/关于三页）和日志窗口复用 `HostingWindowController` 的行为，可以成为 key window，但不应成为 main window
-- 视觉风格统一走 `Views/Shared/LiquidGlassStyle.swift` 这一套，避免引入与系统菜单栏工具不一致的重装饰 UI
-
-## Hook 配置改写约束
-
-`~/.codex/hooks.json` 的读写全部在 `CodexHookSettings` 里完成，Codex 目录优先取 `CODEX_HOME` 环境变量，找不到时回退真实用户 HOME 下的 `.codex` 目录。
-
-- 只识别并移除 command 同时包含当前 CodexBar 可执行路径与 `--hook-event` 的 handler，必须保留用户已有 Hook 以及其他 App 的 Hook 和同事件下的其他 handler
-- 每个 `CodexHookEvent.allCases` 事件追加一个独立 group，handler 超时从 `WorkflowHookEventRecorder.hookTimeoutSeconds(for:)` 取得；新增事件时不得复制一份超时常量
-- 启用和校验 Hook 前要求当前 app-server 握手版本至少为 `0.150.0`；必须检查 `readyConnectionInfo()` 返回的实际连接版本，不能用磁盘版本代替，否则升级后尚未重连的旧进程会被误判为可用
-- 写入前通过 app-server `config/read` 确认全局未禁用 Hook，写入后用 `hooks/list` 验证；两处读取共用 `readGlobalHookDisabled`，开关流程与校验流程对“全局禁用”的判断不会分叉
-- 读取失败（I/O 或 JSON 格式错误）不提供 Hook 装没装的信息，必须保留上次已知值，不能当成用户关闭了 Hook
-- `isEnabled` 表示当前进程中的 Hook 开启状态，首次从已有 handler 恢复；开启后配置缺失会触发自愈。`isVerified` 保存最近一次校验的明确结论，`isOperable` 为两者的合取
-- 实时任务、防睡眠和任务类通知必须看 `isOperable`；历史聚合与本地维护仍可消费已落盘数据，其调度只看 `isEnabled`，不要把两类依赖混在一起
-- `isVerified` 默认为 `true`，RPC 临时失败或取消时保留上次明确结论。启动、打开主面板、打开设置、App 激活和额度刷新完成时对账已开启 Hook
-- 全局禁用要排在 `hooks/list` 之前判：它一关列表里必然找不到我们的 handler，那时报“已不完整”会把用户引去翻本来就完好的 `hooks.json`
-- `refreshInstallationState()` 检查 handler 是否存在及事件是否完整；已开启配置缺少必要事件或信任项时，`reconcileInstalledHooks()` 自动补齐并重新校验。启动前已无可识别 handler 时保持关闭
-- 防睡眠开关关闭时说明行收起；开关开启且 Hook 校验不通过时显示“CodexBar Hook 未生效”，具体病因由 Hook 设置行说明
-
-## 隐私与数据边界
-
-改动涉及网络、日志或同步时必须遵守：
-
-- 外部通信包括 Sparkle 更新、已配置的 SSH/HTTPS 统计来源，以及使用本机 Codex OAuth 的官方账号分析；app-server stdio 本身不是网络。Claude 采集不主动访问 Anthropic，新增通信必须核对数据边界
-- Codex 当前账户、额度和 Reset Credits 明细通过本机 app-server 获取；跨设备日志与官方账号分析由用量中心独立维护。Sparkle 更新走 `https://github.com/yatotm/CodexBar/releases/latest/download/appcast.xml` 这个 feed
-- 不展示 app-server stderr；不展示或记录 Codex OAuth token；不把原始敏感 RPC 响应写进文档
-- 异常会话保护状态只保存在本机；记录不含原始 session ID、turn ID、项目名或任务内容
-- 系统日志不写用户数据：额度与 Token 用量只记 `state=` 这类结果分类，任务内容、项目名、会话与轮次标识一律不记；可执行文件路径含用户名，用 `source=global|bundled` 之类的标识代替
-- 事件数、任务数、日期这类聚合数字可以记，它们是判断重建是否正确和定位哪天出问题的依据，不含任何内容
-
-## 验证与文档
-
-构建、日志和各功能验证入口见 [开发与验证](Docs/DeveloperGuide/development.md)。不要提交发布产物、DerivedData、临时 DMG、签名文件或个人凭据。
-
-## 实时多机器补充
-
-`RemoteActivityController` 独立消费 `ActivityCollector.py` 的当前快照，覆盖 SSH Codex、SSH Claude 和本机 Claude。它通过 `ActivityPresentationModel` 复用原任务卡片和任务中心，并驱动等待、完成通知，不注入本机任务监控或电源控制。`SystemConnectionGate` 在系统睡眠或合盖且无工作中的外部显示器时关闭连接；外接物理屏、虚拟屏和硬件镜像屏按系统显示状态统一判断。睡眠后必须等显示器唤醒才能恢复合盖采集，DarkWake 不清除这个门槛；SSH 还要求网络可用。详见 [用量中心实现与验证](Docs/DeveloperGuide/usage-center.md)
-
-防睡眠新增 `KeepAlive.mode`，旧安装保留按任务模式，新安装默认手动模式，主开关仍默认关闭。手动模式不依赖 Hook 或任务，时长计时也不随任务重置。Helper 身份校验、首次授权、系统设置入口及恢复流程保持原样；Apple Development 构建已验证后台授权、模式切换与同身份更新；物理合盖仍需实测，公开临时签名构建继续保持禁用。
-
-本机日常打包使用 `bash Scripts/build-local.sh`，它会沿用 `io.github.yatotm.codexbar.build` 域的 `signingIdentity` 偏好。不要在已有开发签名的安装上无意覆盖临时签名包，临时签名无法使用电源组件。私钥只留在钥匙串，不能写入仓库。
-
-## 上游交互适配
-
-菜单栏人物徽章消费 `ActivityPresentationModel.statusItemSnapshot` 的全部来源，面板标签只筛选 `snapshot`。终态徽章 10 秒后恢复空闲，任务历史仍保留 10 分钟；额度圆弧固定显示 Codex 7d。新图标按符号和显示倍率缓存位图，不逐帧重绘符号。
-
-设置窗口的持续动画由 `SettingsWindowAnimationState` 按可见性控制；主面板持续动画同时检查展示状态和用户动画设置，额度入场动画仍独立。Helper 包校验使用后台任务与本地签名验证，临时签名包保留不可用提示，不混同为组件损坏；保持手动防睡眠和已有签名授权行为。
-
-任务流光外观由 `TaskGlowSettings.appearance` 保存，新增键不改写已有开关。设置可用性同时接受本机 Codex Hook 和已启用的远端或 Claude 来源。光带只消费开启后实时到达的终态，恢复快照与延长时长不重放已过期提示；并发任务短提示仍为 3 秒，全部任务结束后的显示时间由外观设置决定。
-
-
-任务 Token 使用现有实时链路，不新增历史库。`CodexTokenUsage` 的输入包含缓存，推理字段可缺失；本机 Codex 读取明确归属的轮次累计，远端采集器只在事件和保活时读取数字。实时协议新增可选 `tokenUsage`，旧端缺失时不填零，数据库与 Hook 聚合 schema 保持不变。主面板保留顶部固定的 AppKit 尺寸动画，不叠加逐帧 SwiftUI 高度动画；流光预览恢复剩余时长，并保留全部机器的实时事件门槛。
-
-生命周期历史回读与正向读取共享每轮预算，已结束任务的用量和归属补查每轮次累计最多 32 MiB。历史终态不重播通知或流光，远端通过可选 `isHistoricalTerminal` 标记同样的边界；读取游标只在进程内扩展，不改原数据库结构。任务用量补查不能累计到独立的价值账本。账户轮询间隔与本机每分钟维护分开，两者都受现有睡眠门禁控制。套餐配色与额度受限提示不改变混合任务图标，也不推断未知档位的固定额度。
+架构及本次审查见 [开发者指南](Docs/DeveloperGuide/README.md) 和 [上游更新审查](Docs/DeveloperGuide/upstream-adaptation.md)

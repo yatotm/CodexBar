@@ -9,7 +9,7 @@ The menu bar uses person badges for tasks and an optional arc for the remaining 
 | Appearance | Meaning |
 | --- | --- |
 | Person | Idle |
-| Key badge | Waiting for approval |
+| Key badge | Awaiting a reply |
 | Clock badge | Running |
 | Checkmark shield | Recently completed |
 | Exclamation shield | Recently terminated |
@@ -75,7 +75,7 @@ When `Animation Effects` is enabled, the day squares appear from the top left to
 
 Hover over a day to see its date, token count, and usage intensity.
 
-When CodexBar Hook is enabled and data exists for that day, the details also include:
+Retained Codex Hook history, device logs, and shared-service observations provide available daily details:
 
 - Most-used model
 - Sessions
@@ -87,7 +87,7 @@ When CodexBar Hook is enabled and data exists for that day, the details also inc
 
 ## Activity Card
 
-Activity-card states are prioritized as waiting for approval, running, recently completed, then recently terminated.
+Activity-card states are prioritized as awaiting a reply, running, recently completed, then recently terminated.
 
 The card shows the following fields when available:
 
@@ -95,11 +95,11 @@ The card shows the following fields when available:
 - Model and reasoning effort
 - Current tool or execution stage
 - Running or waiting duration
-- Active subagent count
+- Active subagents, available plan progress, and pending replies
 - Number of other concurrent tasks
 - Anonymous-task icon
 
-When sleep prevention is actively engaged, a coffee-cup indicator appears on the right side of the activity card.
+When sleep prevention is actively engaged, a keep-awake indicator appears on the right side of the activity card.
 
 Tasks whose session cannot be identified show an orange anonymous icon with the tooltip `Anonymous tasks do not prevent sleep`.
 
@@ -111,7 +111,7 @@ Click a populated activity card to open Task Center.
 
 Task Center groups tasks into:
 
-- Waiting for Approval
+- Awaiting Reply
 - Running
 - Recently Completed
 - Recently Terminated
@@ -128,7 +128,13 @@ The bottom of the main panel shows:
 - Countdown to the next automatic refresh
 - Available-update indicator
 
-When a new version is available, double-click the update indicator to start the update.
+Use the update button beside the version in Settings > About. A downloaded update can install and relaunch directly; the main panel only shows its availability.
+
+## Codex Service Status
+
+This section shows Codex health from the public official status page, including operational, degraded, outage, maintenance, checking, and unknown states. Affected components use short labels; click the row to open the status page. It appears in All and Codex, and does not report Claude status.
+
+Hide it in Main Panel Layout if unwanted. Requests stop while the panel is hidden or the Mac sleeps; visible checks follow the main refresh cycle and send no account credentials.
 
 Back to the [User Guide](README.md)
 
@@ -141,4 +147,4 @@ The All, Codex, and Claude tabs select the menu scope. Device details start coll
 
 The task card shows recorded tokens from the current task and linked subagents. The task center keeps the total beside each status line. Input includes cache reads and writes; missing data stays unavailable, including Claude reasoning tokens when not reported separately. The task area keeps its simple hover outline, number transitions, and list fades. Status text no longer uses shimmer or particle effects.
 
-Heatmap details separate activity metrics from device-log tokens. The Codex page keeps official account totals, local Hook metrics, and collected device logs clearly labeled; these values are not added together.
+Heatmap details separate activity metrics from device-log tokens. The Codex page keeps official account totals, retained Hook metrics, and collected device logs clearly labeled; these values are not added together.

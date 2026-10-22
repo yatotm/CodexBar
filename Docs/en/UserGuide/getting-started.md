@@ -5,12 +5,11 @@
 ## Requirements
 
 - macOS 15.0 or later
-- [Codex CLI](https://github.com/openai/codex) installed and signed in, or ChatGPT App or Codex App with bundled Codex installed
-- The Codex currently in use must be `0.145.0` or later
-- Hook features require the Codex currently in use to be `0.150.0` or later
+- [Codex CLI](https://github.com/openai/codex) installed and signed in
+- The local and remote Codex shared services must run `0.162.0` or later
 - Cross-device statistics use configured SSH/HTTPS sources; iCloud is no longer provided
 
-By default, CodexBar automatically prefers a globally installed Codex CLI. If it cannot find one, it tries the Codex bundled with ChatGPT App and Codex App. You can select a source under Settings > About > Codex Versions > Source.
+CodexBar first connects to the existing official shared service. Only if it is absent does the selected source start it. Automatic selection prefers the global CLI, then an App-bundled version. Choose the launcher in `Settings > About > Codex Versions`; changing it or reconnecting does not replace a running service or restart Codex tasks.
 
 ## Installation
 
@@ -36,9 +35,9 @@ CodexBar is a menu bar app, so it does not show an icon in the Dock after launch
 2. Left-click the icon to open the main panel
 3. Wait for the initial account and usage refresh to finish
 4. If the panel says you are not signed in, sign in through the active Codex installation first
-5. For live tasks, task notifications, sleep prevention, or Hook metrics, enable CodexBar Hook under `Settings > Advanced`
+5. Local Codex tasks connect automatically. Show Tasks in Main Panel Layout; connect remote Codex and Claude in Usage Center
 
-CodexBar refreshes account, rate-limit, and token usage data every 60 seconds. Double-click the account icon in the main panel to refresh immediately.
+Codex account polling defaults to one minute; Advanced Settings offers 1, 2, 3, 5, or 10 minutes. Double-click the account icon to refresh immediately. Device logs and value estimates keep their own schedules.
 
 ## Basic Controls
 
@@ -51,7 +50,7 @@ CodexBar refreshes account, rate-limit, and token usage data every 60 seconds. D
 | `⌘L` | Close the main panel and open the Logs window while the panel is open |
 | Double-click the account icon | Refresh account, rate-limit, and usage data immediately |
 | Double-click the account email | Toggle email blurring |
-| Hover over a heatmap cell | View token and Hook metrics for that day |
+| Hover over a heatmap cell | View tokens and recorded activity metrics for that day |
 | Click the activity card | Open Task Center for concurrent tasks |
 | Click `Banked Resets` | View the expiration time of each batch |
 | `Settings > Advanced > Automatic Reset` | Configure automatic use and lead time |
@@ -60,7 +59,7 @@ The global shortcut opens the main panel on the screen under the pointer when po
 
 ## Enable More Features
 
-- [CodexBar Hook](activity-and-hook.md): live tasks, daily activity statistics, and task-based sleep prevention
+- [Live Tasks and Collection](activity-and-hook.md): shared services, Claude integration, and retained Hook history
 - [System Notifications](notifications.md): task and quota alerts, requiring macOS notification permission
 - [Automatic Reset](settings.md#automatic-reset): use banked resets shortly before expiration; may briefly wake your Mac
 - [Prevent System Sleep](sleep-prevention.md): keep your Mac awake during long tasks, requiring background-service approval

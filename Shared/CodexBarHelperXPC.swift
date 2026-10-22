@@ -16,10 +16,14 @@ nonisolated enum CodexBarHelperIPC {
     static let requestTimeoutSeconds: TimeInterval = 10
 
     private static let bundleIdentifier: String = {
-        guard let identifier = Bundle.main.bundleIdentifier, !identifier.isEmpty else {
-            preconditionFailure("CodexBar bundle identifier 缺失")
-        }
-        return identifier
+        #if CODEXBAR_HELPER_TESTING
+            return "io.github.yatotm.codexbar.helper.tests"
+        #else
+            guard let identifier = Bundle.main.bundleIdentifier, !identifier.isEmpty else {
+                preconditionFailure("CodexBar bundle identifier 缺失")
+            }
+            return identifier
+        #endif
     }()
 }
 
@@ -49,7 +53,7 @@ nonisolated enum CodexBarSleepOwnershipState: Int, Sendable {
         reply: @escaping @Sendable (Int32, Int, Int, Bool) -> Void
     )
 
-    /// helper 更新完成后对同一指纹只执行一次 SleepDisabled 0
+    /// helper 更新后按所有权对账, 保留有效租约和外部设置, 同一指纹成功后不再重复执行
     func resetSleepAfterUpdate(
         _ updateIdentifier: String,
         reply: @escaping @Sendable (Int32) -> Void

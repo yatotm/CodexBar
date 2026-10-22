@@ -7,7 +7,7 @@ extension CodexActivityMonitor {
     private var canEvaluateActivityProtection: Bool {
         isStarted
             && isActivityProtectionEnabled
-            && tailReader != nil
+            && (usesSharedBackend ? isActivityProtectionStateLoaded : tailReader != nil)
             && !isBootstrapping
             && !isActivityProtectionRecoveryInProgress
             && isActivitySourceHealthy

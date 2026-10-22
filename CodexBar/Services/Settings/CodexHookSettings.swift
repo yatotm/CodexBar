@@ -52,6 +52,14 @@ final class CodexHookSettings: ObservableObject {
 
     // MARK: - 对外入口
 
+    /// 新后台可用后只撤除本应用的旧 handler, 原始统计与其他应用配置保留
+    func retireInstalledHooks() {
+        refreshInstallationState()
+        if isEnabled, !isUpdating {
+            setEnabled(false)
+        }
+    }
+
     private func refreshInstallationState() {
         do {
             let config = try readConfigIfPresent()

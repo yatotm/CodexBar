@@ -5,11 +5,10 @@
 ## 运行要求
 
 - macOS 15.0 或更高版本
-- 已安装并登录 [Codex CLI](https://github.com/openai/codex)，或安装了内置 Codex 的 ChatGPT App 或 Codex App
-- 当前使用的 Codex 版本需要为 `0.145.0` 或更高版本
-- 使用 Hook 相关功能时，当前使用的 Codex 版本需要为 `0.150.0` 或更高版本
+- 已安装并登录 [Codex CLI](https://github.com/openai/codex)
+- 本机与 SSH 来源的 Codex 共享后台实际运行版本为 `0.162.0` 或更高版本
 
-CodexBar 默认自动选择来源，优先使用全局安装的 Codex CLI，找不到时再尝试 ChatGPT App 和 Codex App 内置的 Codex。可在“设置 > 关于 > Codex 版本 > 来源”中手动选择。
+CodexBar 优先连接已运行的官方共享后台，缺失时才使用选定来源启动。自动来源优先全局 Codex CLI，再尝试 App 内置版本；可在 `设置 > 关于 > Codex 版本` 选择。切换来源或重新连接不会替换正在运行的后台，也不会重启其他 Codex 任务。
 
 ## 安装
 
@@ -35,9 +34,9 @@ CodexBar 是菜单栏 App，启动后不会在 Dock 中显示图标：
 2. 左键点击图标打开主面板
 3. 等待首次账户和用量刷新完成
 4. 如果显示未登录，先在当前 Codex 中完成登录
-5. 如果需要实时任务、任务类通知、防睡眠或 Hook 统计，在 `设置 > 高级` 中开启 CodexBar Hook
+5. 本机 Codex 实时任务自动接入；在 `通用 > 主面板布局` 显示 `任务`，远端和 Claude 则在用量中心接入
 
-CodexBar 每 60 秒自动刷新一次账户、额度和 Token 用量，双击主面板中的账户图标可以立即刷新。
+Codex 额度默认每分钟刷新，可在高级设置改为 1、2、3、5 或 10 分钟；双击账户图标可立即刷新。设备日志和价值统计保持各自周期。
 
 ## 基本操作
 
@@ -50,7 +49,7 @@ CodexBar 每 60 秒自动刷新一次账户、额度和 Token 用量，双击主
 | `⌘L` | 主面板打开时关闭面板并打开日志窗口 |
 | 双击账户图标 | 立即刷新账户、额度和用量 |
 | 双击账户邮箱 | 切换邮箱模糊显示 |
-| 悬停热力图方块 | 查看当天 Token 和 Hook 统计 |
+| 悬停热力图方块 | 查看当天 Token 和已记录的活动统计 |
 | 点击活动卡片 | 打开并发任务中心 |
 | 点击 `留存重置` | 查看各批次过期时间 |
 | `设置 > 高级 > 自动重置` | 配置是否自动重置以及提前量 |
@@ -59,7 +58,7 @@ CodexBar 每 60 秒自动刷新一次账户、额度和 Token 用量，双击主
 
 ## 开启更多功能
 
-- [CodexBar Hook](activity-and-hook.md)：实时任务、每日活动统计和按任务防睡眠
+- [实时任务与采集](activity-and-hook.md)：共享后台、Claude 接入与旧 Hook 历史
 - [系统通知](notifications.md)：任务和额度提醒，需允许 macOS 通知权限
 - [自动重置](settings.md#自动重置)：提前使用即将过期的留存重置，可能短暂唤醒 Mac
 - [防止系统睡眠](sleep-prevention.md)：长任务期间保持 Mac 唤醒，需批准后台服务
@@ -74,7 +73,7 @@ CodexBar 提供简体中文和英文界面，默认跟随 macOS 的 App 语言�
 
 ## 独立版本与功能依赖
 
-本 fork 使用独立应用和 Helper 标识。首次切换请按 [迁移说明](migration.md) 复制旧设置和统计；系统后台权限、开机启动、通知及 Hook 需要在新安装中重新确认。原 Helper 仍需要匹配的 Apple 签名。iCloud 功能已从本 fork 移除。
+本 fork 使用独立应用和 Helper 标识。首次切换请按 [迁移说明](migration.md) 复制旧设置和统计；系统后台权限、开机启动和通知需要在新安装中重新确认。原 Helper 仍需要匹配的 Apple 签名。iCloud 功能已从本 fork 移除。
 
 ## 多机器与 Claude
 

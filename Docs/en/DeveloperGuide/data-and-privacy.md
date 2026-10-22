@@ -10,7 +10,7 @@ Business services run as the ordinary user. The root Helper accepts only fixed p
 
 ## Data flows
 
-The local app-server provides current account data, quotas, and reset credits through stdio. Its in-memory request log retains up to 500 complete requests and responses and may contain account or protocol details.
+The local app-server provides current account data, quotas, and reset credits over its local Unix socket (actual daemon version `0.162.0+`). Its in-memory request log retains up to 500 requests and responses (each payload capped at 128 KiB, with explicit truncation and credential-field redaction) and may contain account or protocol details.
 
 Usage Center parses logs on their source machines. Codex authentication classification follows recorded provider and authentication context. Claude collection is passive. Official analytics uses local Codex OAuth only with the fixed official host, refuses redirects, and separates caches by account. Credentials are neither renewed by this client nor forwarded to VPS collectors.
 
@@ -31,3 +31,9 @@ Allowed network paths are the Codex subprocess, official account analytics, conf
 JSONL writes, SQLite transactions, cancellation, and generation checks protect storage and asynchronous results. Root recovery state remains owned by the Helper at `/Library/Application Support/CodexBar-yatotm/helper-state.json`.
 
 Verify metadata filtering, missing-versus-zero semantics, account isolation, migration preservation, and the absence of CloudKit linkage and UI entries.
+
+## Shared collector
+
+The independent `~/.local/state/codexbar-shared-codex/shared-activity-v1.sqlite` stores only allowlisted task metadata, hashed identities, token baselines and permission/interruption events. No dialogue, tool arguments/output or token deltas are persisted. Structured replies are parsed transiently for question identities only. Legacy ledgers remain intact.
+
+The app uses the official daemon’s network environment; old `CodexProxy.configuration` values remain for rollback but are not passed to the daemon. Public `status.openai.com` checks carry no credentials and run only while the relevant panel is visible and sleep gating allows refresh.

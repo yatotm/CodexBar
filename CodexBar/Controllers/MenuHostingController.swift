@@ -29,6 +29,7 @@ final class MenuHostingController: NSViewController {
 
     func resizeContent(to size: CGSize) {
         guard size.width.isFinite, size.height.isFinite, size.height > 0 else { return }
+        let size = CGSize(width: ceil(size.width), height: ceil(size.height))
         contentSize = size
         // NSPopover 会为内容视图建立尺寸动画, 内层不能继承同一动画上下移动
         NSAnimationContext.runAnimationGroup { context in

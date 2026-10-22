@@ -361,7 +361,7 @@ private final nonisolated class ProcessExitWaiter: Sendable {
 
 /// CodexBar 各能力依赖的 app-server 最低版本
 nonisolated enum CodexCLIMinimumVersion {
-    static let global = "0.145.0"
+    static let global = "0.162.0"
     static let hook = "0.150.0"
 }
 

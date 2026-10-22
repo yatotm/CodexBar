@@ -237,7 +237,8 @@ actor UsageCenterStore {
     COALESCE(SUM(input+output+CASE WHEN provider='claude' THEN cacheRead+cacheWrite ELSE 0 END),0),
     COALESCE(SUM(input),0),COALESCE(SUM(output),0),COALESCE(SUM(cacheRead),0),COALESCE(SUM(cacheWrite),0),
     COUNT(DISTINCT CASE WHEN kind!='activity' THEN session END),COALESCE(SUM(turns),0),COALESCE(SUM(tools),0),
-    COALESCE(SUM(permissions),0),COALESCE(SUM(compactions),0),COALESCE(SUM(subagents),0),COALESCE(SUM(durationMs),0)
+    COALESCE(SUM(permissions),0),COALESCE(SUM(compactions),0),COALESCE(SUM(subagents),0),COALESCE(SUM(durationMs),0),
+    NULLIF(SUM(CASE WHEN kind='sharedInterrupt' THEN 1 ELSE 0 END),0)
     """
 
     private func metrics(_ query: OpaquePointer, start: Int32 = 0) -> UsageMetrics {
@@ -247,7 +248,8 @@ actor UsageCenterStore {
             cacheWrite: sqlite3_column_int64(query, start + 4), sessions: sqlite3_column_int64(query, start + 5),
             turns: sqlite3_column_int64(query, start + 6), tools: sqlite3_column_int64(query, start + 7),
             permissions: sqlite3_column_int64(query, start + 8), compactions: sqlite3_column_int64(query, start + 9),
-            subagents: sqlite3_column_int64(query, start + 10), durationMs: sqlite3_column_int64(query, start + 11)
+            subagents: sqlite3_column_int64(query, start + 10), durationMs: sqlite3_column_int64(query, start + 11),
+            interruptions: sqlite3_column_type(query, start + 12) == SQLITE_NULL ? nil : sqlite3_column_int64(query, start + 12)
         )
     }
 
@@ -345,7 +347,7 @@ actor UsageCenterStore {
         while try nextRow(daily) {
             result.days.append(UsageDay(
                 day: string(daily, 0), tokens: sqlite3_column_int64(daily, 1), metrics: metrics(daily, start: 1),
-                longestTurnMs: sqlite3_column_type(daily, 13) == SQLITE_NULL ? nil : sqlite3_column_int64(daily, 13)
+                longestTurnMs: sqlite3_column_type(daily, 14) == SQLITE_NULL ? nil : sqlite3_column_int64(daily, 14)
             ))
         }
         let models = try statement(cachedSelection + """

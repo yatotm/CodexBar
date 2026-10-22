@@ -204,7 +204,7 @@ struct UsageSummaryView: View {
         hoverSelection.map {
             UsageHeatmapHoverContext(
                 day: $0.day,
-                showsWorkflow: showsWorkflow,
+                showsWorkflow: showsWorkflow && recordedDays[$0.day.id] == nil,
                 alignmentScreenFrame: heatmapScreenFrame,
                 preferredSide: UsageHeatmap.Metrics.preferredDetailSide(for: $0.column),
                 peakTokens: peakTokens,
@@ -701,7 +701,8 @@ struct UsageHeatmapDayDetailView: View {
             RecordedMetricRow(label: "工具调用", value: count(metrics?.tools), tint: .orange),
             RecordedMetricRow(label: "子智能体", value: count(metrics?.subagents), tint: .indigo),
             RecordedMetricRow(label: "上下文压缩", value: count(metrics?.compactions), tint: .purple),
-            RecordedMetricRow(label: "权限请求", value: count((metrics?.permissions ?? 0) > 0 ? metrics?.permissions : nil), tint: .red)
+            RecordedMetricRow(label: "权限请求", value: count((metrics?.permissions ?? 0) > 0 ? metrics?.permissions : nil), tint: .red),
+            RecordedMetricRow(label: "任务中断", value: count(metrics?.interruptions), tint: .orange)
         ]
     }
 

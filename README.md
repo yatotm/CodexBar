@@ -41,7 +41,7 @@ CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，集中展示 Codex
 - 展示累计 Token、单日峰值和连续使用天数
 - 展示最长任务时长
 - 通过 30 周热力图回顾每日 Token 用量
-- 开启 CodexBar Hook 后可查看会话、对话轮次、工具调用和子 Agent 等每日统计
+- 结合共享后台与设备日志查看会话、对话轮次、工具调用和子 Agent 等每日统计，保留原 Hook 历史
 
 ### 汇总多台设备的用量
 
@@ -59,10 +59,10 @@ CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，集中展示 Codex
 
 ### 不错过正在发生的任务
 
-- 菜单栏状态点区分运行中、等待批准和刚完成任务
-- 主面板展示当前任务、项目、模型、推理强度、持续时间和已记录 Token
+- 菜单栏状态点区分运行中、等待回应和刚完成任务
+- 主面板展示当前任务、项目、模型、推理强度、持续时间和已记录 Token；有记录时补充执行阶段、计划进度和子任务状态
 - 任务中心集中查看并发任务、最近完成和最近终止记录
-- 支持任务完成、等待批准和异常会话提醒
+- 支持任务完成、等待回应和异常会话提醒
 - 可选任务流光，提示本机和远程 Codex、Claude 的任务状态，可调整颜色、速度、亮度和结束时长
 
 ### 让长任务安心运行
@@ -77,7 +77,8 @@ CodexBar 是面向 macOS 15 及更高版本的菜单栏 App，集中展示 Codex
 - 作为菜单栏 App 运行，不占用 Dock
 - 支持全局快捷键、开机启动和自动更新
 - 原主面板支持中英文，新增用量中心以中文为主
-- 支持为 Codex 服务配置 HTTP/HTTPS 代理
+- 复用每台机器的官方 Codex 共享后台，连接与代理设置沿用 Codex
+- 可查看官方 Codex 服务状态，隐藏面板或睡眠时暂停状态查询
 - 系统睡眠时暂停 Mac 的周期刷新，正式唤醒后恢复；VPS 采集独立运行
 
 ## 安装
@@ -101,9 +102,8 @@ bash Scripts/build-local.sh
 ## 运行要求
 
 - macOS 15.0 或更高版本
-- 已安装并登录 [Codex CLI](https://github.com/openai/codex) 或安装了内置 Codex 的 ChatGPT App 或 Codex App
-- 当前运行的 Codex 版本需要为 `0.145.0` 或更高版本
-- 使用实时任务等 Hook 功能时，当前运行的 Codex 版本需要为 `0.150.0` 或更高版本
+- 已安装并登录 [Codex CLI](https://github.com/openai/codex)，共享后台实际运行版本为 `0.162.0` 或更高版本
+- SSH 设备的 Codex 实时采集采用相同版本要求；Claude 继续使用本地日志和被动 Hook
 - 采集本机或远程日志需要 Python 3.9 或更高版本，无需额外 Python 包
 - Claude 统计需要可读取的会话日志；5h/7d 额度取决于客户端是否留下相应记录
 
@@ -113,7 +113,7 @@ bash Scripts/build-local.sh
 2. 左键点击图标，在 `全部 / Codex / Claude` 中查看额度与热力图
 3. 右键或按住 Control 点击图标打开设置、日志或退出菜单
 4. 点击 `用量详情` 添加 SSH 来源；在订阅价值卡片中选择已确认同账号的设备日志来源
-5. 需要实时任务时，在 `设置 > 高级` 中启用 CodexBar Hook
+5. 本机 Codex 自动连接共享后台；远端 Codex 和 Claude 在来源的 `实时任务` 中接入
 
 默认全局快捷键为 `⌘⇧W`，可在设置中重新录制或关闭。
 
@@ -121,7 +121,7 @@ bash Scripts/build-local.sh
 
 | 文档 | 内容 |
 | --- | --- |
-| [用户指南](Docs/UserGuide/README.md) | 安装、主面板、Hook、通知、防睡眠、同步、全部设置和问题排查 |
+| [用户指南](Docs/UserGuide/README.md) | 安装、主面板、实时任务、通知、防睡眠、同步、全部设置和问题排查 |
 | [开发者指南](Docs/DeveloperGuide/README.md) | 架构、数据链路、核心状态机、存储、隐私边界和开发验证 |
 | [多机器用量中心](Docs/UserGuide/usage-center.md) | SSH、Claude 被动额度、价值估算与统计边界 |
 | [Linux 采集端](Collector/README.md) | 定时任务、Docker 与 HTTPS 部署 |
@@ -131,7 +131,7 @@ bash Scripts/build-local.sh
 
 会话日志在各设备解析，只同步经过筛选的统计元数据，不传输对话正文、工具参数或登录 Token。Claude 采集器不主动请求 Anthropic；Codex 账户额度和官网分析使用本机登录访问官方服务。
 
-本 fork 已移除 iCloud，同步使用所配置的 SSH/HTTPS 来源，更新检查使用独立 Sparkle 更新源。Token、额度比例和美元估算是不同口径，普通网页 Chat 对话不计入这些统计。
+本 fork 已移除 iCloud，同步使用所配置的 SSH/HTTPS 来源，更新检查使用独立 Sparkle 更新源。服务状态查询仅访问 OpenAI 公开状态页，不携带账户凭据。Token、额度比例和美元估算是不同口径，普通网页 Chat 对话不计入这些统计。
 
 完整的数据访问、本机存储和网络边界见 [数据、同步与隐私](Docs/UserGuide/sync-data-privacy.md)
 

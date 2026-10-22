@@ -22,9 +22,9 @@ Daily builds do not need Developer ID or notarization credentials. See [AGENTS.m
 
 | Feature | Main location | Implementation guide |
 | --- | --- | --- |
-| app-server, proxy, Automatic Reset | `Services/CodexStatus` and corresponding Settings | [app-server Data Flow](app-server.md) |
-| Hook installation and statistics | `CodexHookSettings`, `WorkflowService`, aggregate models | [Hook Collection and Aggregation](hook-and-aggregation.md) |
-| Live tasks and protection | `CodexActivityMonitor` and readers | [Live Task Monitoring](activity-monitor.md) |
+| Shared app-server and Automatic Reset | `Services/CodexStatus` and corresponding Settings | [app-server Data Flow](app-server.md) |
+| Historical Hook statistics | `CodexHookSettings`, `WorkflowService`, aggregate models | [Hook Collection and Aggregation](hook-and-aggregation.md) |
+| Live tasks and protection | `SharedCodexCollector.py`, `RemoteActivityController` and `CodexActivityMonitor` | [Live Task Monitoring](activity-monitor.md) |
 | Sleep prevention and system wakes | `KeepAliveController`, `AutoResetWakeScheduler`, helper | [Sleep Prevention](sleep-prevention.md) |
 | Notifications and sound | `CodexNotificationService`, notification Settings | [Notifications](notifications.md) |
 | Sync | `UsageCollectorClient` and local maintenance | [Multi-device statistics](sync.md) |
@@ -94,7 +94,7 @@ Release system logs:
 
 Debug uses `io.github.yatotm.codexbar.debug`; the helper subsystem uses its corresponding bundle ID.
 
-The app’s Logs window retains the latest 500 app-server interactions. Proxy configuration errors use the system-log `settings` category; temporary proxy tests do not write interaction logs.
+The app’s Logs window retains the latest 500 app-server interactions. JSON preview formatting and layout run in the background; canceled previews cannot commit stale content.
 
 | Problem | Inspect |
 | --- | --- |
@@ -128,3 +128,5 @@ Use bash Scripts/build-local.sh for the independent Debug build and bash Scripts
 ## Issue notifications
 
 The Issue notification workflow sends new issues and comments from other users to Bark, excluding pull requests and events from the configured owner. Set the `BARK_TOKEN` repository secret to the device key. Optional secrets are `BARK_SERVER_URL` (defaults to `https://api.day.app`) and `BARK_ICON_URL`. `SELF_LOGIN` is an optional repository variable for the ignored account. Missing credentials skip delivery. The title and issue link are sent over HTTPS POST; device keys are not printed or placed in URLs. No Mac background service is involved.
+
+Shared-protocol tests use `python3 -B -m unittest discover -s Tests -p 'test_shared_codex_collector.py'`; isolated Helper tests use `bash Scripts/test-helper.sh`. Tests must not invoke real models, change system power or consume actual reset credits.

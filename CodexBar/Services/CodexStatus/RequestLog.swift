@@ -56,6 +56,7 @@ final nonisolated class RequestLogStorage: Sendable {
 
     /// 环形上限避免长时间运行后日志无限增长
     private static let capacity = 500
+    private static let maximumPayloadBytes = 128 * 1024
 
     /// 最新在前, 既方便渲染也让刚发出的请求更快被回填
     private let storage = OSAllocatedUnfairLock(initialState: [RequestLogEntry]())
@@ -64,7 +65,7 @@ final nonisolated class RequestLogStorage: Sendable {
         storage.withLock { $0 }
     }
 
-    private init() {}
+    init() {}
 
     /// payload 由 AppServerSession 用相同的稳定序列化选项生成, 无需再做一轮归一化
     func beginRequest(method: String, payload: String) -> UUID {
@@ -76,7 +77,7 @@ final nonisolated class RequestLogStorage: Sendable {
                 respondedAt: nil,
                 kind: .pending,
                 method: method,
-                request: payload,
+                request: Self.bounded(payload),
                 detail: nil
             )
         )
@@ -84,17 +85,19 @@ final nonisolated class RequestLogStorage: Sendable {
     }
 
     func finishRequest(_ id: UUID, response: String) {
+        let detail = Self.normalized(response)
         update(id) { entry in
             entry.kind = .response
-            entry.detail = Self.normalized(response)
+            entry.detail = detail
             entry.respondedAt = Date()
         }
     }
 
     func failRequest(_ id: UUID, message: String) {
+        let detail = Self.normalized(message)
         update(id) { entry in
             entry.kind = .failure
-            entry.detail = Self.normalized(message)
+            entry.detail = detail
             entry.respondedAt = Date()
         }
     }
@@ -107,7 +110,7 @@ final nonisolated class RequestLogStorage: Sendable {
                 respondedAt: nil,
                 kind: .emptyResponse,
                 method: method,
-                request: payload,
+                request: Self.bounded(payload),
                 detail: ""
             )
         )
@@ -171,7 +174,20 @@ final nonisolated class RequestLogStorage: Sendable {
     /// 合法 JSON 重新序列化为稳定, 未转义斜杠的日志文本
     /// 非 JSON 错误消息保持原样
     private static func normalized(_ text: String) -> String {
-        jsonNormalized(text) ?? text
+        guard text.utf8.count <= maximumPayloadBytes else { return bounded(text) }
+        return bounded(jsonNormalized(text) ?? text)
+    }
+
+    private static func bounded(_ text: String) -> String {
+        guard text.utf8.count > maximumPayloadBytes else { return text }
+        var bytes = text.utf8.prefix(maximumPayloadBytes)
+        for _ in 0 ... 3 {
+            if let prefix = String(bytes: bytes, encoding: .utf8) {
+                return prefix + "\n… [日志内容已截断]"
+            }
+            bytes = bytes.dropLast()
+        }
+        return "[日志内容已截断]"
     }
 
     private static func jsonNormalized(_ text: String) -> String? {

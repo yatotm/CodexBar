@@ -29,7 +29,6 @@ struct MainPanelLayoutSettingsRow: View {
 /// 主面板布局子选项, 拖放调整区域顺序并控制显隐
 struct MainPanelOptionsView: View {
     @ObservedObject var settings: MainPanelSettings
-    @ObservedObject var codexHookSettings: CodexHookSettings
     let undoManager: UndoManager
     @State private var dragState: SectionDragState?
     @State private var dragTranslation: CGFloat = 0
@@ -88,7 +87,7 @@ struct MainPanelOptionsView: View {
         let isAvailable = section != .activity || settings.hasActivitySource
         let isVisible = isAvailable && settings.layout.isVisible(section)
         let visibleSectionCount = settings.layout.visibleSections.filter { visibleSection in
-            visibleSection != .activity || codexHookSettings.isEnabled
+            visibleSection != .activity || settings.hasActivitySource
         }.count
         let canToggle = isAvailable && (!isVisible || visibleSectionCount > 1)
 
@@ -114,7 +113,7 @@ struct MainPanelOptionsView: View {
                 section.title,
                 isOn: Binding(
                     get: {
-                        (section != .activity || codexHookSettings.isEnabled)
+                        (section != .activity || settings.hasActivitySource)
                             && settings.layout.isVisible(section)
                     },
                     set: {
@@ -133,7 +132,7 @@ struct MainPanelOptionsView: View {
         }
         .frame(height: Metrics.rowHeight)
         .padding(.horizontal, Metrics.rowHorizontalPadding)
-        .help(isAvailable ? "" : String(localized: "settings.main-panel.activity.requires-hook"))
+        .help(isAvailable ? "" : String(localized: "settings.main-panel.activity.requires-source"))
     }
 
     private var displayedSections: [MainPanelSection] {
@@ -269,6 +268,8 @@ private extension MainPanelSection {
             "settings.main-panel.section.usage"
         case .status:
             "settings.main-panel.section.status"
+        case .serviceStatus:
+            "settings.main-panel.section.service-status"
         }
     }
 
@@ -284,6 +285,8 @@ private extension MainPanelSection {
             "chart.bar.xaxis"
         case .status:
             "clock"
+        case .serviceStatus:
+            "waveform.path.ecg"
         }
     }
 }

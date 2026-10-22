@@ -103,16 +103,28 @@ struct UsageCommandSmoke {
             let done = RemoteActivityTask(id: id, provider: provider, state: "completed", project: "p", updatedAt: 20, startedAt: 1, modelName: "m")
             let frame = RemoteActivityFrame(schema: 1, epoch: String(repeating: "a", count: 32), revision: 2, sentAt: 21, tasks: [done])
             precondition(RemoteActivityController.liveTerminals(previous: [previous], frame: frame, wasConnected: true).count == 1)
+            precondition(RemoteActivityController.liveTransitions(previous: [previous], frame: frame, wasConnected: true).count == 1)
+            precondition(RemoteActivityController.liveTransitions(previous: [done], frame: frame, wasConnected: true).isEmpty, "同一终态只通知一次")
             var recovered = done
             recovered.isHistoricalTerminal = true
             let replay = RemoteActivityFrame(schema: 1, epoch: frame.epoch, revision: 3, sentAt: 21, tasks: [recovered])
             precondition(RemoteActivityController.liveTerminals(previous: [previous], frame: replay, wasConnected: true).isEmpty, "历史回补不应重播流光")
+            precondition(RemoteActivityController.liveTransitions(previous: [previous], frame: replay, wasConnected: true).isEmpty, "历史回补不应重播通知")
             precondition(RemoteActivityController.liveTerminals(previous: [previous], frame: frame, wasConnected: false).isEmpty, "重连不得重播终态流光")
+            precondition(RemoteActivityController.liveTransitions(previous: [previous], frame: frame, wasConnected: false).isEmpty, "重连不得重播通知")
             let stale = RemoteActivityFrame(schema: 1, epoch: frame.epoch, revision: 3, sentAt: 100, tasks: [done])
             precondition(RemoteActivityController.liveTerminals(previous: [previous], frame: stale, wasConnected: true).isEmpty, "过期终态不得再次提示")
+            precondition(RemoteActivityController.liveTransitions(previous: [previous], frame: stale, wasConnected: true).isEmpty, "过期终态不得再次通知")
             let otherTurn = RemoteActivityTask(id: id, provider: provider, state: "completed", project: "p", updatedAt: 20, startedAt: 15, modelName: "m")
             let changed = RemoteActivityFrame(schema: 1, epoch: frame.epoch, revision: 3, sentAt: 21, tasks: [otherTurn])
             precondition(RemoteActivityController.liveTerminals(previous: [previous], frame: changed, wasConnected: true).isEmpty, "新轮次不得借用旧轮次的实时资格")
+            precondition(RemoteActivityController.liveTransitions(previous: [previous], frame: changed, wasConnected: true).isEmpty, "新轮次不得借用旧轮次的通知资格")
+            let oldWait = RemoteActivityFrame(schema: 1, epoch: frame.epoch, revision: 3, sentAt: 21, tasks: [waiting])
+            precondition(RemoteActivityController.liveTransitions(previous: [previous], frame: oldWait, wasConnected: true).isEmpty, "等待通知按状态变化时间判断新鲜度")
+            var freshWait = waiting
+            freshWait.stateChangedAt = 20
+            let waitingFrame = RemoteActivityFrame(schema: 1, epoch: frame.epoch, revision: 3, sentAt: 21, tasks: [freshWait])
+            precondition(RemoteActivityController.liveTransitions(previous: [previous], frame: waitingFrame, wasConnected: true).count == 1)
         }
     }
 

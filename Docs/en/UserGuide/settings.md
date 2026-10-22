@@ -8,18 +8,20 @@ Right-click or Control-click the menu bar icon and choose `Settings`, or press `
 
 | Setting | Purpose | Default or initial state |
 | --- | --- | --- |
-| Main Panel Layout | Reorder and show or hide Account, Tasks, Quota, Usage, and Status | All visible; Tasks is off when Hook is disabled |
+| Main Panel Layout | Reorder Account, Tasks, Quota, Usage, Update Time, and Codex Service Status | Visible by default; Tasks requires a configured source |
 | Animation Effects | Animate quota bars and the heatmap when opening the panel | On |
 | Launch at Login | Start CodexBar when you sign in to your Mac | Follows the system login-item state |
 | Automatically Check for Updates | Periodically check for CodexBar updates | Follows the current update setting |
 | Menu Bar Quota Indicator | Show the remaining Codex weekly allowance | 7d |
 | Global Shortcut | Toggle the main panel from any app | `⌘⇧W` |
 
+If Launch at Login needs system approval, its row shows the pending state. Use Open System Settings to approve it; returning to the app refreshes the result.
+
 ### Main Panel Layout
 
-Click the options button to drag sections into order or toggle visibility, keeping at least one section visible. Use `⌘Z` to undo and `⌘⇧Z` to redo. Hiding a section does not stop its features.
+Click the options button to drag sections into order or toggle visibility, keeping at least one section visible. Use `⌘Z` to undo and `⌘⇧Z` to redo. Hiding a section normally leaves collection running. Public service status is checked only while its section and the panel are visible.
 
-Disabling Hook turns off Tasks; enable it manually after re-enabling Hook. If Tasks was the only visible section, Account is enabled automatically.
+Task availability follows configured shared-service, Claude, or remote sources. Temporary disconnection does not rewrite the layout. Without a source, Tasks is hidden; Account remains available if Tasks was the only visible section.
 
 ### Task Glow
 
@@ -50,9 +52,8 @@ A shortcut needs at least two modifier keys and cannot use `Command-Space` or `C
 
 | Setting | Purpose | Default |
 | --- | --- | --- |
-| Proxy | Configure the proxy for CodexBar’s Codex service connection | Off |
+| Shared Codex Service | Reuse the local official service; requires `0.162.0+` | Connect automatically |
 | Codex quota refresh | Poll account quota every 1, 2, 3, 5, or 10 minutes | 1 minute |
-| [CodexBar Hook](activity-and-hook.md) | Enable live tasks and daily activity statistics | Off if not installed |
 | [System Notifications](notifications.md) | Configure notification types, thresholds, sounds, and haptics | Main switch off |
 | Automatic Reset | Use banked resets shortly before expiration | Off, 30-minute lead time |
 | [Prevent System Sleep](sleep-prevention.md) | Choose Off, Manual, or Follow Tasks | Off |
@@ -60,21 +61,11 @@ A shortcut needs at least two modifier keys and cannot use `Command-Space` or `C
 
 ### Codex Quota Refresh
 
-The interval only reschedules account polling. It preserves in-flight requests, device collection, live tasks, and value-estimate schedules. Local Hook maintenance keeps its one-minute cadence and follows the existing sleep and display gate.
+The interval only reschedules account polling. It preserves in-flight requests, device collection, live tasks, and value-estimate schedules. Legacy history maintenance keeps its own schedule. Visible public service status follows the quota refresh cycle without another timer. Sleep and display gating still applies.
 
 ### Proxy
 
-Click the setting row and enter a server address and port. HTTP, HTTPS, hostnames, IPv4, and IPv6 are supported; ports must be within `1–65535`. Authentication requires a username; the password may be empty.
-
-An HTTP proxy can forward HTTPS requests. Select HTTPS only if the proxy port itself supports TLS with a valid certificate.
-
-- `Test Connection` checks unsaved settings and can be canceled; it does not save or enable the proxy
-- `Save` applies the configuration; after the first save, enable the switch on the setting row
-- `Cancel` discards this edit
-- `⋯ > Delete Configuration` removes the configuration and password and disables the proxy, even if the saved configuration is damaged
-- Turning off the row’s switch retains the configuration for later use
-
-Passwords are hidden until you hover over the field. The proxy affects only CodexBar’s Codex service connection, and its password is stored locally in plain text. See [Data, Sync, and Privacy](sync-data-privacy.md).
+Connection and proxy settings follow the official Codex service. The app-specific proxy switch has been removed; configure Codex itself when needed. CodexBar does not replace a running service. Legacy proxy preferences are retained for rollback but are not used by the new connection.
 
 ### Automatic Reset
 
@@ -95,13 +86,14 @@ Automatic Reset runs independently of notifications. Configure result alerts in 
 
 | Item | Action or meaning |
 | --- | --- |
-| Source | Automatic selection prefers Codex CLI, then Codex bundled with ChatGPT App or Codex App; manual selection is also available |
-| Reconnect | Reconnect using the selected source; use after upgrading Codex to switch immediately to the new version |
-| Codex CLI / Codex APP | View detected versions; click a path to copy it |
-| Currently Using | Source and version used by the current connection |
-| Unavailable | A previously used or selected source can no longer be found |
-| CodexBar Version / Check for Updates | View the version and check for updates |
-| GitHub Project | Open the project page |
+| Source | Used only to start a missing service; Automatic prefers the global CLI, then an App-bundled version |
+| Reconnect | Reconnect only the CodexBar client, without restarting the shared service or tasks |
+| Shared Service | Show the negotiated running version and connection status; click the socket path to copy |
+| Codex CLI / Codex App | Show each installation's disk version; click its path to copy |
+| CodexBar Version / Check for Updates | Check for updates, or install and relaunch when an update is ready |
+| Release Notes | Open the current fork version's GitHub Release |
+| OpenAI Service Status | Open the public official status page |
+| GitHub Project | Open this fork's project page |
 | Quit CodexBar | Exit the app |
 
 Source selection is temporarily disabled while connecting. Connection failure reasons appear below the version area to help you troubleshoot or choose another source.
@@ -111,10 +103,3 @@ Back to the [User Guide](README.md).
 ## Fork behavior
 
 Usage Details opens separate source, refresh, account-history, and valuation controls. The GitHub link opens yatotm/CodexBar. Release updates use this fork’s feed; Debug builds do not use that channel.
-
-## Task glow
-
-Task glow is optional and off by default. Enable it in Settings > General to show running, approval, completion and termination feedback along the top of each display. It uses combined Codex and Claude activity from local and enabled remote sources, independently of the panel tab. A single preview plays when enabled. The overlay is removed during system sleep, display sleep and user-session switching.
-
-
-Double-click a task-glow color swatch to preview that state. Closing the appearance panel restores live activity. Real completion hints keep their remaining display time while a preview is playing. Data rebuild results now appear in a dialog after the operation finishes.

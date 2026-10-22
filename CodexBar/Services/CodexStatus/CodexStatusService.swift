@@ -135,10 +135,10 @@ private nonisolated extension ReadResult {
     }
 }
 
-/// 维持一条 codex app-server stdio 会话, 复用失败后按需重建
+/// 维持共享后台的账户连接, 仅重建自己的 socket, 不拥有 daemon 进程
 actor CodexStatusService {
     private static let requestTimeout: TimeInterval = 20
-    // 定期回收连接, 让后台升级后的 codex 二进制有机会生效
+    // 定期刷新客户端会话, 共享后台升级和进程寿命由 Codex 管理
     private static let connectionMaxAge: TimeInterval = 1 * 60 * 60
     private static let environment = CodexCLIResolver.environment
 
@@ -146,44 +146,41 @@ actor CodexStatusService {
     private var supplementalDataCache = SupplementalDataCache()
     private var lastResolvedSource: CodexCLIExecutableSource?
     private let defaults: UserDefaults
+    private let socketURL: URL?
     private var sourceSelection: CodexCLISourceSelection
 
-    /// app-server 退出后继续写管道会触发 SIGPIPE
+    /// 兼容现有 CLI 版本检测与其他本地进程的管道写入
     /// 忽略信号, 让 write 抛错后走重建
     private static let ignoreBrokenPipeSignal: Void = {
         signal(SIGPIPE, SIG_IGN)
     }()
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, socketURL: URL? = nil) {
         self.defaults = defaults
+        self.socketURL = socketURL
         sourceSelection = CodexCLISourceSelection.load(from: defaults)
         _ = Self.ignoreBrokenPipeSignal
     }
 
     func applyProxy(_ configuration: CodexProxyConfiguration?, password: String) throws {
         try CodexProxyStore.save(configuration, password: password, to: defaults)
-        // actor 内提交设置并回收旧进程, 后续所有业务入口统一按新配置建立连接
+        // actor 内提交设置并回收旧连接, 后续所有业务入口统一按新配置建立连接
         teardownConnection()
         supplementalDataCache = SupplementalDataCache()
     }
 
-    private func openConfiguredConnection(command: AppServerCommand) throws -> ConnectionResolution {
-        let stored = try CodexProxyStore.load(from: defaults)
-        let configuration = stored?.configuration
-        let usesCustomProxy = configuration?.isEnabled == true
-        let environment: [String: String] = if let configuration, usesCustomProxy {
-            try configuration.environment(
-                overriding: Self.environment,
-                password: stored?.password ?? ""
-            )
-        } else {
-            Self.environment
+    private func openConfiguredConnection(command: AppServerCommand?) throws -> ConnectionResolution {
+        if let socketURL {
+            // 指定端点只负责连接, 隔离测试和外部调用都不能借此启动用户的后台
+            let session = try AppServerSession(socketURL: socketURL, timeout: Self.requestTimeout)
+            return Self.initializeConnection(session: session, command: command, openedAt: Date())
         }
+        // 旧代理偏好保留以便回退, 共享服务的网络设置只能由 Codex 自身管理
         return Self.openConnection(
             command: command,
-            environment: environment,
+            environment: Self.environment,
             timeout: Self.requestTimeout,
-            usesCustomProxy: usesCustomProxy
+            usesCustomProxy: false
         )
     }
 
@@ -196,7 +193,7 @@ actor CodexStatusService {
     }
 
     func currentConnectionInfo() async -> CodexCLIConnectionInfo? {
-        guard let connection, connection.session.process.isRunning else {
+        guard let connection, connection.session.isOpen else {
             return nil
         }
 
@@ -220,10 +217,7 @@ actor CodexStatusService {
         teardownConnection()
         supplementalDataCache = SupplementalDataCache()
         let requestedSelection = selection ?? sourceSelection
-        let command = try CodexCLIResolver.command(
-            from: CodexCLIResolver.resolveInstallations(environment: Self.environment),
-            source: requestedSelection.source
-        )
+        let command = resolveLauncher(selection: requestedSelection)
         let resolution = try openConfiguredConnection(command: command)
         switch resolution {
         case let .ready(candidate, _):
@@ -236,8 +230,9 @@ actor CodexStatusService {
             connection = candidate
             sourceSelection = requestedSelection
             sourceSelection.save(to: defaults)
-            lastResolvedSource = command.source
-            AppLog.codexCLI.notice("Codex 连接已切换: source=\(command.source.rawValue, privacy: .public)")
+            lastResolvedSource = command?.source
+            let source = command?.source.rawValue ?? "shared"
+            AppLog.codexCLI.notice("Codex 连接已切换: source=\(source, privacy: .public)")
             return candidate.commandInfo
         case .notLoggedIn:
             throw CodexStatusError.notLoggedIn
@@ -280,9 +275,11 @@ actor CodexStatusService {
     }
 
     /// 自动重置前必须绕过补充数据缓存读取一份新凭证明细
-    func readCreditsForAutoReset() throws -> AutoResetRead {
-        try withAutoResetConnection { connection in
-            try readCreditsForAutoReset(using: connection)
+    func readCreditsForAutoReset(budget: AppServerRequestBudget) throws -> AutoResetRead {
+        try AppServerRequestBudget.$current.withValue(budget) {
+            try withAutoResetConnection { connection in
+                try readCreditsForAutoReset(using: connection)
+            }
         }
     }
 
@@ -290,39 +287,46 @@ actor CodexStatusService {
     func consumeResetCredit(
         id creditID: String,
         idempotencyKey: String,
-        expectedAccountIdentity: String
+        expectedAccountIdentity: String,
+        expirationDate: Date,
+        budget: AppServerRequestBudget
     ) throws -> ResetCreditConsumeResult {
-        let response: ResetCreditConsumeResponse = try withAutoResetConnection { connection in
-            let accountResponse = try connection.session.request(
-                "account/read",
-                params: ["refreshToken": false],
-                as: AccountReadResponse.self
-            )
-            guard let account = accountResponse.account else {
-                throw CodexStatusError.notLoggedIn
-            }
-            guard AutoResetIdentity.accountIdentity(for: account) == expectedAccountIdentity else {
-                throw AutoResetServiceError.accountChanged
+        let cutoff = AutoResetSchedule.cutoff(for: expirationDate)
+        return try AppServerRequestBudget.$current.withValue(budget.constrained(to: cutoff)) {
+            let response: ResetCreditConsumeResponse = try withAutoResetConnection { connection in
+                let accountResponse = try connection.session.request(
+                    "account/read",
+                    params: ["refreshToken": false],
+                    as: AccountReadResponse.self
+                )
+                guard let account = accountResponse.account else {
+                    throw CodexStatusError.notLoggedIn
+                }
+                guard AutoResetIdentity.accountIdentity(for: account) == expectedAccountIdentity else {
+                    throw AutoResetServiceError.accountChanged
+                }
+
+                connection.accountResponse = accountResponse
+                try AppServerRequestBudget.checkCurrent()
+                guard Date() < cutoff else { throw CodexStatusError.serverTimeout }
+                return try connection.session.request(
+                    "account/rateLimitResetCredit/consume",
+                    params: [
+                        "creditId": creditID,
+                        "idempotencyKey": idempotencyKey
+                    ],
+                    as: ResetCreditConsumeResponse.self
+                )
             }
 
-            connection.accountResponse = accountResponse
-            return try connection.session.request(
-                "account/rateLimitResetCredit/consume",
-                params: [
-                    "creditId": creditID,
-                    "idempotencyKey": idempotencyKey
-                ],
-                as: ResetCreditConsumeResponse.self
+            // 消费结果已经确定时刷新失败不能覆盖结果
+            // 控制器仍会触发完整额度刷新, 这里先满足协议要求并尽快取得剩余次数
+            let refreshedRead = try? readCreditsForAutoReset(budget: budget)
+            return ResetCreditConsumeResult(
+                outcome: response.outcome,
+                refreshedRead: refreshedRead
             )
         }
-
-        // 消费结果已经确定时刷新失败不能覆盖结果
-        // 控制器仍会触发完整额度刷新, 这里先满足协议要求并尽快取得剩余次数
-        let refreshedRead = try? readCreditsForAutoReset()
-        return ResetCreditConsumeResult(
-            outcome: response.outcome,
-            refreshedRead: refreshedRead
-        )
     }
 
     /// 复用连接出现传输故障时只重建重试一次
@@ -371,7 +375,10 @@ actor CodexStatusService {
     // MARK: - 连接复用与重建
 
     private func readyConnection() throws -> AppServerConnection {
-        switch ensureConnection() {
+        try AppServerRequestBudget.checkCurrent()
+        let resolution = ensureConnection()
+        try AppServerRequestBudget.checkCurrent()
+        switch resolution {
         case let .ready(connection, _):
             return connection
         case .notLoggedIn:
@@ -391,6 +398,7 @@ actor CodexStatusService {
         var canRebuild = true
 
         while true {
+            try AppServerRequestBudget.checkCurrent()
             let activeConnection = try readyConnection()
 
             do {
@@ -430,7 +438,7 @@ actor CodexStatusService {
     }
 
     private func ensureConnection() -> ConnectionResolution {
-        if let connection, connection.session.process.isRunning,
+        if let connection, connection.session.isOpen,
            Date().timeIntervalSince(connection.openedAt) < Self.connectionMaxAge {
             return .ready(connection: connection, reused: true)
         }
@@ -438,34 +446,16 @@ actor CodexStatusService {
         // 只记失效这个事实: 下面还可能解析不到 codex 或者开不起来
         // 收尾由额度刷新那条的 conn=new 承载, 不必在这里再记一条
         if let connection {
-            let reason = connection.session.process.isRunning ? "expired" : "processExited"
+            let reason = connection.session.isOpen ? "expired" : "connectionClosed"
             AppLog.app.notice("codex 连接已失效: reason=\(reason, privacy: .public)")
         }
         teardownConnection()
 
-        let command: AppServerCommand
-        do {
-            command = try CodexCLIResolver.command(
-                from: CodexCLIResolver.resolveInstallations(environment: Self.environment),
-                source: sourceSelection.source
-            )
-        } catch {
-            let details = LogFields.joined(
-                "stage=resolveCLI",
-                "detail=\(error.localizedDescription)"
-            )
-            AppLog.app.error("codex 连接失败: \(details, privacy: .public)")
-            RequestLogStorage.shared.recordFailure(message: error.localizedDescription)
-            return .initializationFailed(message: error.localizedDescription)
-        }
-
-        // 可执行文件路径含用户名, 只记来源分类
-        // 每次新建连接都重新解析, 换了来源才值得记一条
-        if lastResolvedSource != command.source {
+        let command = resolveLauncher(selection: sourceSelection)
+        // 只把启动器来源记入日志, 已存在的共享后台不依赖磁盘上的 CLI
+        if let command, lastResolvedSource != command.source {
             lastResolvedSource = command.source
-            AppLog.codexCLI.notice(
-                "codex 路径已解析: source=\(command.source.rawValue, privacy: .public)"
-            )
+            AppLog.codexCLI.notice("codex 路径已解析: source=\(command.source.rawValue, privacy: .public)")
         }
 
         let resolution: ConnectionResolution
@@ -489,6 +479,14 @@ actor CodexStatusService {
             break
         }
         return resolution
+    }
+
+    private func resolveLauncher(selection: CodexCLISourceSelection) -> AppServerCommand? {
+        guard socketURL == nil else { return nil }
+        return try? CodexCLIResolver.command(
+            from: CodexCLIResolver.resolveInstallations(environment: Self.environment),
+            source: selection.source
+        )
     }
 
     private func teardownConnection() {
@@ -730,9 +728,9 @@ actor CodexStatusService {
         }
     }
 
-    /// 初始化失败与未登录在这里分流; 两者都不复用本次新建的进程
+    /// 初始化失败与未登录在这里分流, 两者都关闭本次客户端连接
     private static func openConnection(
-        command: AppServerCommand,
+        command: AppServerCommand?,
         environment: [String: String],
         timeout: TimeInterval,
         usesCustomProxy: Bool
@@ -765,16 +763,17 @@ actor CodexStatusService {
 
     private static func initializeConnection(
         session: AppServerSession,
-        command: AppServerCommand,
+        command: AppServerCommand?,
         openedAt: Date
     ) -> ConnectionResolution {
         do {
             let initialized = try session.initializeAccount()
             let commandInfo = CodexCLIConnectionInfo(
-                source: command.source,
-                executablePath: command.executablePath,
+                source: command?.source ?? .global,
+                executablePath: command?.executablePath ?? "",
                 version: initialized.version,
-                openedAt: openedAt
+                openedAt: openedAt,
+                socketPath: session.socketURL.path
             )
 
             return .ready(
@@ -805,7 +804,7 @@ actor CodexStatusService {
     }
 }
 
-/// 持有 stdio 会话及初始化阶段读取到的账号/版本信息
+/// 持有客户端 socket 及初始化阶段读取到的账号和后台版本信息
 private final nonisolated class AppServerConnection {
     let session: AppServerSession
     let commandInfo: CodexCLIConnectionInfo

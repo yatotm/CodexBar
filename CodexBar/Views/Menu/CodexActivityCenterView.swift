@@ -132,8 +132,10 @@ struct CodexActivityCenterView: View {
                                     symbolName: "questionmark.circle",
                                     tint: .secondary,
                                     projectName: task.projectName,
-                                    modelName: task.modelName,
-                                    effort: task.effort,
+                                    modelName: CodexActivityDisplayFormat.modelMetadata(
+                                        modelName: task.modelName, effort: task.effort, machineName: task.machineName
+                                    ),
+                                    effort: nil,
                                     isAnonymous: task.isAnonymous,
                                     detail: "等待重新确认任务状态"
                                 )
@@ -145,7 +147,10 @@ struct CodexActivityCenterView: View {
                         terminationSection(now: now)
                     }
                 }
-                .animation(.codexStatus, value: activityPresentation.snapshot)
+                .animation(.codexStatus, value: activityPresentation.snapshot.waitingTasks.map(\.id))
+                .animation(.codexStatus, value: activityPresentation.snapshot.runningTasks.map(\.id))
+                .animation(.codexStatus, value: activityPresentation.snapshot.recentCompletions.map(\.id))
+                .animation(.codexStatus, value: activityPresentation.snapshot.recentTerminations.map(\.id))
                 .padding(.horizontal, Metrics.horizontalPadding)
                 .padding(.vertical, Metrics.verticalPadding)
             }
@@ -279,6 +284,7 @@ struct CodexActivityCenterView: View {
             detail: taskDetail(task, now: now, isWaiting: isWaiting),
             tokenUsage: task.tokenUsage
         )
+        .help(CodexActivityTaskDetails.help(for: task, now: now, isWaiting: isWaiting))
     }
 
     private func completionRow(_ completion: CodexActivityCompletion, now: Date) -> some View {
@@ -397,9 +403,7 @@ struct CodexActivityCenterView: View {
         now: Date,
         isWaiting: Bool
     ) -> String {
-        let components = isWaiting
-            ? CodexActivityDisplayFormat.waitingDetailComponents(for: task, now: now)
-            : CodexActivityDisplayFormat.runningDetailComponents(for: task, now: now)
+        let components = CodexActivityTaskDetails.components(for: task, now: now, isWaiting: isWaiting)
         return components.joined(separator: " • ")
     }
 
@@ -425,8 +429,8 @@ struct CodexActivityCenterView: View {
         static let titleLineHeight: CGFloat = 16
         static let cornerRadius: CGFloat = 12
         static let contentTransition = AnyTransition.asymmetric(
-            insertion: .opacity.combined(with: .scale(scale: 0.98, anchor: .top)),
-            removal: .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
+            insertion: .opacity,
+            removal: .identity
         )
     }
 }

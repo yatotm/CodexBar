@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 /// 设置窗口根视图, 按通用; 工作流和关于分页汇总设置与版本信息
@@ -7,14 +8,11 @@ struct AppSettingsView: View {
     @EnvironmentObject private var appUpdater: AppUpdater
     @StateObject private var loginItemSettings = LoginItemSettings()
     @StateObject private var codexVersions = CodexCLIVersionViewModel()
-    @ObservedObject var proxySettings: CodexProxySettings
-    @State private var isShowingProxySettings = false
-    @ObservedObject var codexHookSettings: CodexHookSettings
+    let codexHookSettings: CodexHookSettings
     @ObservedObject var globalHotKeySettings: GlobalHotKeySettings
     @ObservedObject var menuBarQuotaSettings: MenuBarQuotaSettings
     @ObservedObject var mainPanelSettings: MainPanelSettings
     @ObservedObject var taskGlowSettings: TaskGlowSettings
-    let activityPresentation: ActivityPresentationModel
     @ObservedObject var notificationSettings: NotificationSettings
     @ObservedObject var autoResetSettings: AutoResetSettings
     @ObservedObject var keepAliveController: KeepAliveController
@@ -33,7 +31,7 @@ struct AppSettingsView: View {
     @State private var rebuildResult: RebuildResult?
     @State private var helperFeatureConfirmation: HelperFeatureConfirmation?
     @State private var pendingKeepAliveMode: KeepAliveController.Mode?
-    @State private var needsTaskHook = false
+    @State private var needsTaskSource = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -75,11 +73,6 @@ struct AppSettingsView: View {
             ),
             isOuterSurface: true
         )
-        .sheet(isPresented: $isShowingProxySettings) {
-            ProxySettingsView(source: statusViewModel.codexSourceSelection, settings: proxySettings) {
-                statusViewModel.refreshAfterCurrent(trigger: .settings)
-            }
-        }
         .onAppear {
             loginItemSettings.refresh()
             menuBarQuotaSettings.refresh()
@@ -89,13 +82,14 @@ struct AppSettingsView: View {
             refreshStatusRows()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            codexHookSettings.reconcileInstalledHooks()
+            loginItemSettings.refresh()
             menuBarQuotaSettings.refresh()
             mainPanelSettings.refresh()
             autoResetSettings.refresh()
             refreshStatusRows()
         }
         .onReceive(NotificationCenter.default.publisher(for: .settingsWindowDidOpen)) { _ in
+            loginItemSettings.refresh()
             selectedRebuildRange = nil
             isShowingRebuildConfirmation = false
             helperFeatureConfirmation = nil
@@ -152,10 +146,10 @@ struct AppSettingsView: View {
         } message: { result in
             Text(verbatim: result.message)
         }
-        .alert("需要 CodexBar Hook", isPresented: $needsTaskHook) {
-            Button("好", role: .cancel) {}
+        .alert("settings.activity-source.required-title", isPresented: $needsTaskSource) {
+            Button("common.action.close", role: .cancel) {}
         } message: {
-            Text("请先启用并校验本机 CodexBar Hook, 再选择随任务防睡眠")
+            Text("settings.activity-source.required-message")
         }
         .alert(item: $helperFeatureConfirmation) { feature in
             feature.alert(helperStatus: keepAliveController.helperStatus, manualKeepAlive: (pendingKeepAliveMode ?? keepAliveController.mode) == .manual) {
@@ -275,8 +269,7 @@ private extension AppSettingsView {
                 LiquidGlassDivider()
                 TaskGlowSettingsRow(
                     settings: taskGlowSettings,
-                    codexHookSettings: codexHookSettings,
-                    activityPresentation: activityPresentation,
+                    mainPanelSettings: mainPanelSettings,
                     onOptionsAction: onOptionsAction
                 )
                 LiquidGlassDivider()
@@ -290,21 +283,14 @@ private extension AppSettingsView {
             }
             .padding(Metrics.panelPadding)
             .liquidGlassSurface(cornerRadius: Metrics.panelCornerRadius)
-
-            settingsErrorPanel
         }
     }
 
     var advancedSettingsPage: some View {
         VStack(alignment: .leading, spacing: Metrics.rowSpacing) {
-            ProxySettingsRow(settings: proxySettings) {
-                onOptionsAction(.closeAll)
-                isShowingProxySettings = true
-            }
+            sharedCodexServiceRow
             LiquidGlassDivider()
             quotaRefreshIntervalRow
-            LiquidGlassDivider()
-            codexHookRow
             LiquidGlassDivider()
             notificationRow
             LiquidGlassDivider()
@@ -327,6 +313,10 @@ private extension AppSettingsView {
                 LiquidGlassDivider()
                 versionRow
                 LiquidGlassDivider()
+                releaseNotesRow
+                LiquidGlassDivider()
+                serviceStatusLinkRow
+                LiquidGlassDivider()
                 githubProjectRow
             }
             .padding(Metrics.panelPadding)
@@ -345,14 +335,25 @@ private extension AppSettingsView {
     // MARK: - 通用页各行
 
     var launchAtLoginRow: some View {
-        SettingsToggleRow(
-            icon: "power",
-            title: "settings.general.launch-at-login",
-            isOn: Binding(
-                get: { loginItemSettings.isEnabled },
-                set: { loginItemSettings.setEnabled($0) }
+        VStack(alignment: .leading, spacing: 4) {
+            SettingsToggleRow(
+                icon: "power",
+                title: "settings.general.launch-at-login",
+                isOn: Binding(
+                    get: { loginItemSettings.isEnabled },
+                    set: { loginItemSettings.setEnabled($0) }
+                )
             )
-        )
+
+            if loginItemSettings.requiresApproval {
+                settingsStatusCaptionRow(SettingsStatusCaption(
+                    message: String(localized: "settings.general.launch-at-login-authorization-required"),
+                    showsSystemSettingsButton: true
+                ))
+            } else if let message = loginItemSettings.errorMessage {
+                SettingsCaptionMessageRow(message: message)
+            }
+        }
     }
 
     var automaticUpdateCheckRow: some View {
@@ -425,21 +426,19 @@ private extension AppSettingsView {
         .help("仅调整 Codex 账户额度轮询, 不改变设备日志和价值统计的刷新间隔")
     }
 
-    var codexHookRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            SettingsToggleRow(
-                icon: "link",
-                title: "hook.name",
-                isOn: Binding(
-                    get: { codexHookSettings.isEnabled },
-                    set: { codexHookSettings.setEnabled($0) }
-                ),
-                isEnabled: !codexHookSettings.isUpdating
-            )
-
-            if let message = codexHookSettings.errorMessage {
-                SettingsCaptionMessageRow(message: message)
+    var sharedCodexServiceRow: some View {
+        HStack(alignment: .top, spacing: SettingsRowMetrics.spacing) {
+            Image(systemName: "network")
+                .frame(width: SettingsRowMetrics.iconWidth)
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("settings.codex.shared-service.title")
+                Text("settings.codex.shared-service.caption")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            Spacer(minLength: 0)
         }
     }
 
@@ -572,8 +571,8 @@ private extension AppSettingsView {
             keepAliveController.setEnabled(false)
             return
         }
-        if choice == .tasks, !codexHookSettings.isOperable {
-            needsTaskHook = true
+        if choice == .tasks, !mainPanelSettings.hasActivitySource {
+            needsTaskSource = true
             return
         }
         let mode: KeepAliveController.Mode = choice == .manual ? .manual : .tasks
@@ -599,7 +598,7 @@ private extension AppSettingsView {
 
                 if caption.showsSystemSettingsButton {
                     Button("common.action.open-system-settings") {
-                        keepAliveController.openSystemSettings()
+                        SMAppService.openSystemSettingsLoginItems()
                     }
                     .controlSize(.small)
                     .fixedSize()
@@ -628,8 +627,8 @@ private extension AppSettingsView {
         if let errorMessage = keepAliveController.errorMessage {
             return SettingsStatusCaption(message: errorMessage, isError: true)
         }
-        guard keepAliveController.mode == .manual || codexHookSettings.isVerified else {
-            return SettingsStatusCaption(message: String(localized: "hook.status.inactive"))
+        guard keepAliveController.mode == .manual || mainPanelSettings.hasActivitySource else {
+            return SettingsStatusCaption(message: String(localized: "settings.activity-source.required-title"))
         }
 
         if keepAliveController.isActivelyPreventingSleep,
@@ -849,11 +848,11 @@ private extension AppSettingsView {
                 .contentTransition(.opacity)
                 .animation(Metrics.statusAnimation, value: status.text)
 
-            if appUpdater.availableUpdateMessage != nil {
+            if appUpdater.availableUpdateMessage != nil || appUpdater.isUpdateReadyToInstall {
                 Button {
                     appUpdater.startUpdate()
                 } label: {
-                    Image(systemName: "arrow.down.circle.fill")
+                    Image(systemName: appUpdater.isUpdateReadyToInstall ? "square.and.arrow.down" : "arrow.down.circle.fill")
                         .imageScale(.large)
                 }
                 .controlSize(.small)
@@ -885,9 +884,7 @@ private extension AppSettingsView {
             unavailableSource: statusViewModel.unavailableConnectionSource,
             onReconnect: { selection in
                 Task { @MainActor in
-                    if await statusViewModel.reconnectCodex(selection: selection, requiresHooks: codexHookSettings.isEnabled) {
-                        codexHookSettings.reconcileInstalledHooks()
-                    }
+                    _ = await statusViewModel.reconnectCodex(selection: selection, requiresHooks: false)
                     codexVersions.refresh(force: true)
                 }
             }
@@ -895,13 +892,25 @@ private extension AppSettingsView {
     }
 
     var githubProjectRow: some View {
-        Link(destination: Self.githubProjectURL) {
+        externalLinkRow(title: "settings.about.github-project", icon: "globe", destination: Self.githubProjectURL)
+    }
+
+    var releaseNotesRow: some View {
+        externalLinkRow(title: "settings.about.release-notes", icon: "text.document", destination: AppUpdater.releaseNotesURL())
+    }
+
+    var serviceStatusLinkRow: some View {
+        externalLinkRow(title: "settings.about.service-status", icon: "waveform.path.ecg", destination: CodexServiceStatusService.statusPageURL)
+    }
+
+    func externalLinkRow(title: LocalizedStringKey, icon: String, destination: URL) -> some View {
+        Link(destination: destination) {
             HStack(spacing: SettingsRowMetrics.spacing) {
-                Image(systemName: "globe")
+                Image(systemName: icon)
                     .frame(width: SettingsRowMetrics.iconWidth)
                     .foregroundStyle(.tint)
 
-                Text("settings.about.github-project")
+                Text(title)
                     .foregroundStyle(.primary)
 
                 Spacer()
@@ -919,19 +928,6 @@ private extension AppSettingsView {
         // 版本检测较慢且内部会合并并发请求; 连接信息只是缓存读取
         codexVersions.refresh()
         statusViewModel.refreshCodexConnectionInfo()
-    }
-
-    @ViewBuilder
-    var settingsErrorPanel: some View {
-        if let message = loginItemSettings.errorMessage {
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.red)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(Metrics.panelPadding)
-                .liquidGlassSurface(cornerRadius: Metrics.panelCornerRadius)
-        }
     }
 
     var checkUpdateButton: some View {

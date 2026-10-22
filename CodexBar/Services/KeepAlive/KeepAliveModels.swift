@@ -21,7 +21,7 @@ extension KeepAliveController {
     /// 缺依赖时收起入口, 只是没在防睡眠 (没任务, 低电量, 已达上限) 时仍然要能改设置
     static func allowsOptions(_ blockReason: SleepBlockReason?) -> Bool {
         switch blockReason {
-        case .notStarted, .userOff, .hookDisabled, .helperUnavailable, .terminating:
+        case .notStarted, .userOff, .activityUnavailable, .helperUnavailable, .terminating:
             false
         case nil, .noTasks, .helperRefreshing, .lowBattery, .limitReached:
             true
@@ -146,7 +146,7 @@ extension KeepAliveController {
     enum SleepBlockReason: String {
         case notStarted
         case userOff
-        case hookDisabled
+        case activityUnavailable
         case noTasks
         case helperUnavailable
         case helperRefreshing
@@ -161,7 +161,7 @@ extension KeepAliveController {
     struct SleepConditions: Equatable {
         let blockReason: SleepBlockReason?
         let enabled: Bool
-        let hook: Bool
+        let activity: Bool
         let tasks: Bool
         let helper: HelperStatus
         let refreshing: Bool

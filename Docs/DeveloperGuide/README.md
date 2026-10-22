@@ -8,14 +8,14 @@
 | --- | --- |
 | [整体架构](architecture.md) | 进程、模块、生命周期、actor 边界和 3 条数据链路 |
 | [设计原则与关键决策](design-decisions.md) | 状态所有权、并发提交、数据恢复和特权边界 |
-| [app-server 数据链路](app-server.md) | CLI 定位、代理配置与测试、JSON-RPC 会话、账户、额度、用量刷新和自动重置状态机 |
-| [Hook 采集与历史聚合](hook-and-aggregation.md) | Hook 安装、事件落盘、聚合、保留期和 schema 演进 |
-| [实时任务监控](activity-monitor.md) | 增量读取、rollout 对账、状态机和异常会话保护 |
+| [app-server 数据链路](app-server.md) | 共享后台、启动器定位、Unix socket JSON-RPC、账户、额度、用量刷新和自动重置状态机 |
+| [Hook 采集与历史聚合](hook-and-aggregation.md) | 旧 Hook 历史、事件落盘、保留期和 schema 演进 |
+| [实时任务监控](activity-monitor.md) | 各机共享后台、主子任务、状态恢复和异常保护 |
 | [防睡眠系统](sleep-prevention.md) | IOKit assertion、CodexBarHelper、XPC 租约、自动重置唤醒计划和恢复策略 |
-| [多设备统计边界](sync.md) | 私有数据库、设备匿名化、上传、合并和重建 |
+| [多设备统计边界](sync.md) | SSH/HTTPS、来源隔离、合并与旧云缓存保留 |
 | [通知系统](notifications.md) | 通知触发、去重、声音、触觉和点击行为 |
 | [UI 与应用生命周期](ui-and-lifecycle.md) | 菜单栏、面板、焦点、全局快捷键和服务装配 |
-| [数据与隐私边界](data-and-privacy.md) | 本地文件、网络访问、云端字段和日志边界 |
+| [数据与隐私边界](data-and-privacy.md) | 本地文件、网络访问、统计元数据和日志边界 |
 | [开发与验证](development.md) | 工程结构、构建检查、调试和变更验收 |
 
 ## 在线资料
@@ -53,3 +53,5 @@
 
 - [用量中心实现与验证](usage-center.md)：采集协议、查询、官方分析与估算
 - [切换到独立 fork](../UserGuide/migration.md)：本机设置和历史迁移
+
+- [上游更新审查](upstream-adaptation.md)：共享后台改造及逐提交适配结果

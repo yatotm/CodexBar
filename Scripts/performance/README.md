@@ -18,12 +18,13 @@ python3 -B Scripts/performance/run.py --preset standard
 
 脚本完成预检、预热、分阶段采集、数据解析和报告生成，结束后在终端打印 `report.html` 路径。采集直接附加到现有 App 进程。按 `Ctrl-C` 可停止采集并保存已有结果，App 继续运行。
 
-默认输出目录为 `Build/Performance/YYYYMMDD-HHMMSS`。`Scripts/build.sh` 会清理 `Build`，需要长期保留的结果请指定其他目录：
+默认输出目录包含被测 App 的版本、构建号、预设、场景标签和时间，例如 `Build/Performance/1.0.8(9)-quick-idle-20261023-120000`。版本读取自实际 App，不使用仓库配置冒充运行版本。iCloud 项目建议通过 `--output` 将大量采样文件放在项目外：
 
 ```sh
 python3 -B Scripts/performance/run.py \
   --preset standard \
-  --output PerformanceResults/idle-01 \
+  --label idle \
+  --output /tmp/codexbar-performance-idle-01 \
   --workload '闲置：面板关闭，无手动操作，接通电源'
 ```
 
@@ -65,6 +66,7 @@ python3 -B Scripts/performance/run.py \
 | `--pid` | 指定进程；存在多个匹配实例时使用 |
 | `--preset` | `quick`、`standard` 或 `extended`，默认 `standard` |
 | `--output` | 采集模式指定新目录；`--render` 模式指定 HTML 文件路径 |
+| `--label` | 采集场景短标签，默认 `default`；仅用于采集模式 |
 | `--workload` | 写入报告的测试场景说明 |
 | `--baseline` | 指定同场景历史 `results.json`，采集后计算阶段差值 |
 | `--cpu-mean-budget` | 各阶段平均 CPU 上限，单位为 `%` |

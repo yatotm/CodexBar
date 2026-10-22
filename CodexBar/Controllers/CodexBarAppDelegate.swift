@@ -16,15 +16,15 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
     )
     let taskGlowSettings = TaskGlowSettings()
     lazy var activityPresentation = ActivityPresentationModel(local: activityMonitor, usage: usageCenterViewModel)
-    private lazy var taskGlowController = TaskGlowController(settings: taskGlowSettings, activityPresentation: activityPresentation, hookSettings: codexHookSettings)
+    private lazy var taskGlowController = TaskGlowController(settings: taskGlowSettings, activityPresentation: activityPresentation)
     let activityProtectionSettings = ActivityProtectionSettings()
     lazy var activityMonitor = CodexActivityMonitor(
         codexHookSettings: codexHookSettings,
-        activityProtectionSettings: activityProtectionSettings
+        activityProtectionSettings: activityProtectionSettings,
+        usesSharedBackend: true
     )
     lazy var keepAliveController = KeepAliveController(
-        activityMonitor: activityMonitor,
-        codexHookSettings: codexHookSettings
+        activityMonitor: activityMonitor
     )
     let globalHotKeySettings = GlobalHotKeySettings()
     let menuBarQuotaSettings = MenuBarQuotaSettings()
@@ -40,6 +40,7 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
     private var autoResetController: AutoResetController?
     private var terminationPreparationTask: Task<Void, Never>?
     private var hasPreparedForTermination = false
+    private var hasRetiredLegacyHooks = false
 
     // MARK: - App 生命周期
 
@@ -52,6 +53,15 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_: Notification) {
         // Hook 子进程模式绝不会走到这里, 干净退出标志因此不会被它改写
         AppProcessDiagnostics.install()
+        activityMonitor.start()
+        usageCenterViewModel.remoteActivity.onLocalCodexUpdate = { [weak self] tasks, available, bootstrap in
+            guard let self else { return }
+            activityMonitor.receiveSharedTasks(tasks, available: available, bootstrap: bootstrap)
+            if available, !hasRetiredLegacyHooks {
+                hasRetiredLegacyHooks = true
+                codexHookSettings.retireInstalledHooks()
+            }
+        }
         observeRefreshSleepState()
         let controller = StatusItemController(
             viewModel: viewModel,
@@ -163,12 +173,16 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
                 NSApplication.shared.reply(toApplicationShouldTerminate: false)
                 return
             }
+            autoResetController?.prepareForTermination()
             let success = await keepAliveController.prepareForTermination()
             guard !Task.isCancelled else {
                 return
             }
             terminationPreparationTask = nil
             hasPreparedForTermination = success
+            if !success {
+                autoResetController?.resumeAfterTerminationCancellation()
+            }
             NSApplication.shared.reply(toApplicationShouldTerminate: success)
         }
         return .terminateLater

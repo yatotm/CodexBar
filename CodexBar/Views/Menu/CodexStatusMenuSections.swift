@@ -6,25 +6,33 @@ enum MenuMetrics {
     static let panelPadding: CGFloat = 10
     static let panelCornerRadius: CGFloat = 8
     static let accountIconSize: CGFloat = 14
+    static let statusIconSize: CGFloat = 10
+    static let statusIconSpacing: CGFloat = 8
     static let loadingVerticalPadding: CGFloat = 16
 }
 
-/// 已登录状态的账号行, 邮箱可双击模糊, 头像可双击刷新
+/// 已登录状态的账号行, 邮箱可双击模糊, 图标可双击刷新
 struct AccountCard: View {
     let title: String
     let isEmail: Bool
     let plan: String?
     let isRefreshing: Bool
+    var usesCodexIcon = true
     let onRefresh: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @State private var isEmailBlurred = false
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "person.fill")
-                .font(.system(size: MenuMetrics.accountIconSize, weight: .medium))
-                .foregroundStyle(.tint)
-                .onTapGesture(count: 2, perform: onRefresh)
+            Group {
+                if usesCodexIcon {
+                    Image("OpenAI Blossom").resizable().scaledToFit()
+                } else {
+                    Image(systemName: "person.fill").foregroundStyle(.tint)
+                }
+            }
+            .frame(width: MenuMetrics.accountIconSize, height: MenuMetrics.accountIconSize)
+            .onTapGesture(count: 2, perform: onRefresh)
 
             Text(title)
                 .font(.caption.weight(.semibold))
@@ -92,9 +100,10 @@ struct StatusAccountCard: View {
     var body: some View {
         let display = statusDisplay
         HStack(spacing: 8) {
-            Image(systemName: "person.fill")
-                .font(.system(size: MenuMetrics.accountIconSize, weight: .medium))
-                .foregroundStyle(display.color)
+            Image("OpenAI Blossom")
+                .resizable()
+                .scaledToFit()
+                .frame(width: MenuMetrics.accountIconSize, height: MenuMetrics.accountIconSize)
                 .onTapGesture(count: 2, perform: onRefresh)
 
             if let text = display.text {
@@ -273,7 +282,6 @@ struct UpdatedAtRow: View {
     let countdownInterval: TimeInterval
     let isCountdownActive: Bool
     let updateMessage: String?
-    let startUpdate: () -> Void
 
     var body: some View {
         HStack {
@@ -305,7 +313,6 @@ struct UpdatedAtRow: View {
                     .lineLimit(1)
                     .contentTransition(.opacity)
                     .transition(.opacity)
-                    .onTapGesture(count: 2, perform: startUpdate)
             }
         }
         .animation(Metrics.statusAnimation, value: updateMessage)

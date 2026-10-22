@@ -36,7 +36,7 @@ struct CodexStatusMenuView: View {
     @ObservedObject var viewModel: CodexStatusViewModel
     @ObservedObject var usageCenterViewModel: UsageCenterViewModel
     @ObservedObject var workflowViewModel: WorkflowViewModel
-    @ObservedObject var codexHookSettings: CodexHookSettings
+    let serviceStatusMonitor: CodexServiceStatusMonitor
     @ObservedObject var mainPanelSettings: MainPanelSettings
     /// 活动状态与逐秒时间只被活动卡片消费, 由卡片自行观察, 避免 1Hz tick 让整个菜单树每秒重算
     let activityPresentation: ActivityPresentationModel
@@ -77,7 +77,6 @@ struct CodexStatusMenuView: View {
         .padding(Metrics.padding)
         .liquidGlassSurface(cornerRadius: Metrics.surfaceCornerRadius, isOuterSurface: true)
         .animation(Metrics.statusAnimation, value: viewModel.loadState)
-        .animation(Metrics.statusAnimation, value: codexHookSettings.isEnabled)
         .animation(Metrics.statusAnimation, value: mainPanelSettings.layout)
         .onChange(of: usageCenterViewModel.menuScope) { _, _ in onScopeChange() }
         .transaction { transaction in
@@ -124,7 +123,7 @@ private extension CodexStatusMenuView {
         switch section {
         case .account:
             if usageCenterViewModel.menuScope == .claude {
-                AccountCard(title: "Claude Code", isEmail: false, plan: "OAuth", isRefreshing: usageCenterViewModel.isRefreshing) {
+                AccountCard(title: "Claude Code", isEmail: false, plan: "OAuth", isRefreshing: usageCenterViewModel.isRefreshing, usesCodexIcon: false) {
                     usageCenterViewModel.refresh()
                 }
             } else {
@@ -156,6 +155,10 @@ private extension CodexStatusMenuView {
         case .status:
             if usageCenterViewModel.menuScope == .codex {
                 statusSection
+            }
+        case .serviceStatus:
+            if usageCenterViewModel.menuScope != .claude {
+                CodexServiceStatusRow(monitor: serviceStatusMonitor)
             }
         }
     }
@@ -222,11 +225,11 @@ private extension CodexStatusMenuView {
     @ViewBuilder
     func usageSection(dataPlaceholderSection: MainPanelSection?) -> some View {
         if let snapshot = viewModel.snapshot,
-           snapshot.usage != nil || codexHookSettings.isEnabled {
+           snapshot.usage != nil || !workflowViewModel.snapshot.dailyMetrics.isEmpty {
             UsageSummaryView(
                 usage: snapshot.usage,
                 workflow: workflowViewModel.snapshot,
-                showsWorkflow: codexHookSettings.isEnabled,
+                showsWorkflow: !workflowViewModel.snapshot.dailyMetrics.isEmpty,
                 isStale: snapshot.isUsageStale,
                 recordedDays: usageCenterViewModel.menuDashboards[.codex]?.days ?? [],
                 onHoverContextChange: onUsageHeatmapHoverChange
@@ -268,8 +271,8 @@ private extension CodexStatusMenuView {
             viewModel.snapshot?.limits.isEmpty == false
         case .usage:
             viewModel.snapshot?.usage != nil
-                || (viewModel.snapshot != nil && codexHookSettings.isEnabled)
-        case .account, .activity, .status:
+                || (viewModel.snapshot != nil && !workflowViewModel.snapshot.dailyMetrics.isEmpty)
+        case .account, .activity, .status, .serviceStatus:
             false
         }
     }
@@ -288,6 +291,8 @@ private extension CodexStatusMenuView {
                 hasData(for: section) || dataPlaceholderSection == section
             case .status:
                 viewModel.snapshot != nil
+            case .serviceStatus:
+                usageCenterViewModel.menuScope != .claude
             }
         }
     }
@@ -298,8 +303,7 @@ private extension CodexStatusMenuView {
             countdownStartedAt: viewModel.autoRefreshCountdownStartedAt ?? snapshot.generatedAt,
             countdownInterval: viewModel.autoRefreshInterval,
             isCountdownActive: menuSurfaceVisibility.isVisible,
-            updateMessage: appUpdater.panelUpdateMessage,
-            startUpdate: appUpdater.startUpdate
+            updateMessage: appUpdater.availableUpdateMessage
         )
     }
 }

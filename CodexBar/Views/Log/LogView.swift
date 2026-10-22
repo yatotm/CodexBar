@@ -4,6 +4,8 @@ import SwiftUI
 /// app-server 交互日志窗口根视图
 struct LogView: View {
     @ObservedObject var store: RequestLogStore
+    @State private var preview = LogPreviewPresentation()
+    @State private var scrollPosition = ScrollPosition(idType: UUID.self, edge: .top)
 
     var body: some View {
         // 每轮渲染只取一次发布快照复用
@@ -19,6 +21,16 @@ struct LogView: View {
             }
         }
         .frame(minWidth: 640, minHeight: 480)
+        .task(id: preview.request?.id) {
+            if let request = preview.request {
+                await preview.prepare(request)
+            }
+        }
+        .sheet(item: $preview.item) { item in
+            FullLogTextView(item: item)
+                .onDisappear { preview.dismiss(item) }
+        }
+        .onDisappear { preview.cancel() }
     }
 
     private func header(entries: [RequestLogEntry]) -> some View {
@@ -66,11 +78,22 @@ struct LogView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(entries) { entry in
-                    LogRow(entry: entry)
-                    Divider()
+                    VStack(spacing: 0) {
+                        LogRow(entry: entry, preview: preview)
+                        Divider()
+                    }
                 }
             }
+            .scrollTargetLayout()
         }
+        .scrollPosition($scrollPosition, anchor: .top)
+        .onScrollPhaseChange { _, phase, context in
+            // 浏览时按日志身份保持位置, 回到顶部后才重新跟随新日志
+            if phase == .idle, context.geometry.contentOffset.y + context.geometry.contentInsets.top <= 1 {
+                scrollPosition.scrollTo(edge: .top)
+            }
+        }
+        .onDisappear { scrollPosition = ScrollPosition(idType: UUID.self, edge: .top) }
         .background(Color(nsColor: .textBackgroundColor))
     }
 }
@@ -81,7 +104,8 @@ struct LogView: View {
 private struct LogRow: View {
     let entry: RequestLogEntry
     @State private var isExpanded = false
-    @State private var fullTextItem: FullLogTextItem?
+    let preview: LogPreviewPresentation
+    @State private var inlinePreview: LogInlinePreview?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -101,6 +125,7 @@ private struct LogRow: View {
                             caption: "log.payload.request",
                             time: entry.requestedAt,
                             text: request,
+                            inline: currentInlinePreview?.request,
                             color: .primary
                         )
                     }
@@ -110,6 +135,7 @@ private struct LogRow: View {
                             caption: detailCaption,
                             time: entry.respondedAt,
                             text: detail,
+                            inline: currentInlinePreview?.detail,
                             color: entry.kind == .failure ? .red : .primary
                         )
                     } else if entry.kind == .pending {
@@ -125,9 +151,28 @@ private struct LogRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .sheet(item: $fullTextItem) { item in
-            FullLogTextView(item: item)
+        .task(id: inlineInput) {
+            let input = inlineInput
+            guard inlinePreview?.input != input else { return }
+            do {
+                let result = try await LogPreviewPreparer.shared.inlinePreview(for: input)
+                try Task.checkCancellation()
+                inlinePreview = result
+            } catch is CancellationError {
+                // 行离开列表或正文更新后, 由下一次任务生成摘要
+            } catch {
+                assertionFailure("Unexpected inline preview error: \(error)")
+            }
         }
+        .onDisappear { preview.cancel(for: entry.id) }
+    }
+
+    private var inlineInput: LogInlinePreviewInput {
+        LogInlinePreviewInput(request: entry.request, detail: entry.detail, needsSummary: entry.method == nil)
+    }
+
+    private var currentInlinePreview: LogInlinePreview? {
+        inlinePreview?.input == inlineInput ? inlinePreview : nil
     }
 
     private var summary: some View {
@@ -156,10 +201,10 @@ private struct LogRow: View {
                 Text(method)
                     .font(.caption.weight(.medium).monospaced())
                     .foregroundStyle(.primary)
-            } else if let detail = entry.detail {
+            } else if entry.detail != nil {
                 // 无方法名的记录 (信息/进程级错误) 直接预览正文
                 // 避免标签后留空
-                Text(RequestLogEntry.singleLinePreview(detail, limit: RequestLogEntry.summaryPreviewLength))
+                Text(verbatim: currentInlinePreview?.summary ?? "")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -175,14 +220,10 @@ private struct LogRow: View {
         caption: LocalizedStringResource,
         time: Date?,
         text: String,
+        inline: LogInlinePreview.Payload?,
         color: Color
     ) -> some View {
         let caption = String(localized: caption)
-        let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let displayText = RequestLogEntry.singleLinePreview(
-            text,
-            limit: RequestLogEntry.expandedInlinePreviewLength
-        )
 
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
@@ -196,13 +237,13 @@ private struct LogRow: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                if hasText {
+                if inline?.hasText == true {
                     LogHeaderActionButton(
                         title: "common.action.preview",
                         systemImage: "doc.text.magnifyingglass",
                         help: String(localized: "log.action.preview-full", defaultValue: "\(caption)")
                     ) {
-                        fullTextItem = FullLogTextItem(title: caption, text: text)
+                        preview.show(entryID: entry.id, title: caption, text: text)
                     }
 
                     LogHeaderActionButton(
@@ -218,7 +259,7 @@ private struct LogRow: View {
             .controlSize(.small)
             .font(.caption)
 
-            Text(verbatim: displayText)
+            Text(verbatim: inline?.text ?? "")
                 .font(.caption.monospaced())
                 .foregroundStyle(color)
                 .lineLimit(1)
@@ -248,13 +289,6 @@ private struct LogRow: View {
 
 // MARK: - 全文查看
 
-/// 预览弹窗数据源
-private struct FullLogTextItem: Identifiable {
-    let id = UUID()
-    let title: String
-    let text: String
-}
-
 /// 复制/预览按钮的统一样式入口
 private struct LogHeaderActionButton: View {
     let title: LocalizedStringResource
@@ -272,26 +306,20 @@ private struct LogHeaderActionButton: View {
 
 /// 完整请求/响应预览弹窗
 private struct FullLogTextView: View {
-    let item: FullLogTextItem
+    let item: LogPreviewPresentation.Item
     @Environment(\.dismiss) private var dismiss
-    private let preview: LogCodePreview
-
-    init(item: FullLogTextItem) {
-        self.item = item
-        preview = LogCodePreviewFormatter.preview(for: item.text)
-    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text(item.title)
+                Text(item.request.title)
                     .font(.headline)
 
-                Text(verbatim: "\(item.text.count)")
+                Text(verbatim: "\(item.document.characterCount)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
 
-                if let language = preview.language {
+                if let language = item.document.language {
                     Text(language)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -306,7 +334,7 @@ private struct FullLogTextView: View {
                 Spacer()
 
                 Button {
-                    PasteboardWriter.copy(item.text)
+                    PasteboardWriter.copy(item.request.text)
                 } label: {
                     Label("common.action.copy", systemImage: "doc.on.doc")
                 }
@@ -324,203 +352,10 @@ private struct FullLogTextView: View {
 
             Divider()
 
-            LogCodePreviewView(attributedText: preview.attributedText)
+            LogCodePreviewView(document: item.document)
+                .id(item.id)
                 .frame(minWidth: 860, minHeight: 600)
         }
-    }
-}
-
-// MARK: - JSON 预览与高亮
-
-/// 日志预览文本, JSON 时会带基础语法高亮
-private struct LogCodePreview {
-    let attributedText: NSAttributedString
-    let language: String?
-}
-
-/// 将 JSON 格式化并做轻量 token 高亮, 非 JSON 保持纯文本
-private enum LogCodePreviewFormatter {
-    private static let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-    private static var baseAttributes: [NSAttributedString.Key: Any] {
-        [
-            .font: font,
-            .foregroundColor: NSColor.labelColor
-        ]
-    }
-
-    private static let jsonReadingOptions: JSONSerialization.ReadingOptions = [.fragmentsAllowed]
-    private static let jsonWritingOptions: JSONSerialization.WritingOptions = [
-        .fragmentsAllowed,
-        .prettyPrinted,
-        .sortedKeys,
-        .withoutEscapingSlashes
-    ]
-    private static let tokenRegex = try? NSRegularExpression(
-        pattern: #""(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|\b(?:true|false|null)\b|[{}\[\]:,]"#
-    )
-
-    static func preview(for text: String) -> LogCodePreview {
-        if let formattedJSON = formattedJSON(text) {
-            return LogCodePreview(
-                attributedText: highlightedJSON(formattedJSON),
-                language: "JSON"
-            )
-        }
-
-        return LogCodePreview(
-            attributedText: attributedPlainText(text),
-            language: nil
-        )
-    }
-
-    private static func formattedJSON(_ text: String) -> String? {
-        guard let data = text.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data, options: jsonReadingOptions),
-              let output = try? JSONSerialization.data(
-                  withJSONObject: object,
-                  options: jsonWritingOptions
-              ) else {
-            return nil
-        }
-
-        return String(bytes: output, encoding: .utf8)
-    }
-
-    private static func attributedPlainText(_ text: String) -> NSAttributedString {
-        NSAttributedString(
-            string: text,
-            attributes: baseAttributes
-        )
-    }
-
-    private static func highlightedJSON(_ text: String) -> NSAttributedString {
-        let attributedText = NSMutableAttributedString(
-            string: text,
-            attributes: baseAttributes
-        )
-
-        guard let tokenRegex else {
-            return attributedText
-        }
-
-        let nsText = text as NSString
-        let fullRange = NSRange(location: 0, length: nsText.length)
-        tokenRegex.enumerateMatches(in: text, range: fullRange) { match, _, _ in
-            guard let range = match?.range else {
-                return
-            }
-
-            let token = nsText.substring(with: range)
-            attributedText.addAttribute(
-                .foregroundColor,
-                value: color(for: token, in: nsText, range: range),
-                range: range
-            )
-        }
-
-        return attributedText
-    }
-
-    private static func color(for token: String, in text: NSString, range: NSRange) -> NSColor {
-        if token.hasPrefix("\"") {
-            return isJSONKey(in: text, after: range) ? .systemBlue : .systemGreen
-        }
-
-        if token == "true" || token == "false" {
-            return .systemOrange
-        }
-
-        if token == "null" {
-            return .secondaryLabelColor
-        }
-
-        if token.first?.isNumber == true || token.hasPrefix("-") {
-            return .systemPurple
-        }
-
-        return .tertiaryLabelColor
-    }
-
-    private static func isJSONKey(in text: NSString, after range: NSRange) -> Bool {
-        var cursor = range.location + range.length
-        while cursor < text.length {
-            guard let scalar = UnicodeScalar(Int(text.character(at: cursor))),
-                  CharacterSet.whitespacesAndNewlines.contains(scalar) else {
-                break
-            }
-            cursor += 1
-        }
-
-        guard cursor < text.length else {
-            return false
-        }
-
-        return text.character(at: cursor) == 58
-    }
-}
-
-/// AppKit 文本视图承载完整日志, 支持横向滚动
-private struct LogCodePreviewView: NSViewRepresentable {
-    let attributedText: NSAttributedString
-
-    func makeNSView(context _: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = true
-        scrollView.autohidesScrollers = false
-        scrollView.drawsBackground = true
-        scrollView.backgroundColor = .textBackgroundColor
-
-        let textView = NSTextView()
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isRichText = true
-        textView.drawsBackground = true
-        textView.backgroundColor = .textBackgroundColor
-        textView.textContainerInset = NSSize(width: 12, height: 12)
-        textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
-        textView.maxSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = true
-        textView.autoresizingMask = []
-        textView.textContainer?.containerSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        textView.textContainer?.widthTracksTextView = false
-
-        scrollView.documentView = textView
-        return scrollView
-    }
-
-    func updateNSView(_ scrollView: NSScrollView, context _: Context) {
-        guard let textView = scrollView.documentView as? NSTextView else {
-            return
-        }
-
-        textView.textStorage?.setAttributedString(attributedText)
-        updateDocumentSize(for: textView, in: scrollView)
-    }
-
-    private func updateDocumentSize(for textView: NSTextView, in scrollView: NSScrollView) {
-        guard let layoutManager = textView.layoutManager,
-              let textContainer = textView.textContainer else {
-            return
-        }
-
-        layoutManager.ensureLayout(for: textContainer)
-        let usedRect = layoutManager.usedRect(for: textContainer)
-        let inset = textView.textContainerInset
-        let minimumSize = scrollView.contentSize
-        let fittedSize = NSSize(
-            width: max(ceil(usedRect.maxX + inset.width * 2), minimumSize.width),
-            height: max(ceil(usedRect.maxY + inset.height * 2), minimumSize.height)
-        )
-
-        textView.setFrameSize(fittedSize)
     }
 }
 

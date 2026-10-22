@@ -54,13 +54,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Waiting for Approval"
+            "value" : "Awaiting Reply"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "等待确认"
+            "value" : "等待回应"
           }
         }
       }
@@ -481,6 +481,54 @@
         }
       }
     },
+    "activity.recent.agent-failed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagent failed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子任务执行失败"
+          }
+        }
+      }
+    },
+    "activity.recent.agent-interrupted" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagent interrupted"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子任务已中断"
+          }
+        }
+      }
+    },
+    "activity.recent.tool-failed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tool failed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具调用失败"
+          }
+        }
+      }
+    },
     "activity.relative.completed-minutes-ago" : {
       "localizations" : {
         "en" : {
@@ -573,6 +621,102 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 秒前终止"
+          }
+        }
+      }
+    },
+    "activity.stage.agent-waiting" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subagents running"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子任务运行中"
+          }
+        }
+      }
+    },
+    "activity.stage.answering" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replying"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在回复"
+          }
+        }
+      }
+    },
+    "activity.stage.processing" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Processing"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "处理中"
+          }
+        }
+      }
+    },
+    "activity.stage.recovering-auth" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recovering authentication"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复登录"
+          }
+        }
+      }
+    },
+    "activity.stage.retrying" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retrying"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在重试"
+          }
+        }
+      }
+    },
+    "activity.stage.waiting-input" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Awaiting reply"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待回应"
           }
         }
       }
@@ -742,13 +886,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Task is waiting for approval"
+            "value" : "Task is awaiting a reply"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "任务等待批准"
+            "value" : "任务等待回应"
           }
         }
       }
@@ -781,6 +925,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "另有 %lld 个任务"
+          }
+        }
+      }
+    },
+    "activity.summary.pending-input-count" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Awaiting reply %lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待回应 %lld"
+          }
+        }
+      }
+    },
+    "activity.summary.plan-progress" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plan %1$lld/%2$lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "计划 %1$lld/%2$lld"
           }
         }
       }
@@ -909,6 +1085,54 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "总计"
+          }
+        }
+      }
+    },
+    "activity.tool.files" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File changes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件修改"
+          }
+        }
+      }
+    },
+    "activity.tool.search" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Web search"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "联网搜索"
+          }
+        }
+      }
+    },
+    "activity.tool.terminal" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Terminal"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "终端"
           }
         }
       }
@@ -4129,6 +4353,118 @@
         }
       }
     },
+    "service-status.checking" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking Codex service status"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查 Codex 服务状态"
+          }
+        }
+      }
+    },
+    "service-status.degraded-performance" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex performance is degraded"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 性能下降"
+          }
+        }
+      }
+    },
+    "service-status.full-outage" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex has an outage"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 服务中断"
+          }
+        }
+      }
+    },
+    "service-status.operational" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex is operational"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 服务正常"
+          }
+        }
+      }
+    },
+    "service-status.partial-outage" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex has a partial outage"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 部分中断"
+          }
+        }
+      }
+    },
+    "service-status.under-maintenance" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex is under maintenance"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 维护中"
+          }
+        }
+      }
+    },
+    "service-status.unknown" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex service status is unknown"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 服务状态未知"
+          }
+        }
+      }
+    },
     "settings.about.github-project" : {
       "localizations" : {
         "en" : {
@@ -4225,6 +4561,38 @@
         }
       }
     },
+    "settings.about.release-notes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Release Notes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新日志"
+          }
+        }
+      }
+    },
+    "settings.about.service-status" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI Service Status"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OpenAI 服务状态"
+          }
+        }
+      }
+    },
     "settings.about.version" : {
       "localizations" : {
         "en" : {
@@ -4237,6 +4605,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "CodexBar 版本"
+          }
+        }
+      }
+    },
+    "settings.activity-source.required-message" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect the shared service from Codex 0.162.0 or later, or add Claude or remote tasks in Usage Center"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请连接 Codex 0.162.0 或更新版本的共享后台，或在用量中心接入 Claude、远端任务"
+          }
+        }
+      }
+    },
+    "settings.activity-source.required-title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Task Source Required"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要任务来源"
           }
         }
       }
@@ -4278,13 +4678,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Reconnect"
+            "value" : "Reconnect to the shared service without restarting Codex tasks"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "重新建立连接"
+            "value" : "重新连接共享后台，不会重启 Codex 任务"
           }
         }
       }
@@ -4321,18 +4721,34 @@
         }
       }
     },
-    "settings.codex-version.source.select" : {
+    "settings.codex-version.source.caption" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Select Source"
+            "value" : "The selected source only starts the service when it is not running. An existing service is kept running"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "选择来源"
+            "value" : "来源仅用于启动尚未运行的后台，已有后台保持运行"
+          }
+        }
+      }
+    },
+    "settings.codex-version.source.select" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Service Launcher"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择后台启动来源"
           }
         }
       }
@@ -4385,6 +4801,86 @@
         }
       }
     },
+    "settings.codex.daemon.disconnected" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disconnected"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未连接"
+          }
+        }
+      }
+    },
+    "settings.codex.daemon.in-use" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connected"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已连接"
+          }
+        }
+      }
+    },
+    "settings.codex.daemon.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared Service"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共享后台"
+          }
+        }
+      }
+    },
+    "settings.codex.shared-service.caption" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Requires Codex 0.162.0 or later. Connection and proxy settings follow Codex"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要 Codex 0.162.0 或更新版本，连接与代理设置沿用 Codex"
+          }
+        }
+      }
+    },
+    "settings.codex.shared-service.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared Codex Service"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 共享后台"
+          }
+        }
+      }
+    },
     "settings.general.automatic-update-checks" : {
       "localizations" : {
         "en" : {
@@ -4413,6 +4909,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开机自动启动"
+          }
+        }
+      }
+    },
+    "settings.general.launch-at-login-authorization-required" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow CodexBar in Login Items to start it automatically"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在登录项中允许 CodexBar 自动启动"
           }
         }
       }
@@ -4513,6 +5025,22 @@
         }
       }
     },
+    "settings.main-panel.activity.requires-source" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect the shared Codex service, or add Claude or remote tasks in Usage Center"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请连接 Codex 共享后台，或在用量中心接入 Claude、远端任务"
+          }
+        }
+      }
+    },
     "settings.main-panel.entrance-animations" : {
       "localizations" : {
         "en" : {
@@ -4589,6 +5117,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "额度"
+          }
+        }
+      }
+    },
+    "settings.main-panel.section.service-status" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex Service Status"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex 服务状态"
           }
         }
       }
@@ -4918,7 +5462,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Approval Requests"
+            "value" : "Tasks Awaiting a Reply"
           }
         },
         "zh-Hans" : {
@@ -5277,6 +5821,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未配置更新源"
+          }
+        }
+      }
+    },
+    "updater.status.ready-to-install.settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "v%@ downloaded, ready to install and relaunch"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "v%@ 已下载，可安装并重启"
           }
         }
       }
@@ -5782,13 +6342,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : ", will retry automatically after CodexBar Hook is enabled"
+            "value" : ", you can retry these dates manually later"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : ", 开启 CodexBar Hook 后会自动重试"
+            "value" : "，可稍后手动重建这些日期"
           }
         }
       }

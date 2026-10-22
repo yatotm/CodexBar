@@ -131,7 +131,7 @@ struct SettingsAndMaintenanceTests {
 
     @Test func layoutRepairsDuplicateOrderAndAlwaysKeepsAVisibleSection() {
         let layout = MainPanelLayout(orderedSections: [.usage, .usage, .activity], hiddenSections: Set(MainPanelSection.allCases))
-        #expect(layout.orderedSections == [.usage, .activity, .account, .quota, .status])
+        #expect(layout.orderedSections == [.usage, .activity, .account, .quota, .status, .serviceStatus])
         #expect(layout.visibleSections == [.usage])
         let activityOnly = MainPanelLayout(orderedSections: [.activity], hiddenSections: Set(MainPanelSection.allCases).subtracting([.activity]))
         #expect(activityOnly.disablingActivitySection().visibleSections == [.account])

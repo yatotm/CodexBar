@@ -5,6 +5,7 @@ enum CodexActivityTaskKey: Hashable {
     case turn(session: String, turn: String)
     case session(String)
     case anonymous(project: String)
+    case shared(id: String, protection: String?)
 
     init(event: WorkflowHookEvent) {
         if let sessionId = event.sessionId, let turnId = event.turnId {
@@ -19,7 +20,7 @@ enum CodexActivityTaskKey: Hashable {
     var sessionId: String? {
         switch self {
         case let .turn(session, _), let .session(session): session
-        case .anonymous: nil
+        case .anonymous, .shared: nil
         }
     }
 
@@ -53,6 +54,8 @@ enum CodexActivityTaskKey: Hashable {
             value = "session\u{0}\(session)"
         case .anonymous:
             return nil
+        case let .shared(_, protection):
+            return protection
         }
         let data = Data("CodexBar.ActivityProtection.v1\u{0}\(value)".utf8)
         return SHA256.hash(data: data).map {
@@ -103,6 +106,7 @@ struct ActivityProtectionAttempt {
 enum CodexActivityTaskState: Equatable {
     case running
     case waitingApproval
+    case unconfirmed
     case suppressed
 }
 
@@ -138,6 +142,7 @@ struct CodexActivityTask {
     var subagentsByID: [String: CodexSubagentObservation]
     var isSubagentCountReliable: Bool
     var tokenUsage: CodexTokenUsage?
+    var sharedPresentation: CodexActivityTaskSnapshot?
 
     init(
         displayID: UUID,
@@ -171,6 +176,34 @@ struct CodexActivityTask {
         startedAt != nil && !key.isAnonymous
     }
 
+    init(shared value: RemoteActivityTask, previous: CodexActivityTask?, now: Date) {
+        key = .shared(id: value.id, protection: value.protectionIdentifier)
+        displayID = previous?.displayID ?? ActivityPresentationModel.taskID(source: "local-shared", task: value.id, startedAt: value.startedAt)
+        // 未确认快照不能提前消费进展时间, 恢复后再用可信记录解除保护
+        let progress = value.state == "unknown" ? previous?.lastProgressAt ?? Date(timeIntervalSince1970: value.lastProgressAt ?? value.updatedAt)
+            : Date(timeIntervalSince1970: value.lastProgressAt ?? value.updatedAt)
+        lastProgressAt = max(previous?.lastProgressAt ?? progress, progress)
+        progressGeneration = (previous?.progressGeneration ?? 0) &+ (progress > (previous?.lastProgressAt ?? .distantPast) ? 1 : 0)
+        lastHookEventAt = Date(timeIntervalSince1970: value.updatedAt)
+        lifecycleCoverageCheckedAt = value.state != "unknown" && value.lifecycleComplete == true ? now : nil
+        state = value.state == "unknown" ? .unconfirmed : value.state == "waiting" ? .waitingApproval : .running
+        if let previous, previous.state == .suppressed,
+           value.state == "unknown" || (progress <= previous.lastProgressAt && state == .running) {
+            state = .suppressed
+        }
+        latestEvent = ActivityPresentationModel.latestEvent(value)
+        projectName = value.project.isEmpty ? nil : value.project
+        modelName = value.modelName
+        effort = value.effort
+        toolName = value.toolName
+        startedAt = Date(timeIntervalSince1970: value.startedAt)
+        stateChangedAt = Date(timeIntervalSince1970: value.stateChangedAt ?? value.updatedAt)
+        subagentsByID = [:]
+        isSubagentCountReliable = value.activeSubagentCount != nil
+        tokenUsage = value.tokenUsageComplete == false ? nil : value.tokenUsage
+        sharedPresentation = ActivityPresentationModel.taskSnapshot(value, id: displayID)
+    }
+
     /// 起点可信时返回到 end 的精确耗时, 起点缺失或晚于 end 时为 nil
     func preciseDuration(until end: Date) -> TimeInterval? {
         guard showsPreciseDuration, let startedAt, end >= startedAt else {
@@ -180,7 +213,10 @@ struct CodexActivityTask {
     }
 
     var snapshot: CodexActivityTaskSnapshot {
-        CodexActivityTaskSnapshot(
+        if let sharedPresentation {
+            return sharedPresentation
+        }
+        return CodexActivityTaskSnapshot(
             id: displayID,
             isAnonymous: key.isAnonymous,
             latestEvent: displayedApproval == nil ? latestEvent : .approvalRequested,
@@ -225,7 +261,12 @@ struct CodexActivityTask {
     }
 
     func hasFreshLifecycle(at now: Date) -> Bool {
-        lifecycleCoverageCheckedAt.map { now.timeIntervalSince($0) < 5 } == true
+        let maximumAge: TimeInterval = if case .shared = key {
+            75
+        } else {
+            5
+        }
+        return lifecycleCoverageCheckedAt.map { now.timeIntervalSince($0) < maximumAge } == true
     }
 
     mutating func recordLifecycleRead(_ state: CodexSessionTaskLifecycleState, at now: Date) {

@@ -56,7 +56,7 @@ UI 使用 SwiftUI 声明内容，由 AppKit Controller 管理窗口。
 
 ## 任务流光
 
-`TaskGlowController` 消费 `ActivityPresentationModel` 的全设备展示流，不参与通知或电源判定。本机 Codex Hook 可用，或存在已接入的远端、Claude 来源时可启用。外观配置与现有开关独立保存，旧设置保留原默认颜色、标准速度、100% 亮度和 10 秒结束时长。
+`TaskGlowController` 消费 `ActivityPresentationModel` 的全设备展示流，不参与通知或电源判定。配置了本机 Codex 或已接入远端、Claude 来源时可启用，临时断线不改写用户意图。外观配置与现有开关独立保存，旧设置保留原默认颜色、标准速度、100% 亮度和 10 秒结束时长。
 
 `TaskGlowSettings.appearance` 提供颜色、速度、亮度和结束时长。各屏幕共用运动时钟，改速保留当前周期进度。外观改变直接更新现有图层，不重建任务服务；配置子面板按需创建。
 
@@ -193,26 +193,24 @@ fallback panel 在展示前根据 SwiftUI fitting size 和目标屏幕可见区�
 二级设置入口使用各自的可用性结论：
 
 - 主面板布局入口始终可用
-- 流光入口要求开关开启，且本机 Hook 可用或存在已接入的远端、Claude 来源
+- 流光入口要求开关开启，且存在已配置的共享后台或已接入的远端、Claude 来源
 - 通知读取 `NotificationSettings.canShowOptions`
 - 自动重置要求 `AutoResetSettings.isEnabled` 且 `KeepAliveController.helperStatus == .enabled`
 - 防睡眠读取 `KeepAliveController.canShowOptions`
 
 入口条件失效时设置页发送对应的 `close` 动作，避免不可用的子面板继续显示。主开关关闭时，自动重置和防睡眠设置行不显示状态说明。
 
-`MainPanelSettings` 使用稳定区域标识保存账户、任务中心、额度、Token 用量和底部状态的顺序与显隐。布局归一化会去重、忽略无效值、补齐缺失区域，并保证至少保留一个可见区域。`StatusItemController` 在读取到 Hook 关闭状态后调用 `updateHookEnabled(_:)`，持久化关闭任务中心；如果任务中心原本是唯一可见区域，则同时开启账户区域。设置面板只禁用任务中心开关，拖拽手柄仍保持可用。其他数据链路的临时可用性只影响当次渲染。
+`MainPanelSettings` 使用原有稳定标识保存账户、任务、额度、用量和底部状态，服务状态作为新区域追加。布局归一化保留旧顺序与开关。任务可用性按已配置来源判断，临时失联不隐藏用户已选的任务区域。
 
 布局排序使用手柄上的自定义 `DragGesture`。拖动项通过悬浮副本跟随指针，其他行在跨过半行距离时按视图内预览顺序实时让位，松手后才调用 `setSectionOrder(_:)` 一次性持久化最终顺序。
 
-`SettingsWindowController` 持有这一窗口组唯一的 `UndoManager`。设置主窗口通过 `AuxiliaryHostingWindow` 暴露它，各设置子面板展示时从父窗口取得同一实例，因此焦点位于设置主窗口或任一子面板时，`⌘Z` 和 `⌘⇧Z` 都作用于同一份布局历史。Hook 状态变化引起的任务中心自动关闭不进入用户撤销历史。
+`SettingsWindowController` 持有这一窗口组唯一的 `UndoManager`。设置主窗口通过 `AuxiliaryHostingWindow` 暴露它，各设置子面板展示时从父窗口取得同一实例，因此焦点位于设置主窗口或任一子面板时，`⌘Z` 和 `⌘⇧Z` 都作用于同一份布局历史。来源配置变化引起的任务中心自动关闭不进入用户撤销历史。
 
-### 代理配置对话框
+### 共享后台与更新
 
-`CodexBarAppDelegate` 持有 `CodexProxySettings`，并经窗口控制器注入设置页。`AppSettingsView` 使用 SwiftUI `sheet` 展示 `ProxySettingsView`，打开前关闭侧边设置面板。
+设置不再提供 App 专用代理或 Codex Hook 安装。关于页分别显示共享后台实际版本和磁盘启动器版本，路径可复制。来源选择仅决定后台未运行时的启动器，重连不终止官方后台。
 
-未配置时点击整行或开关都会打开配置；已有配置时，行主体打开对话框，开关单独启停。对话框显示时从本机偏好加载草稿，关闭时取消测试并清空内存中的密码草稿。右上角清除菜单按保存记录是否存在显示，即使记录无法解码也可使用。
-
-关于页面的重连按钮紧邻 `Codex 版本` 标题，来源选择器位于行尾。重连及刷新期间两者禁用；没有可用来源时重连按钮禁用。
+Sparkle 已下载更新保留安装回调；退出准备取消后可重试。更新日志使用 fork 的真实 tag 页面。菜单提示不再绑定隐蔽的双击安装动作。
 
 ## 全局快捷键
 
@@ -244,7 +242,7 @@ app-server 状态默认每 60 秒检查刷新。主面板打开后约 160 ms 调
 
 普通刷新在刷新或重连进行中被忽略。需要在当前请求后补刷的操作通过 `refreshAfterCurrent` 保存一个待执行触发，当前请求结束后再执行。
 
-面板打开时立即刷新本地 Hook 统计；延迟任务还会对账已安装的 Hook 配置。面板在等待期间关闭时会取消该任务。
+面板打开时刷新保留的本地历史；Codex Hook 不再安装或自动修复。公开服务状态只在相应分区可见时随额度刷新，关闭或睡眠会取消请求。
 
 ## 本地化和格式化
 
