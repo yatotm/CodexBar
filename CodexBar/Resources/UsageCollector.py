@@ -679,6 +679,30 @@ class ValuationLedger:
         except OSError:
             self.complete = False
 
+    @staticmethod
+    def without_transient_declines(rows):
+        kept = []
+        index = 0
+        while index < len(rows):
+            current = rows[index]
+            if not kept or current[3] + 1 >= kept[-1][3]:
+                kept.append(current)
+                index += 1
+                continue
+            # 同一窗口的旧回执只有在短时间内恢复到原值后才排除
+            # 固定首个低值的时间, 后续低值不能延长恢复期限
+            previous_used = kept[-1][3]
+            deadline = current[2] + 120
+            recovery = index + 1
+            while recovery < len(rows) and rows[recovery][2] <= deadline and rows[recovery][3] < previous_used:
+                recovery += 1
+            if recovery < len(rows) and rows[recovery][2] <= deadline and rows[recovery][3] >= previous_used:
+                index = recovery
+                continue
+            # 任何无法确认恢复的下降都保留完整证据, 不用最大值掩盖
+            return rows, True
+        return kept, False
+
     def export(self, rows=None):
         groups = []
         if rows is None:
@@ -690,6 +714,8 @@ class ValuationLedger:
         windows = []
         for group in groups:
             group.sort(key=lambda row: (row[2], row[3]))
+            # 必须在日内首尾压缩前判断, 旧压缩缓存不足以证明中间的恢复过程
+            group, decreased = self.without_transient_declines(group)
             first, last = group[0], group[-1]
             points = {}
             for _, _, at, used in group:
@@ -703,7 +729,7 @@ class ValuationLedger:
                     values[-1] = {"at": at, "used": used}
             windows.append({"resetsAt": first[1], "firstAt": first[2], "firstUsed": first[3],
                             "lastAt": last[2], "lastUsed": last[3], "maxUsed": max(r[3] for r in group),
-                            "decreased": any(b[3] + 1 < a[3] for a, b in zip(group, group[1:])),
+                            "decreased": decreased,
                             "observations": sorted([p for pair in points.values() for p in pair], key=lambda p: p["at"])})
         return {"schema": 1, "complete": self.complete, "generatedAt": time.time(),
                 "accountKey": codex_account_key(self.home), "windows": windows}

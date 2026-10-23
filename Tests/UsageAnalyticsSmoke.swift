@@ -250,6 +250,18 @@ struct UsageAnalyticsSmoke {
         realDrop.observations += [UsageQuotaPoint(at: first + 1002, used: 10)]
         let changedQuota = UsageAnalyticsValuation.merge([remote, realDrop], acrossSources: true)
         precondition(changedQuota[0].decreased && changedQuota[0].lastUsed == 10, "单来源真实回落仍应保留, 不能用最大值掩盖")
+        var compressedDecline = remote
+        compressedDecline.decreased = true
+        compressedDecline.observations += [.init(at: first + 1001, used: 0), .init(at: first + 1007, used: 45)]
+        precondition(
+            UsageAnalyticsValuation.merge([mac, compressedDecline], acrossSources: true)[0].decreased,
+            "压缩缓存可能丢失长期下降的中间证据, 不能擅自解除旧标记"
+        )
+        let reexported = UsageAnalyticsValuation.merge([mac, remote], acrossSources: true)
+        precondition(
+            !reexported[0].decreased && reexported[0].lastUsed == 45,
+            "原始账本重新导出并替换来源后, 旧回落标记不能继续污染计算"
+        )
         var jitter = remote
         jitter.resetsAt += 4
         jitter.observations = [UsageQuotaPoint(at: first + 500, used: 20)]

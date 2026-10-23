@@ -79,6 +79,64 @@ class ValuationTests(unittest.TestCase):
         self.assertTrue(window["decreased"])
         self.assertEqual(window["maxUsed"], 60)
 
+    def test_recovered_stale_receipt_does_not_poison_period_or_mutate_samples(self):
+        state = {"session": "session", "provider": "openai"}
+        for used, seconds in [(5, 0), (0, 1), (5, 7), (6, 12)]:
+            self.ledger.observe(self.event(used, seconds), state)
+        before = self.ledger.connection.execute("SELECT * FROM samples ORDER BY at").fetchall()
+        window = self.ledger.export()["windows"][0]
+        self.assertFalse(window["decreased"])
+        self.assertEqual([p["used"] for p in window["observations"]], [5, 5, 6])
+        self.assertEqual((window["firstUsed"], window["lastUsed"], window["maxUsed"]), (5, 6, 6))
+        self.assertEqual(self.ledger.connection.execute("SELECT * FROM samples ORDER BY at").fetchall(), before)
+
+    def test_recovery_deadline_is_fixed_at_first_low_observation(self):
+        for recovery, expected in [(121, False), (121.001, True), (None, True)]:
+            with self.subTest(recovery=recovery):
+                rows = [("s", self.reset, 0, 20), ("s", self.reset, 1, 10), ("s", self.reset, 119, 10)]
+                if recovery is not None:
+                    rows.append(("s", self.reset, recovery, 20))
+                cleaned, decreased = self.ledger.without_transient_declines(rows)
+                self.assertEqual(decreased, expected)
+                self.assertEqual(cleaned, rows if expected else [rows[0], rows[-1]])
+
+    def test_partial_recovery_and_real_decline_after_transient_remain_protected(self):
+        for values in [[(20, 0), (10, 1), (19, 2)],
+                       [(20, 0), (0, 1), (20, 7), (10, 8)],
+                       [(20, 0), (0, 1), (20, 7), (10, 8), (20, 200)]]:
+            with self.subTest(values=values):
+                rows = [("s", self.reset, at, used) for used, at in values]
+                cleaned, decreased = self.ledger.without_transient_declines(rows)
+                self.assertTrue(decreased)
+                self.assertEqual(cleaned, rows)
+
+    def test_later_real_reset_cannot_confirm_recovery_of_previous_cycle(self):
+        state = {"session": "session", "provider": "openai"}
+        for value in [self.event(20), self.event(10, 1), self.event(20, 7, self.reset + 1000)]:
+            self.ledger.observe(value, state)
+        windows = self.ledger.export()["windows"]
+        self.assertEqual(len(windows), 2)
+        self.assertTrue(windows[0]["decreased"])
+        self.assertEqual(windows[0]["lastUsed"], 10)
+        self.assertFalse(windows[1]["decreased"])
+
+    def test_raw_history_keeps_long_decline_hidden_by_daily_compression(self):
+        state = {"session": "session", "provider": "openai"}
+        for used, seconds in [(10, 0), (20, 1), (10, 2), (20, 130), (10, 140), (20, 145)]:
+            self.ledger.observe(self.event(used, seconds), state)
+        window = self.ledger.export()["windows"][0]
+        self.assertTrue(window["decreased"])
+        self.assertNotIn(self.now.timestamp() + 2, [p["at"] for p in window["observations"]])
+        self.assertEqual(window["lastUsed"], 20)
+
+    def test_subsequent_export_resolves_previously_unrecovered_low_receipt(self):
+        state = {"session": "session", "provider": "openai"}
+        self.ledger.observe(self.event(5), state)
+        self.ledger.observe(self.event(0, 1), state)
+        self.assertTrue(self.ledger.export()["windows"][0]["decreased"])
+        self.ledger.observe(self.event(5, 7), state)
+        self.assertFalse(self.ledger.export()["windows"][0]["decreased"])
+
 
 class SourceQuotaTests(ValuationTests):
     def setUp(self):
