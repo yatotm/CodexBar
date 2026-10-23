@@ -5,6 +5,8 @@ extension CodexActivityMonitor {
     /// 心跳只刷新来源健康与覆盖时间, 不作为任务进展
     func receiveSharedTasks(_ values: [RemoteActivityTask], available: Bool, bootstrap: Bool, now: Date = .now) {
         guard usesSharedBackend, isStarted else { return }
+        // 与协议同用 Unix 秒, 避免 Date 往返转换把零间隔舍入为负数
+        let receivedAt = now.timeIntervalSince1970
         let recovering = bootstrap || !isMonitoringAvailable
         let healthy = updateSharedSourceHealth(available)
         if !healthy {
@@ -41,12 +43,12 @@ extension CodexActivityMonitor {
                 }
                 next[key] = task
                 if !taskRecovering, task.state == .waitingApproval, previous?.state != .waitingApproval,
-                   (0 ... 10).contains(now.timeIntervalSince(task.stateChangedAt)) {
+                   (0 ... 10).contains(receivedAt - (value.stateChangedAt ?? value.updatedAt)) {
                     transitions.append(.waitingApproval(task.snapshot))
                 }
             } else {
                 let publishes = !taskRecovering && previous != nil && value.isHistoricalTerminal != true
-                    && (0 ... 10).contains(now.timeIntervalSince(Date(timeIntervalSince1970: value.updatedAt)))
+                    && (0 ... 10).contains(receivedAt - value.updatedAt)
                 storeSharedTerminal(value, task: task, publishes: publishes, now: now, into: &transitions)
             }
         }

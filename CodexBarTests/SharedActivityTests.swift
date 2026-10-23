@@ -11,7 +11,8 @@ struct SharedActivityTests {
         defer { preferences.remove() }
         let monitor = try makeMonitor(directory, preferences)
         defer { monitor.stop() }
-        let now = Date()
+        // 固定覆盖 Date 往返 Unix 秒后出现负误差的零间隔边界
+        let now = Date(timeIntervalSinceReferenceDate: 800000000.0000004)
         let running = task(at: now)
         var received: [CodexActivityTransition] = []
         let observation = monitor.transitionPublisher.sink { received.append($0) }
@@ -29,6 +30,29 @@ struct SharedActivityTests {
         monitor.receiveSharedTasks([], available: false, bootstrap: true, now: now)
         monitor.receiveSharedTasks([completed], available: true, bootstrap: true, now: now)
         #expect(received.count == 1)
+    }
+
+    @Test(arguments: [(0.0, true), (10.0, true), (10.001, false), (-1.0, false)])
+    func waitingNotificationsRespectUnixTimeBoundary(age: Double, expected: Bool) throws {
+        let directory = try TestDirectory()
+        defer { try? directory.remove() }
+        let preferences = try TestPreferences()
+        defer { preferences.remove() }
+        let monitor = try makeMonitor(directory, preferences)
+        defer { monitor.stop() }
+        let now = Date(timeIntervalSinceReferenceDate: 800000000.0000004)
+        var received: [CodexActivityTransition] = []
+        let observation = monitor.transitionPublisher.sink { received.append($0) }
+        defer { observation.cancel() }
+        monitor.receiveSharedTasks([task(at: now)], available: true, bootstrap: true, now: now)
+        let timestamp = now.timeIntervalSince1970 - age
+        let waiting = RemoteActivityTask(
+            id: String(repeating: "a", count: 64), provider: "codex", state: "waiting", project: "project",
+            updatedAt: timestamp, startedAt: now.timeIntervalSince1970 - 20, modelName: "gpt-6.1",
+            stateChangedAt: timestamp, lifecycleComplete: true, lastProgressAt: timestamp
+        )
+        monitor.receiveSharedTasks([waiting], available: true, bootstrap: false, now: now)
+        #expect(received.count == (expected ? 1 : 0))
     }
 
     @Test func disconnectPausesPowerAndProtectionWithoutInventingTermination() throws {
