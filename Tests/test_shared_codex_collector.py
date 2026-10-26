@@ -145,6 +145,66 @@ class SharedGraphTests(unittest.TestCase):
         graph.reconcile("root", [dict(id="very-old", status="completed", rootTurnId="very-old")], 1001, graph.sequence)
         self.assertEqual(len(graph.tasks(1001)), 1)
 
+    def test_terminal_poll_without_timestamp_preserves_end_and_expiration(self):
+        for status in ("completed", "failed", "interrupted"):
+            with self.subTest(status=status):
+                graph = active_graph()
+                graph.consume(event("turn/completed", turn=dict(id="turn", status=status, completedAt=1002)), 1002)
+                original = graph.tasks(1002)[0]
+                for now in (1062, 1662, 4602):
+                    graph.reconcile("root", [dict(id="turn", status=status, startedAt=None, completedAt=None)], now, graph.sequence)
+                    self.assertEqual(graph.tasks(now)[0], original)
+                self.assertEqual(graph.tasks(1002 + shared.RETENTION + 1), [])
+
+    def test_missing_terminal_time_uses_first_confirmation_only(self):
+        for historical in (False, True):
+            with self.subTest(historical=historical):
+                graph = active_graph()
+                terminal = dict(id="turn", status="interrupted")
+                graph.turn("root", terminal, 1100, historical=historical)
+                self.assertEqual(graph.tasks(1100)[0]["updatedAt"], 1100)
+                for now in (1200, 1800):
+                    graph.consume(event("turn/completed", turn=terminal), now)
+                    graph.reconcile("root", [terminal], now + 1, graph.sequence)
+                    task = graph.tasks(now + 1)[0]
+                    self.assertEqual(task["updatedAt"], 1100)
+                    self.assertEqual(task["lastProgressAt"], 1100)
+                    self.assertEqual(task["isHistoricalTerminal"], historical)
+
+    def test_explicit_terminal_time_refines_observed_fallback(self):
+        for completed_at in (1050, 1150):
+            with self.subTest(completed_at=completed_at):
+                graph = active_graph()
+                terminal = dict(id="turn", status="interrupted")
+                graph.consume(event("turn/completed", turn=terminal), 1100)
+                graph.reconcile("root", [dict(terminal, completedAt=completed_at)], 1200, graph.sequence)
+                graph.reconcile("root", [terminal], 1800, graph.sequence)
+                self.assertEqual(graph.tasks(1800)[0]["updatedAt"], completed_at)
+
+    def test_late_token_usage_updates_counters_without_extending_terminal(self):
+        graph = active_graph()
+        graph.consume(event("thread/tokenUsage/updated", tokenUsage=dict(total=wire_usage(1), last=wire_usage(1))), 1001)
+        graph.consume(event("turn/completed", turn=dict(id="turn", status="completed", completedAt=1002)), 1002)
+        previous_sequence = graph.sequence
+        graph.consume(event("thread/tokenUsage/updated", tokenUsage=dict(total=wire_usage(2), last=wire_usage(1))), 1800)
+        task = graph.tasks(1800)[0]
+        self.assertEqual(task["tokenUsage"]["output_tokens"], 2)
+        self.assertGreater(graph.sequence, previous_sequence)
+        self.assertEqual(task["updatedAt"], 1002)
+        self.assertEqual(task["lastProgressAt"], 1002)
+
+    def test_finished_child_poll_does_not_extend_parent_history(self):
+        graph = active_graph()
+        graph.metadata(dict(id="child", parentThreadId="root", source={"subAgent": {}}, status=dict(type="active")))
+        graph.consume(event("turn/started", thread="child", turn=dict(id="child-turn", status="inProgress", rootTurnId="turn", startedAt=1001)), 1001)
+        graph.consume(event("turn/completed", turn=dict(id="turn", status="completed", completedAt=1002)), 1002)
+        graph.consume(event("turn/completed", thread="child", turn=dict(id="child-turn", status="completed", completedAt=1003)), 1003)
+        for thread, turn in (("root", "turn"), ("child", "child-turn")):
+            graph.reconcile(thread, [dict(id=turn, status="completed")], 1800, graph.sequence)
+        task = graph.tasks(1800)[0]
+        self.assertEqual(task["state"], "completed")
+        self.assertEqual(task["updatedAt"], 1003)
+
     def test_child_matches_exact_root_turn_not_current_parent(self):
         graph = active_graph()
         graph.metadata(dict(id="child", parentThreadId="root", source={"subAgent": {}}, status=dict(type="active")))
@@ -326,6 +386,25 @@ class StateStoreTests(unittest.TestCase):
         later = self.store.save(graph, now=1035)
         self.assertEqual(first["revision"], later["revision"])
         self.assertEqual(first["tasks"], later["tasks"])
+
+    def test_terminal_poll_and_restart_do_not_refresh_saved_end(self):
+        graph = active_graph()
+        terminal = dict(id="turn", status="interrupted")
+        graph.consume(event("turn/completed", turn=terminal), 1002)
+        first = self.store.save(graph, now=1002)
+        graph.reconcile("root", [terminal], 1800, graph.sequence)
+        later = self.store.save(graph, now=1800)
+        self.assertEqual(later["revision"], first["revision"])
+        self.assertEqual(later["tasks"], first["tasks"])
+        restored = shared.TaskGraph()
+        restored.available = True
+        restored.metadata(dict(id="root", source="cli", status=dict(type="idle")))
+        restored.reconcile("root", [terminal], 2000, restored.sequence)
+        saved = self.store.save(restored, now=2000)
+        self.assertEqual(saved["tasks"][0]["updatedAt"], 1002)
+        self.assertTrue(saved["tasks"][0]["isHistoricalTerminal"])
+        expired = self.store.save(restored, now=1002 + shared.RETENTION + 1)
+        self.assertEqual(expired["tasks"], [])
 
     def test_restarted_collector_restores_token_dedup(self):
         graph = active_graph()

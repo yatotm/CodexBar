@@ -114,6 +114,35 @@ struct SharedActivityTests {
         #expect(monitor.snapshot.recentTerminations.isEmpty)
     }
 
+    @Test(arguments: ["completed", "ended"])
+    func terminalHistoryExpiresDespiteRepeatedSnapshots(state: String) throws {
+        let directory = try TestDirectory()
+        defer { try? directory.remove() }
+        let preferences = try TestPreferences()
+        defer { preferences.remove() }
+        let monitor = try makeMonitor(directory, preferences)
+        defer { monitor.stop() }
+        let endedAt = Date()
+        let terminal = task(at: endedAt, state: state)
+        var source = UsageSource.local
+        source.transport = .ssh
+        source.address = "example"
+        for age in [0.0, 599, 600, 660] {
+            let now = endedAt.addingTimeInterval(age)
+            monitor.receiveSharedTasks([terminal], available: true, bootstrap: age == 0, now: now)
+            let local = monitor.snapshot
+            let remote = ActivityPresentationModel.merge(
+                local: .empty, tasks: [source.id: [terminal]], states: [source.id: "实时连接"],
+                enabled: [source.id], sources: [source], scope: .all, now: now
+            )
+            let expectedCount = age < 600 ? 1 : 0
+            for snapshot in [local, remote] {
+                #expect(snapshot.recentCompletions.count + snapshot.recentTerminations.count == expectedCount)
+                #expect(!snapshot.hasActiveTasks)
+            }
+        }
+    }
+
     @Test func asynchronousQuestionAndSubagentRemainRunning() throws {
         let directory = try TestDirectory()
         defer { try? directory.remove() }

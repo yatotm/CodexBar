@@ -20,6 +20,8 @@ Root thread and turn identify a task. Subagents remain under the parent; waiting
 
 Local Codex frames feed the existing monitor for notifications, haptics and local power control. Merged remote/Claude presentation does not feed power decisions. Replayed or reconnected terminal snapshots never generate old notifications or glows.
 
+Completed and terminated tasks remain visible for 10 minutes. An explicit backend end time takes precedence; otherwise the first observed terminal time is retained. Repeated polls and late token counts do not extend retention. A later explicit end time may correct the fallback. Historical terminal rows without an existing task or end time are ignored.
+
 Sleep and lid closure without a working external display suspend Mac streams. Physical, virtual and mirrored displays use the same active-state rules; DarkWake does not clear display-sleep gating. Disconnected tasks are uncertain, not terminated.
 
 Protection only considers healthy local running tasks. Heartbeats renew coverage without moving progress timestamps. The existing protection hash and schema 1 file are preserved. Unknown token baselines and incomplete durations remain unavailable.

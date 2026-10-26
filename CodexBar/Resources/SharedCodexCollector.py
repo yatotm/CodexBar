@@ -380,7 +380,8 @@ class TaskGraph:
             if len(self.turns) >= MAX_TURNS:
                 raise CollectorError("turn-limit")
         started = timestamp(value.get("startedAt"), previous["started"] if previous else now)
-        ended = timestamp(value.get("completedAt"), now) if state in TERMINAL else None
+        # 缺少结束时间时只用首次确认时间, 重复轮询不能延长终态保留期
+        ended = timestamp(value.get("completedAt"), previous["updated"] if was_terminal else now) if state in TERMINAL else None
         self.sequence += 1
         node = previous or {"started": started, "updated": started, "stage": "processing", "items": {}, "requests": {},
                             "questions": {}, "planCompleted": None, "planTotal": None, "recentEvent": None,
@@ -532,6 +533,9 @@ class TaskGraph:
     def progress(self, node, now, recent=None):
         self.sequence += 1
         node["revision"] = self.sequence
+        # 迟到的 Token 统计仍需写盘, 但不能改变已结束任务的时间
+        if node["terminal"]:
+            return
         node["updated"] = max(node["updated"], now)
         if recent:
             node["recentEvent"], node["recentEventAt"] = recent, now
