@@ -30,6 +30,7 @@ jobs:
       - name: Run regression checks
         run: |
           bash Scripts/verify-usage-center.sh
+          python3 -B -m unittest discover -s Tests -p 'test_shared_codex_collector.py' -v
           python3 -B -m unittest discover -s Tests -p 'test_release.py' -v
           python3 -B -m unittest discover -s Tests -p 'test_fork_migration.py' -v
           python3 -B -m unittest discover -s Tests -p 'test_issue_notification.py' -v

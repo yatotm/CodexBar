@@ -16,7 +16,7 @@ final class MenuHostingController: NSViewController {
     }
 
     func install(_ root: AnyView) {
-        let hosting = NSHostingController(rootView: root)
+        let hosting = NSHostingController(rootView: AnyView(TopPinnedMenuContent { root }))
         hosting.sizingOptions = []
         hosting.safeAreaRegions = []
         self.hosting = hosting
@@ -40,6 +40,24 @@ final class MenuHostingController: NSViewController {
             hosting?.view.frame = CGRect(origin: .zero, size: size)
             CATransaction.commit()
         }
+    }
+}
+
+/// 内容按自然高度测量, 宿主仍使用窗口当前高度, 避免新内容在旧窗口内居中溢出
+private struct TopPinnedMenuContent: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let natural = child.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        // 安装时的零高度提议用于测量, 不能把零当成真实窗口高度
+        let height = proposal.height.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        return CGSize(width: natural.width, height: height ?? ceil(natural.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        subviews.first?.place(
+            at: bounds.origin, anchor: .topLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: nil)
+        )
     }
 }
 
