@@ -293,7 +293,7 @@ struct UpdatedAtRow: View {
                     color: .blue
                 )
 
-                Text("usage.status.updated")
+                Text(snapshot.isRateLimitsStale || snapshot.isUsageStale ? "usage.status.cached" : "usage.status.updated")
                     .foregroundStyle(Self.secondaryTextColor)
 
                 Text(Self.timeFormatter.string(from: snapshot.generatedAt))

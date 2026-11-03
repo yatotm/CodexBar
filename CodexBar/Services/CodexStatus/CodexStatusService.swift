@@ -353,6 +353,9 @@ actor CodexStatusService {
                     refreshAccountInfo: reused,
                     trace: &trace
                 )
+                if !connection.session.isOpen {
+                    teardownConnection()
+                }
                 return .data(snapshot)
             } catch FetchFailure.notLoggedIn {
                 supplementalDataCache = SupplementalDataCache()
@@ -529,7 +532,7 @@ actor CodexStatusService {
 
     /// 额度与用量独立读取
     /// 认证失败全程只刷新一次 token
-    /// 传输故障交给外层重建连接
+    /// 账户传输故障交给外层重建, 补充接口故障只降级对应数据
     private func fetchData(
         using connection: AppServerConnection,
         refreshAccountInfo: Bool,
@@ -558,12 +561,20 @@ actor CodexStatusService {
             as type: Value.Type,
             cache: inout Value?
         ) throws -> CachedSupplementalRead<Value> {
-            try cachedRead(
-                readResultWithAuthRefresh {
-                    Self.read(method, using: connection, as: type)
-                },
-                cache: &cache
-            )
+            if connection.session.isOpen {
+                do {
+                    let result = try readResultWithAuthRefresh {
+                        Self.read(method, using: connection, as: type)
+                    }
+                    return cachedRead(result, cache: &cache)
+                } catch FetchFailure.needsRebuild {
+                    try Task.checkCancellation()
+                    // 账户已确认, 不因补充请求超时丢弃本轮成功数据或同账号缓存
+                    // 关闭本客户端连接, 下一轮刷新再重连, 避免重复整轮慢请求
+                    connection.close()
+                }
+            }
+            return cachedRead(.skipped(.requestFailed), cache: &cache)
         }
 
         // 新建连接已读过 account; 复用连接才刷新账户状态

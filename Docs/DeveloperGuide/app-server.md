@@ -86,7 +86,7 @@ codex app-server daemon start
 | `config/read`、`config/batchWrite` | Codex 配置读取与受控写入 |
 | `hooks/list` | 已有 Hook 配置的独立校验入口，不是共享任务采集门槛 |
 
-一次刷新统一控制认证刷新资格，`account/read(refreshToken: true)` 最多执行一次。传输失败时至多重建一次客户端连接；重新连接仍失败则留待下一次正常刷新。
+一次刷新统一控制认证刷新资格，`account/read(refreshToken: true)` 最多执行一次。账户读取遇到传输故障时至多重建一次客户端连接。账户已确认后的额度或用量请求超时、断线，只降级失败项，保留本轮成功项和同账号缓存；关闭故障连接，下一轮正常刷新时重新连接，不重复整轮慢请求。
 
 账户有效时，额度和用量允许独立失败：
 

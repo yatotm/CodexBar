@@ -86,7 +86,7 @@ Connections are reused for at most one hour. The next request reconnects the cli
 | `config/read`, `config/batchWrite` | Configuration reads and controlled writes |
 | `hooks/list` | Independent validation of existing Hook configuration; not a shared-activity prerequisite |
 
-A refresh allows at most one `account/read(refreshToken: true)`. Transport failure allows at most one client rebuild; further failure waits for a later normal refresh.
+A refresh allows at most one `account/read(refreshToken: true)`. Account-read transport failures allow at most one client rebuild. Once the account is verified, a quota or usage timeout/disconnection degrades only the failed data, preserving successful reads and same-account cached values. The failed client connection is closed and rebuilt on the next normal refresh, without repeating the entire slow refresh.
 
 Quota and usage can fail independently while the account remains valid:
 

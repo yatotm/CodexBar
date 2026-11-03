@@ -5937,6 +5937,38 @@
         }
       }
     },
+    "usage.status.cached" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refreshed with cached data"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本次刷新含缓存数据"
+          }
+        }
+      }
+    },
+    "usage.status.cached-help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This request failed. Showing the last successful data; retrying on the next refresh."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本次请求失败，当前显示上次成功的数据，将在下次刷新时重试"
+          }
+        }
+      }
+    },
     "usage.status.updated" : {
       "localizations" : {
         "en" : {

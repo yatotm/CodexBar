@@ -65,6 +65,7 @@ extension View {
     /// 数据为缓存回退 (本轮刷新失败) 时弱化显示
     func markStale(_ isStale: Bool) -> some View {
         opacity(isStale ? 0.55 : 1)
+            .help(isStale ? String(localized: "usage.status.cached-help") : "")
     }
 
     /// 侧边详情面板统一的外观: 玻璃底 + 背板填充 + 边界描边 + 圆角裁剪
