@@ -287,6 +287,7 @@ nonisolated struct UsageDay: Identifiable, Equatable {
     var metrics: UsageMetrics?
     var topModel: String?
     var longestTurnMs: Int64?
+    var modelTokens: [String: Int64] = [:]
     var id: String {
         day
     }

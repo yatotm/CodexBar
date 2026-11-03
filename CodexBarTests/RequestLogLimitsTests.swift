@@ -2,6 +2,27 @@ import Foundation
 import Testing
 
 struct RequestLogLimitsTests {
+    @Test func methodFilteringSupportsMultipleMethodsAndUnattributedFailures() {
+        let storage = RequestLogStorage()
+        _ = storage.beginRequest(method: "account/read", payload: "{}")
+        _ = storage.beginRequest(method: "account/rateLimits/read", payload: "{}")
+        _ = storage.beginRequest(method: "account/usage/read", payload: "{}")
+        storage.recordFailure(message: "connection closed")
+        let store = RequestLogStore(storage: storage)
+        #expect(store.filteredEntries.count == 4)
+        store.setSelectedMethods(["account/rateLimits/read", "account/usage/read"])
+        #expect(Set(store.filteredEntries.compactMap(\.method)) == ["account/rateLimits/read", "account/usage/read"])
+        store.setSelectedMethods([""])
+        #expect(store.filteredEntries.count == 1)
+        #expect(store.filteredEntries.first?.kind == .failure)
+        store.setSelectedMethods(["absent"])
+        #expect(store.filteredEntries.isEmpty)
+        #expect(store.availableMethods.contains("absent"))
+        store.setSelectedMethods([])
+        #expect(store.filteredEntries.count == 4)
+        #expect(storage.entries.count == 4)
+    }
+
     @Test func largeUnicodeResponsesAreBoundedBeforePreviewLayout() throws {
         let store = RequestLogStorage()
         let payload = String(repeating: "测试", count: 100000)

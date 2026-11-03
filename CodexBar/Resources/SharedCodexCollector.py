@@ -313,6 +313,7 @@ class TaskGraph:
         self.turns = {}
         self.sequence = 0
         self.available = False
+        self.reconciliation_complete = False
         self.loaded = set()
         self.tokens = {}
         self.positions = {}
@@ -344,11 +345,16 @@ class TaskGraph:
         current = {"project": project or old.get("project", ""), "model": text(value.get("model"), 100) or old.get("model"),
                    "effort": text(value.get("reasoningEffort"), 40) or old.get("effort"),
                    "parent": parent or old.get("parent"), "origin": origin if source is not None else old.get("origin", origin),
+                   "threadSource": text(value.get("threadSource"), 100) or old.get("threadSource"),
                    "status": self.status(value.get("status")) if "status" in value else old.get("status", {})}
         if current != old:
             self.sequence += 1
             self.thread_revisions[key] = self.sequence
         self.threads[key] = current
+
+    def ignores(self, thread):
+        metadata = self.threads.get(thread, {})
+        return metadata.get("origin") == "review" or metadata.get("threadSource") == "thread_title"
 
     @staticmethod
     def status(value):
@@ -361,7 +367,7 @@ class TaskGraph:
     def turn(self, thread, value, now, historical=False, checkpoint=None):
         if not isinstance(value, dict) or not text(value.get("id")):
             raise CollectorError("invalid-turn")
-        if self.threads.get(thread, {}).get("origin") == "review":
+        if self.ignores(thread):
             return None
         key = (thread, value["id"])
         previous = self.turns.get(key)
@@ -401,6 +407,9 @@ class TaskGraph:
 
     def reconcile(self, thread, turns, now, checkpoint):
         for value in turns:
+            previous = self.turns.get((thread, text(value.get("id")))) if isinstance(value, dict) else None
+            if previous and previous["revision"] > checkpoint:
+                continue
             node = self.turn(thread, value, now, historical=True, checkpoint=checkpoint)
             if node and not node["terminal"]:
                 status = self.threads.get(thread, {}).get("status", {})
@@ -432,7 +441,7 @@ class TaskGraph:
             self.metadata(raw_thread)
         if thread not in self.threads:
             self.metadata(dict(id=thread))
-        if self.threads[thread].get("origin") == "review":
+        if self.ignores(thread):
             return
         if method == "thread/status/changed":
             status = self.status(params.get("status"))
@@ -550,6 +559,8 @@ class TaskGraph:
             return
         node = self.turns[key]
         kind, identifier = item.get("type"), item["id"]
+        if not isinstance(kind, str):
+            return
         if kind == "subAgentActivity":
             child = text(item.get("agentThreadId"))
             if child and item.get("kind") == "started":
@@ -592,7 +603,9 @@ class TaskGraph:
             if kind in TOOLS:
                 outcome = "tool-failed" if item.get("status") in ("failed", "declined") or item.get("success") is False else "tool-completed"
                 agents = item.get("agentsStates")
-                if kind == "collabAgentToolCall" and isinstance(agents, dict) and any(isinstance(value, dict) and value.get("status") == "errored" for value in agents.values()):
+                if kind == "collabAgentToolCall" and item.get("status") == "interrupted":
+                    outcome = "agent-call-interrupted"
+                elif kind == "collabAgentToolCall" and isinstance(agents, dict) and any(isinstance(value, dict) and value.get("status") == "errored" for value in agents.values()):
                     outcome = "agent-failed"
                 self.progress(node, now, outcome)
         self.progress(node, now)
@@ -624,6 +637,7 @@ class TaskGraph:
 
     def disconnected(self):
         self.available = False
+        self.reconciliation_complete = False
         self.loaded.clear()
         for node in self.turns.values():
             if not node["terminal"]:
@@ -634,7 +648,7 @@ class TaskGraph:
                 node["stage"] = "unknown"
 
     def root_for(self, key):
-        if self.threads.get(key[0], {}).get("origin") == "review":
+        if self.ignores(key[0]):
             return None
         node = self.turns[key]
         root = node.get("root")
@@ -649,7 +663,7 @@ class TaskGraph:
             return None
         candidate = matches[0]
         metadata = self.threads.get(candidate[0], {})
-        return candidate if metadata.get("origin") == "main" and not metadata.get("parent") else None
+        return candidate if metadata.get("origin") in ("main", "unknown") and not metadata.get("parent") and not self.ignores(candidate[0]) else None
 
     def tasks(self, now=None):
         now = time.time() if now is None else now
@@ -665,7 +679,7 @@ class TaskGraph:
             active = [self.turns[key] for key in members if not self.turns[key]["terminal"]]
             observed_children = {key[0] for key in members if key != root}
             pending_children = {child for child, running in self.children.get(root, {}).items()
-                                if running and child not in observed_children and self.threads.get(child, {}).get("origin") != "review"}
+                                if running and child not in observed_children and not self.ignores(child)}
             unknown = not self.available or any(not value["verified"] for value in active)
             waits = [value for value in active if any(request["blocking"] for request in value["requests"].values())]
             flags = [flag for key in members if not self.turns[key]["terminal"] for flag in self.threads[key[0]].get("status", {}).get("flags", [])]
@@ -709,11 +723,14 @@ class TaskGraph:
         self.last_prune = now
         keep = {key for key, node in self.turns.items() if node["updated"] >= now - RETENTION or (not node["terminal"] and key[0] in self.loaded)}
         keep.update(root for key in list(keep) if (root := self.root_for(key)) is not None)
+        removed = {digest("codex", *key) for key in self.turns if key not in keep}
         self.turns = {key: node for key, node in self.turns.items() if key in keep}
         retained = {key[0] for key in self.turns} | self.loaded
         self.threads = {key: value for key, value in self.threads.items() if key in retained}
         self.thread_revisions = {key: value for key, value in self.thread_revisions.items() if key in retained}
-        self.tokens = {key: value for key, value in self.tokens.items() if value.get("at", 0) >= now - RETENTION}
+        active_tokens = {digest("codex", *key) for key in keep}
+        self.tokens = {key: value for key, value in self.tokens.items()
+                       if key not in removed and (key in active_tokens or value.get("at", 0) >= now - RETENTION)}
         self.positions = {key: value for key, value in self.positions.items() if key in {digest("codex", thread) for thread in retained}}
         self.children = {key: value for key, value in self.children.items() if key in self.turns}
 
@@ -779,8 +796,9 @@ class StateStore:
             old = old_tasks.get(task["id"])
             task["stateChangedAt"] = old.get("stateChangedAt", old["updatedAt"]) if old and old["state"] == task["state"] else task["updatedAt"]
         identities = {task["id"] for task in tasks}
+        ignored = {digest("codex", *key) for key in graph.turns if graph.ignores(key[0])}
         for old in (previous or {}).get("tasks", []):
-            if old["id"] not in identities and old["updatedAt"] >= now - RETENTION:
+            if old["id"] not in identities | ignored and old["updatedAt"] >= now - RETENTION:
                 old = dict(old)
                 if old["state"] in ("running", "waiting"):
                     old.update(state="unknown", stage="unknown", hasBlockingInputRequest=False, lifecycleComplete=False)
@@ -790,7 +808,8 @@ class StateStore:
         tasks.sort(key=lambda task: (task["state"] in ("running", "waiting", "unknown"), task["updatedAt"]), reverse=True)
         payload = dict(schema=1, epoch=previous["epoch"] if previous else uuid.uuid4().hex,
                        revision=previous["revision"] if previous else 0, sentAt=now, tasks=tasks[:500],
-                       backend="sharedCodex", sourceAvailable=graph.available, sourceReason=reason, serverVersion=version)
+                       backend="sharedCodex", sourceAvailable=graph.available, sourceReason=reason, serverVersion=version,
+                       reconciliationComplete=graph.available and graph.reconciliation_complete)
         while len(encode(payload)) > MAX_FRAME - 128 and payload["tasks"]:
             payload["tasks"].pop()
             payload["tasksTruncated"] = True
@@ -820,6 +839,7 @@ class StateStore:
                         backend="sharedCodex", sourceAvailable=False, sourceReason="collector-not-running")
         if now - saved > 75:
             value["sourceAvailable"], value["sourceReason"] = False, "collector-stale"
+            value["reconciliationComplete"] = False
             for task in value["tasks"]:
                 if task["state"] in ("running", "waiting"):
                     task.update(state="unknown", stage="unknown", hasBlockingInputRequest=False, lifecycleComplete=False)
@@ -838,6 +858,9 @@ class Observer:
         self.subscribed = set()
         self.checked = {}
         self.scans = {}
+        self.verified = set()
+        self.failures = {}
+        self.graph.reconciliation_complete = False
 
     def loaded_threads(self):
         loaded, cursors = set(), set()
@@ -867,73 +890,124 @@ class Observer:
         self.graph.loaded = loaded
         self.subscribed.intersection_update(loaded)
         active = {key[0] for key, node in self.graph.turns.items() if not node["terminal"]}
-        parents = {meta["parent"] for meta in self.graph.threads.values() if meta.get("parent")}
-        candidates = sorted(loaded | active | parents, key=lambda key: (self.checked.get(key, 0), key))
+        candidates = sorted(self.required_threads(), key=lambda key: (self.checked.get(key, 0), key))
         deadline = time.monotonic() + (20 if force else 1)
         for identifier in candidates:
-            if not force and now - self.checked.get(identifier, 0) < (5 if identifier in active else 60):
+            failure = self.failures.get(identifier)
+            retry_at = failure[2] if failure else self.checked.get(identifier, 0) + (5 if identifier in active else 60)
+            if not force and now < retry_at:
                 continue
-            checkpoint = self.graph.sequence
             try:
-                read = self.rpc.request("thread/read", dict(threadId=identifier, includeTurns=False)).get("thread")
-                if not isinstance(read, dict) or read.get("id") != identifier:
-                    raise CollectorError("invalid-thread")
-                if self.graph.thread_revisions.get(identifier, 0) <= checkpoint:
-                    self.graph.metadata(read)
-                if identifier in loaded and identifier not in self.subscribed and self.graph.threads[identifier]["status"].get("type") != "notLoaded":
-                    # 只订阅刚确认已加载的会话, 绝不恢复历史会话或设置模型/审批策略
-                    subscribed_revision = self.graph.thread_revisions.get(identifier, 0)
-                    joined = self.rpc.request("thread/resume", dict(threadId=identifier, excludeTurns=True)).get("thread")
-                    if not isinstance(joined, dict) or joined.get("id") != identifier:
-                        raise CollectorError("invalid-thread")
-                    if self.graph.thread_revisions.get(identifier, 0) == subscribed_revision:
-                        self.graph.metadata(joined)
-                    self.subscribed.add(identifier)
-                page = self.rpc.request("thread/turns/list", dict(threadId=identifier, limit=10, itemsView="notLoaded"))
-                turns = page.get("data")
-                if not isinstance(turns, list) or len(turns) > 100:
-                    raise CollectorError("invalid-turn-list")
-                self.graph.reconcile(identifier, turns, now, checkpoint)
-                targets = {key[1] for key, node in self.graph.turns.items() if key[0] == identifier and not node["terminal"]}
-                targets.update(node["root"] for key, node in self.graph.turns.items()
-                               if node.get("root") and self.graph.threads.get(key[0], {}).get("parent") == identifier)
-                covered = {value.get("id") for value in turns if isinstance(value, dict)}
-                missing = targets - covered
-                cursor = self.scans.get(identifier, page.get("nextCursor")) if missing else None
-                visited = set()
-                for _ in range(4 if force else 1):
-                    if not missing or cursor is None:
-                        break
-                    if not text(cursor, 4096) or cursor in visited:
-                        raise CollectorError("invalid-turn-cursor")
-                    visited.add(cursor)
-                    checkpoint = self.graph.sequence
-                    older = self.rpc.request("thread/turns/list", dict(threadId=identifier, limit=100, itemsView="notLoaded", cursor=cursor))
-                    values = older.get("data")
-                    if not isinstance(values, list) or len(values) > 100:
-                        raise CollectorError("invalid-turn-list")
-                    self.graph.reconcile(identifier, values, now, checkpoint)
-                    missing.difference_update(value.get("id") for value in values if isinstance(value, dict))
-                    next_cursor = older.get("nextCursor")
-                    if next_cursor == cursor:
-                        raise CollectorError("invalid-turn-cursor")
-                    cursor = next_cursor
-                if missing and cursor:
-                    self.scans[identifier] = cursor
-                else:
-                    self.scans.pop(identifier, None)
-            except RPCError:
+                complete = self.reconcile_thread(identifier, loaded, force, now)
+            except CollectorError as error:
+                if not isinstance(error, RPCError) and str(error) not in {"invalid-thread", "invalid-turn", "invalid-turn-list", "invalid-turn-cursor"}:
+                    raise
+                complete = False
+                self.subscribed.discard(identifier)
+            if complete:
+                self.verified.add(identifier)
+                self.failures.pop(identifier, None)
+            else:
+                self.verified.discard(identifier)
+                count, started, _ = self.failures.get(identifier, (0, now, now))
+                count = min(4, count + 1)
+                delay = (5, 15, 30, 60)[count - 1] if now - started < 60 else 60
+                self.failures[identifier] = (count, started, now + delay)
                 for key, node in self.graph.turns.items():
                     if key[0] == identifier and not node["terminal"]:
+                        if node["verified"]:
+                            self.graph.sequence += 1
+                            node["revision"] = self.graph.sequence
                         node["verified"] = False
-                self.subscribed.discard(identifier)
             self.checked[identifier] = now
             if time.monotonic() >= deadline:
                 break
-        self.checked = {key: value for key, value in self.checked.items() if key in loaded | active | parents}
-        self.scans = {key: value for key, value in self.scans.items() if key in self.checked}
+        retained = self.required_threads()
+        self.verified.intersection_update(retained)
+        self.checked = {key: value for key, value in self.checked.items() if key in retained}
+        self.scans = {key: value for key, value in self.scans.items() if key in retained}
+        self.failures = {key: value for key, value in self.failures.items() if key in retained}
+        complete = retained.issubset(self.verified) and not self.pending_threads() and all(
+            node["terminal"] or self.graph.ignores(key[0]) or (node["verified"] and self.graph.root_for(key) is not None)
+            for key, node in self.graph.turns.items())
+        if self.graph.reconciliation_complete != complete:
+            self.graph.sequence += 1
+            self.graph.reconciliation_complete = complete
         self.graph.available = True
         self.graph.prune(now)
+
+    def pending_threads(self):
+        pending = {(root, child) for root, children in self.graph.children.items() for child, running in children.items()
+                   if running and not self.graph.ignores(child) and not self.graph.ignores(root[0])}
+        if not pending:
+            return set()
+        children = {child for _, child in pending}
+        observed = {(self.graph.root_for(key), key[0]) for key in self.graph.turns if key[0] in children}
+        return {child for _, child in pending - observed}
+
+    def required_threads(self):
+        active = {key[0] for key, node in self.graph.turns.items() if not node["terminal"]}
+        # 已结束子线程不再把父线程永久放入补读队列
+        parents = {self.graph.threads[key[0]].get("parent") for key, node in self.graph.turns.items()
+                   if not node["terminal"] and not self.graph.ignores(key[0]) and self.graph.root_for(key) is None}
+        return {thread for thread in self.graph.loaded | active | parents | self.pending_threads()
+                if thread and not self.graph.ignores(thread)}
+
+    def reconcile_thread(self, identifier, loaded, force, now):
+        checkpoint = self.graph.sequence
+        read = self.rpc.request("thread/read", dict(threadId=identifier, includeTurns=False)).get("thread")
+        if not isinstance(read, dict) or read.get("id") != identifier:
+            raise CollectorError("invalid-thread")
+        if self.graph.thread_revisions.get(identifier, 0) <= checkpoint:
+            self.graph.metadata(read)
+        if self.graph.ignores(identifier):
+            return True
+        if identifier in loaded and identifier not in self.subscribed and self.graph.threads[identifier]["status"].get("type") != "notLoaded":
+            # 只订阅刚确认已加载的会话, 绝不恢复历史会话或设置模型/审批策略
+            subscribed_revision = self.graph.thread_revisions.get(identifier, 0)
+            joined = self.rpc.request("thread/resume", dict(threadId=identifier, excludeTurns=True)).get("thread")
+            if not isinstance(joined, dict) or joined.get("id") != identifier:
+                raise CollectorError("invalid-thread")
+            if self.graph.thread_revisions.get(identifier, 0) == subscribed_revision:
+                self.graph.metadata(joined)
+            self.subscribed.add(identifier)
+        page = self.rpc.request("thread/turns/list", dict(threadId=identifier, limit=10, itemsView="notLoaded"))
+        turns = page.get("data")
+        if not isinstance(turns, list) or len(turns) > 100:
+            raise CollectorError("invalid-turn-list")
+        self.graph.reconcile(identifier, turns, now, checkpoint)
+        targets = {key[1] for key, node in self.graph.turns.items() if key[0] == identifier and not node["terminal"]}
+        targets.update(node["root"] for key, node in self.graph.turns.items()
+                       if not node["terminal"] and node.get("root") and self.graph.root_for(key) is None
+                       and self.graph.threads.get(key[0], {}).get("parent") == identifier)
+        covered = {value.get("id") for value in turns if isinstance(value, dict)}
+        missing = targets - covered
+        cursor = self.scans.get(identifier, page.get("nextCursor")) if missing else None
+        visited = set()
+        for _ in range(4 if force else 1):
+            if not missing or cursor is None:
+                break
+            if not text(cursor, 4096) or cursor in visited:
+                raise CollectorError("invalid-turn-cursor")
+            visited.add(cursor)
+            checkpoint = self.graph.sequence
+            older = self.rpc.request("thread/turns/list", dict(threadId=identifier, limit=100, itemsView="notLoaded", cursor=cursor))
+            values = older.get("data")
+            if not isinstance(values, list) or len(values) > 100:
+                raise CollectorError("invalid-turn-list")
+            self.graph.reconcile(identifier, values, now, checkpoint)
+            missing.difference_update(value.get("id") for value in values if isinstance(value, dict))
+            next_cursor = older.get("nextCursor")
+            if next_cursor == cursor:
+                raise CollectorError("invalid-turn-cursor")
+            cursor = next_cursor
+        if missing and cursor:
+            self.scans[identifier] = cursor
+        else:
+            self.scans.pop(identifier, None)
+        active = [node for key, node in self.graph.turns.items() if key[0] == identifier and not node["terminal"]]
+        return not missing and identifier not in self.pending_threads() and all(node["verified"] for node in active) and (
+            bool(active) or self.graph.threads[identifier]["status"].get("type") != "active")
 
 
 class ChangeWatcher:

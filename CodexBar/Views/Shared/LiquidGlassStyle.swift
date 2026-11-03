@@ -21,6 +21,17 @@ extension Color {
     }
 }
 
+/// 深色表面用明度区分层级, 不增加动画或逐帧纹理绘制
+enum CodexDarkPalette {
+    static let background = Color(hex: 0x171B22)
+    static let surface = Color(hex: 0x222832)
+    static let raisedSurface = Color(hex: 0x2B3340)
+    static let track = Color(hex: 0x394350)
+    static let heatmap = Color(hex: 0x749DE0)
+    static let separator = Color.white.opacity(0.06)
+    static let outline = Color.white.opacity(0.08)
+}
+
 // MARK: - View 修饰符
 
 /// 自绘 Liquid Glass 背景和 stale 状态修饰
@@ -93,20 +104,29 @@ private struct SidePanelChrome: ViewModifier {
     }
 
     private var backingFill: Color {
-        Color(nsColor: .windowBackgroundColor)
-            .opacity(colorScheme == .dark ? 0.90 : 0.86)
+        colorScheme == .dark ? CodexDarkPalette.background : Color(nsColor: .windowBackgroundColor).opacity(0.86)
     }
 
     private var boundaryColor: Color {
         colorScheme == .dark
-            ? .white.opacity(0.18)
+            ? .clear
             : .black.opacity(0.14)
     }
 }
 
 /// 分区之间的细分隔线, 与玻璃背景保持低对比
 struct LiquidGlassDivider: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
+        if colorScheme == .dark {
+            Rectangle().fill(CodexDarkPalette.separator).frame(height: 1)
+        } else {
+            lightDivider
+        }
+    }
+
+    private var lightDivider: some View {
         Rectangle()
             .fill(
                 LinearGradient(
@@ -134,9 +154,25 @@ private struct LiquidGlassSurface: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        if colorScheme == .dark {
+            let shape = UnevenRoundedRectangle(cornerRadii: cornerRadii, style: .continuous)
+            shape
+                .fill(isOuterSurface ? CodexDarkPalette.background : CodexDarkPalette.surface)
+                .overlay {
+                    if isOuterSurface {
+                        shape.strokeBorder(CodexDarkPalette.outline, lineWidth: 0.5)
+                    }
+                }
+                .shadow(color: .black.opacity(isOuterSurface ? 0.24 : 0.10), radius: isOuterSurface ? 12 : 4, y: isOuterSurface ? 6 : 1)
+        } else {
+            lightSurface
+        }
+    }
+
+    private var lightSurface: some View {
         let shape = UnevenRoundedRectangle(cornerRadii: cornerRadii, style: .continuous)
 
-        ZStack {
+        return ZStack {
             shape
                 .fill(baseFill)
 
@@ -315,6 +351,15 @@ private struct LiquidGlassBadge<S: InsettableShape>: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        if colorScheme == .dark {
+            shape.fill(CodexDarkPalette.raisedSurface)
+                .overlay { shape.fill(tint.opacity(0.12)) }
+        } else {
+            lightBadge
+        }
+    }
+
+    private var lightBadge: some View {
         shape
             .fill(fillColor)
             .overlay {

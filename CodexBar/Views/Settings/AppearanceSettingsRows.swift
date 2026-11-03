@@ -33,6 +33,7 @@ struct TaskGlowSettingsRow: View {
         SettingsToggleRow(
             icon: "light.max",
             title: "settings.screen-edge-indicator.title",
+            help: "settings.screen-edge-indicator.title.help",
             isOn: Binding(
                 get: { isAvailable && settings.isEnabled },
                 set: { settings.setEnabled($0) }

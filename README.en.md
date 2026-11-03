@@ -42,7 +42,7 @@ Codex account polling supports 1, 2, 3, 5, or 10-minute intervals and follows th
 - Track total tokens, your highest daily usage, and usage streaks
 - See your longest task duration
 - Review 30 weeks of daily token usage in a heatmap
-- Combine the shared service and device logs for daily activity metrics while retaining existing Hook history
+- Combine the shared service and device logs for daily and weekly activity metrics while retaining existing Hook history
 
 ### Keep track of active tasks
 

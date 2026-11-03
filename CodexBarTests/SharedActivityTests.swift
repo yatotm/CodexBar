@@ -97,6 +97,69 @@ struct SharedActivityTests {
         #expect(heartbeat.lifecycleCoverageCheckedAt == now.addingTimeInterval(30))
     }
 
+    @Test func partialRecoveryDoesNotApplyProtectionUntilFullReconciliation() async throws {
+        let directory = try TestDirectory()
+        defer { try? directory.remove() }
+        let preferences = try TestPreferences()
+        defer { preferences.remove() }
+        let monitor = try makeMonitor(directory, preferences)
+        defer { monitor.stop() }
+        let now = Date()
+        monitor.setActivityProtectionEnabled(true)
+        var notices = 0
+        monitor.onInactivityProtectionTriggered = { _ in notices += 1
+            return true
+        }
+        monitor.receiveSharedTasks([], available: true, bootstrap: true, reconciliationComplete: false, now: now)
+        #expect(monitor.isActivityProtectionRecoveryInProgress)
+        var oldTask = task(at: now.addingTimeInterval(-7200))
+        oldTask.protectionIdentifier = CodexActivityTaskKey.turn(session: "recovering", turn: "turn").activityProtectionIdentifier
+        for offset in [0.0, 5] {
+            monitor.receiveSharedTasks([oldTask], available: true, bootstrap: false, reconciliationComplete: false, now: now.addingTimeInterval(offset))
+            #expect(monitor.snapshot.runningTasks.count == 1)
+            #expect(monitor.inactivityCheckTask == nil)
+            #expect(monitor.activityProtectionRecords.isEmpty)
+        }
+        monitor.receiveSharedTasks([oldTask], available: true, bootstrap: false, reconciliationComplete: true, now: now.addingTimeInterval(10))
+        #expect(!monitor.isActivityProtectionRecoveryInProgress)
+        #expect(monitor.tasks.values.first?.state == .suppressed)
+        #expect(notices == 0)
+        await monitor.activityProtectionPersistenceTask?.value
+    }
+
+    @Test(arguments: ["waiting", "completed"])
+    func finishingPartialRecoveryDoesNotReplayTransitions(state: String) throws {
+        let directory = try TestDirectory()
+        defer { try? directory.remove() }
+        let preferences = try TestPreferences()
+        defer { preferences.remove() }
+        let monitor = try makeMonitor(directory, preferences)
+        defer { monitor.stop() }
+        let now = Date()
+        var transitions: [CodexActivityTransition] = []
+        let observation = monitor.transitionPublisher.sink { transitions.append($0) }
+        defer { observation.cancel() }
+        monitor.receiveSharedTasks([task(at: now)], available: true, bootstrap: true, reconciliationComplete: false, now: now)
+        monitor.receiveSharedTasks([task(at: now, state: state)], available: true, bootstrap: false, reconciliationComplete: true, now: now)
+        #expect(!monitor.isActivityProtectionRecoveryInProgress)
+        #expect(transitions.isEmpty)
+    }
+
+    @Test func recoveryFieldIsOptionalForExistingFramesAndBlocksPartialRemoteNotifications() throws {
+        let data = Data(#"{"schema":1,"epoch":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revision":1,"sentAt":1000,"tasks":[]}"#.utf8)
+        let old = try JSONDecoder().decode(RemoteActivityFrame.self, from: data)
+        #expect(old.isValid)
+        #expect(old.reconciliationComplete == nil)
+        let now = Date()
+        let previous = task(at: now)
+        let completed = task(at: now, state: "completed")
+        var frame = RemoteActivityFrame(schema: 1, epoch: old.epoch, revision: 2, sentAt: now.timeIntervalSince1970, tasks: [completed])
+        #expect(RemoteActivityController.liveTransitions(previous: [previous], frame: frame, wasConnected: true).count == 1)
+        frame.reconciliationComplete = false
+        #expect(RemoteActivityController.liveTransitions(previous: [previous], frame: frame, wasConnected: true).isEmpty)
+        #expect(RemoteActivityController.liveTerminals(previous: [previous], frame: frame, wasConnected: true).isEmpty)
+    }
+
     @Test func disconnectedUnknownTasksExpireWithTheirRetainedState() throws {
         let directory = try TestDirectory()
         defer { try? directory.remove() }

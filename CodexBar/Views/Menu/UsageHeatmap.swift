@@ -3,12 +3,16 @@ import SwiftUI
 
 /// hover 详情面板需要的完整上下文, 包括屏幕坐标和峰值 token
 nonisolated struct UsageHeatmapHoverContext: Equatable {
-    let day: UsageHeatmapDay
+    let period: UsageHeatmapPeriod
     let showsWorkflow: Bool
     let alignmentScreenFrame: CGRect?
     let preferredSide: UsageHeatmapDetailSide
     let peakTokens: Int
     var recordedDay: UsageDay?
+
+    var day: UsageHeatmapDay {
+        period.day
+    }
 
     var showsExtendedDetails: Bool {
         showsWorkflow || recordedDay != nil
@@ -20,11 +24,31 @@ nonisolated enum UsageHeatmapDetailSide: Equatable {
     case right
 }
 
-/// hover 单元格在热力图中的列/行位置, 用于吸附和详情定位
+/// 选择跟随日期和模式, 跨日刷新后重新计算网格位置
 nonisolated struct UsageHeatmapSelection: Equatable {
-    let day: UsageHeatmapDay
-    let column: Int
-    let row: Int
+    let dateID: String
+    let mode: UsageHeatmapMode
+
+    func column(in days: [UsageHeatmapDay?]) -> Int? {
+        days.firstIndex { $0?.id == dateID }.map { $0 / CodexWeekGrid.rowCount }
+    }
+
+    func period(in days: [UsageHeatmapDay?], weeks: [UsageHeatmapPeriod?]) -> UsageHeatmapPeriod? {
+        guard let index = days.firstIndex(where: { $0?.id == dateID }) else { return nil }
+        switch mode {
+        case .daily: return days[index].map(UsageHeatmapPeriod.init(day:))
+        case .weekly:
+            let column = index / CodexWeekGrid.rowCount
+            return weeks.indices.contains(column) ? weeks[column] : nil
+        }
+    }
+
+    static func at(column: Int, row: Int, in days: [UsageHeatmapDay?], mode: UsageHeatmapMode) -> Self? {
+        guard column >= 0, (0 ..< CodexWeekGrid.rowCount).contains(row) else { return nil }
+        let index = column * CodexWeekGrid.rowCount + (mode == .daily ? row : 0)
+        guard days.indices.contains(index), let day = days[index] else { return nil }
+        return Self(dateID: day.id, mode: mode)
+    }
 }
 
 // MARK: - 摘要区
@@ -36,8 +60,10 @@ struct UsageSummaryView: View {
     let showsWorkflow: Bool
     let onHoverContextChange: (UsageHeatmapHoverContext?) -> Void
     private let days: [UsageHeatmapDay?]
+    private let weeks: [UsageHeatmapPeriod?]
     private let peakTokens: Int
-    private let recordedDays: [String: UsageDay]
+    private let peakWeeklyTokens: Int
+    private let recordedDays: [UsageDay]
     @State private var hoverSelection: UsageHeatmapSelection?
     @State private var heatmapScreenFrame: CGRect?
 
@@ -53,7 +79,7 @@ struct UsageSummaryView: View {
         self.isStale = isStale
         self.showsWorkflow = showsWorkflow
         self.onHoverContextChange = onHoverContextChange
-        self.recordedDays = Dictionary(recordedDays.map { ($0.day, $0) }, uniquingKeysWith: { _, latest in latest })
+        self.recordedDays = recordedDays
 
         let days = UsageHeatmapDay.grid(
             usage: usage,
@@ -63,7 +89,10 @@ struct UsageSummaryView: View {
             today: Date()
         )
         self.days = days
+        let weeks = UsageHeatmapPeriod.weeks(in: days)
+        self.weeks = weeks
         peakTokens = max(days.lazy.compactMap { $0?.tokensForHeatmap }.max() ?? 0, 1)
+        peakWeeklyTokens = max(weeks.lazy.compactMap { $0?.tokensForHeatmap }.max() ?? 0, 1)
     }
 
     var body: some View {
@@ -96,8 +125,10 @@ struct UsageSummaryView: View {
                 if usage?.hasDailyUsageBuckets == true || showsWorkflow {
                     UsageHeatmap(
                         days: days,
+                        weeks: weeks,
                         selection: $hoverSelection,
                         peakTokens: peakTokens,
+                        peakWeeklyTokens: peakWeeklyTokens,
                         onScreenFrameChange: { frame in
                             heatmapScreenFrame = frame
                         }
@@ -201,16 +232,18 @@ struct UsageSummaryView: View {
 
     private var hoverContext: UsageHeatmapHoverContext? {
         // 详情面板由控制器显示, SwiftUI 这里只负责传递屏幕坐标和数据
-        hoverSelection.map {
-            UsageHeatmapHoverContext(
-                day: $0.day,
-                showsWorkflow: showsWorkflow && recordedDays[$0.day.id] == nil,
-                alignmentScreenFrame: heatmapScreenFrame,
-                preferredSide: UsageHeatmap.Metrics.preferredDetailSide(for: $0.column),
-                peakTokens: peakTokens,
-                recordedDay: recordedDays[$0.day.id]
-            )
-        }
+        guard let selection = hoverSelection,
+              let column = selection.column(in: days),
+              let period = selection.period(in: days, weeks: weeks) else { return nil }
+        let hasRecordedDays = recordedDays.contains { period.dayKeys.contains($0.day) }
+        return UsageHeatmapHoverContext(
+            period: period,
+            showsWorkflow: showsWorkflow && !hasRecordedDays,
+            alignmentScreenFrame: heatmapScreenFrame,
+            preferredSide: UsageHeatmap.Metrics.preferredDetailSide(for: column),
+            peakTokens: selection.mode == .daily ? peakTokens : peakWeeklyTokens,
+            recordedDay: hasRecordedDays ? period.recordedUsage(in: recordedDays) : nil
+        )
     }
 
     private func refreshHoveredDay(from days: [UsageHeatmapDay?]) {
@@ -218,23 +251,11 @@ struct UsageSummaryView: View {
             return
         }
 
-        guard let updatedDay = days.compactMap(\.self).first(where: { $0.id == hoverSelection.day.id }) else {
+        guard hoverSelection.period(in: days, weeks: weeks) != nil else {
             withAnimation(Metrics.statusAnimation) {
                 self.hoverSelection = nil
             }
             return
-        }
-
-        guard updatedDay != hoverSelection.day else {
-            return
-        }
-
-        withAnimation(Metrics.statusAnimation) {
-            self.hoverSelection = UsageHeatmapSelection(
-                day: updatedDay,
-                column: hoverSelection.column,
-                row: hoverSelection.row
-            )
         }
     }
 
@@ -249,25 +270,33 @@ struct UsageSummaryView: View {
 /// 近 30 周 token 热力图, hover 时把指针吸附到最近的有效日期格
 struct UsageHeatmap: View {
     let days: [UsageHeatmapDay?]
+    let weeks: [UsageHeatmapPeriod?]
     let onScreenFrameChange: (CGRect?) -> Void
     @Binding var selection: UsageHeatmapSelection?
+    @AppStorage(UsageHeatmapMode.preferenceKey) private var mode = UsageHeatmapMode.daily
     @Environment(\.mainPanelEntranceAnimationsEnabled) private var animatesEntrance
     @State private var areSquaresRevealed = false
     @State private var entranceStartedAt: TimeInterval?
     @State private var snapSelection: UsageHeatmapSelection?
     @State private var hoverClearTask: Task<Void, Never>?
+    @State private var isModeHovered = false
     private let peakTokens: Int
+    private let peakWeeklyTokens: Int
 
     init(
         days: [UsageHeatmapDay?],
+        weeks: [UsageHeatmapPeriod?],
         selection: Binding<UsageHeatmapSelection?>,
         peakTokens: Int,
+        peakWeeklyTokens: Int,
         onScreenFrameChange: @escaping (CGRect?) -> Void = { _ in }
     ) {
         self.days = days
+        self.weeks = weeks
         self.onScreenFrameChange = onScreenFrameChange
         _selection = selection
         self.peakTokens = peakTokens
+        self.peakWeeklyTokens = peakWeeklyTokens
     }
 
     var body: some View {
@@ -276,8 +305,14 @@ struct UsageHeatmap: View {
             .background {
                 ScreenFrameReader(onChange: onScreenFrameChange)
             }
-            .task {
+            .task(id: mode) {
+                areSquaresRevealed = false
                 await revealSquares()
+            }
+            .onChange(of: mode) { _, _ in
+                cancelHoverClearTask()
+                snapSelection = nil
+                selection = nil
             }
             .onDisappear {
                 cancelHoverClearTask()
@@ -290,9 +325,23 @@ struct UsageHeatmap: View {
     private var heatmapGrid: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text(LocalizedStringResource("usage.heatmap.past-weeks", defaultValue: "\(Metrics.columnCount, specifier: "%lld")"))
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(LocalizedStringResource("usage.heatmap.past-weeks", defaultValue: "\(Metrics.columnCount, specifier: "%lld")"))
+                    Text(verbatim: "·")
+                    Button {
+                        mode = mode == .daily ? .weekly : .daily
+                    } label: {
+                        Text(modeTitle)
+                            .padding(.horizontal, 3)
+                            .background(Color.primary.opacity(isModeHovered ? 0.08 : 0), in: RoundedRectangle(cornerRadius: 4))
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { isModeHovered = $0 }
+                    .help(String(localized: "usage.heatmap.switch-mode", defaultValue: "点击切换日/周视图"))
+                }
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .fixedSize()
 
                 Spacer()
 
@@ -308,33 +357,13 @@ struct UsageHeatmap: View {
                 ForEach(0 ..< Metrics.columnCount, id: \.self) { column in
                     VStack(spacing: Metrics.squareSpacing) {
                         ForEach(0 ..< Metrics.rowCount, id: \.self) { row in
-                            let index = column * Metrics.rowCount + row
-
-                            if days.indices.contains(index), let day = days[index] {
-                                UsageHeatmapSquare(
-                                    day: day,
-                                    percent: Double(day.tokensForHeatmap) / Double(peakTokens),
-                                    isHovered: snapSelection?.day.id == day.id
-                                )
-                                .accessibilityElement(children: .ignore)
-                                .accessibilityLabel("\(day.startDate), \(day.tokensForHeatmap) Token")
-                                .accessibilityAddTraits(.isButton)
-                                .accessibilityValue(selection?.day.id == day.id ? "显示日期详情" : "")
-                                .accessibilityAction {
-                                    cancelHoverClearTask()
-                                    snapSelection = UsageHeatmapSelection(day: day, column: column, row: row)
-                                    selection = UsageHeatmapSelection(day: day, column: column, row: row)
-                                }
+                            gridSquare(column: column, row: row)
                                 .opacity(showsSquares ? 1 : 0)
                                 .scaleEffect(showsSquares ? 1 : Metrics.entranceScale)
                                 .animation(
                                     entranceAnimation(column: column, row: row),
                                     value: showsSquares
                                 )
-                            } else {
-                                Color.clear
-                                    .frame(width: Metrics.squareSize, height: Metrics.squareSize)
-                            }
                         }
                     }
                 }
@@ -354,15 +383,53 @@ struct UsageHeatmap: View {
     }
 
     private var dateRangeText: String? {
-        let visibleDays = days.compactMap(\.self)
-        guard let firstDate = visibleDays.first?.startDate,
-              let lastDate = visibleDays.last?.startDate else {
-            return nil
-        }
+        let visiblePeriods = mode == .daily ? days.compactMap { $0.map(UsageHeatmapPeriod.init(day:)) } : weeks.compactMap(\.self)
+        guard let firstDate = visiblePeriods.first?.day.startDate,
+              let lastDate = visiblePeriods.last?.endDate else { return nil }
 
         let firstText = localDayText(firstDate)
         let lastText = localDayText(lastDate)
         return String(localized: "date-range.closed", defaultValue: "\(firstText)\(lastText)")
+    }
+
+    private var modeTitle: String {
+        mode == .daily
+            ? String(localized: "usage.heatmap.daily-data", defaultValue: "日数据")
+            : String(localized: "usage.heatmap.weekly-data", defaultValue: "周数据")
+    }
+
+    @ViewBuilder
+    private func gridSquare(column: Int, row: Int) -> some View {
+        let index = column * Metrics.rowCount + row
+        let period = mode == .daily
+            ? (days.indices.contains(index) ? days[index].map(UsageHeatmapPeriod.init(day:)) : nil)
+            : (weeks.indices.contains(column) ? weeks[column] : nil)
+        if let period {
+            let target = UsageHeatmapSelection(dateID: period.day.id, mode: mode)
+            let isFilled = row >= Metrics.rowCount - period.filledRowCount(peakTokens: peakWeeklyTokens)
+            let state = mode == .daily ? period.day.tokenState
+                : period.day.tokenCount.map { UsageHeatmapTokenState.available(isFilled ? $0 : 0) } ?? period.day.tokenState
+            let tokenLabel = period.day.tokenCount.map { "\($0) Token" } ?? String(localized: "common.empty.no-data")
+            UsageHeatmapSquare(
+                tokenState: state,
+                percent: mode == .daily ? Double(period.tokensForHeatmap) / Double(peakTokens) : isFilled ? 1 : 0,
+                isHovered: snapSelection == target
+            )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(period.day.startDate)\(period.isWeekly ? " ~ " + period.endDate : ""), \(tokenLabel)")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHidden(mode == .weekly && row != 0)
+            .accessibilityAction { select(target) }
+            .onTapGesture { select(target) }
+        } else {
+            Color.clear.frame(width: Metrics.squareSize, height: Metrics.squareSize)
+        }
+    }
+
+    private func select(_ target: UsageHeatmapSelection) {
+        cancelHoverClearTask()
+        snapSelection = target
+        selection = target
     }
 
     private var showsSquares: Bool {
@@ -461,12 +528,7 @@ struct UsageHeatmap: View {
             return nil
         }
 
-        let index = column * Metrics.rowCount + row
-        guard days.indices.contains(index), let day = days[index] else {
-            return nil
-        }
-
-        return UsageHeatmapSelection(day: day, column: column, row: row)
+        return UsageHeatmapSelection.at(column: column, row: row, in: days, mode: mode)
     }
 
     private func activate(_ target: UsageHeatmapSelection) {
@@ -496,7 +558,7 @@ struct UsageHeatmap: View {
     }
 
     private func matches(_ lhs: UsageHeatmapSelection?, _ rhs: UsageHeatmapSelection) -> Bool {
-        lhs?.day.id == rhs.day.id && lhs?.column == rhs.column && lhs?.row == rhs.row
+        lhs == rhs
     }
 }
 
@@ -535,9 +597,10 @@ extension UsageHeatmap {
 
 /// 单个热力图方块, 蓝色透明度表示当天 token 强度, 中性色表示 token 数据不可用
 private struct UsageHeatmapSquare: View {
-    let day: UsageHeatmapDay
+    let tokenState: UsageHeatmapTokenState
     let percent: Double
     let isHovered: Bool
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -558,31 +621,35 @@ private struct UsageHeatmapSquare: View {
     }
 
     private var fillColor: Color {
-        guard day.tokenCount != nil else {
+        guard tokenState.count != nil else {
             return Color.secondary.opacity(isHovered ? 0.12 : 0.05)
         }
-        guard day.tokensForHeatmap > 0 else {
-            return Color.blue.opacity(isHovered ? 0.16 : 0.08)
+        guard (tokenState.count ?? 0) > 0 else {
+            return tint.opacity(isHovered ? 0.16 : 0.08)
         }
 
         let intensity = pow(clampedPercent, 0.62)
         let opacity = 0.18 + intensity * 0.68
-        return Color.blue.opacity(isHovered ? min(opacity + 0.10, 1.0) : opacity)
+        return tint.opacity(isHovered ? min(opacity + 0.10, 1.0) : opacity)
     }
 
     private var borderColor: Color {
-        guard day.tokenCount != nil else {
+        guard tokenState.count != nil else {
             return Color.secondary.opacity(isHovered ? 0.42 : 0.12)
         }
         if isHovered {
-            return Color.blue.opacity(0.78)
+            return tint.opacity(0.78)
         }
 
-        return Color.blue.opacity(day.tokensForHeatmap > 0 ? 0.18 : 0.10)
+        return tint.opacity((tokenState.count ?? 0) > 0 ? 0.18 : 0.10)
     }
 
     private var shadowColor: Color {
-        day.tokenCount == nil ? .clear : .blue.opacity(0.22)
+        tokenState.count == nil ? .clear : tint.opacity(0.22)
+    }
+
+    private var tint: Color {
+        colorScheme == .dark ? CodexDarkPalette.heatmap : .blue
     }
 }
 
@@ -591,7 +658,7 @@ struct UsageHeatmapDayDetailView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let panelSize = Self.panelSize(showsWorkflow: context.showsExtendedDetails)
+        let panelSize = Self.panelSize(showsWorkflow: context.showsExtendedDetails, isWeekly: context.period.isWeekly)
 
         detailContent
             .padding(.horizontal, Metrics.horizontalPadding)
@@ -609,9 +676,9 @@ struct UsageHeatmapDayDetailView: View {
         Metrics.cornerRadius
     }
 
-    static func panelSize(showsWorkflow: Bool) -> CGSize {
+    static func panelSize(showsWorkflow: Bool, isWeekly: Bool = false) -> CGSize {
         CGSize(
-            width: showsWorkflow ? 380 : Metrics.panelWidth,
+            width: showsWorkflow ? 380 : isWeekly ? 280 : Metrics.panelWidth,
             height: showsWorkflow ? Metrics.workflowPanelHeight : Metrics.tokenPanelHeight
         )
     }
@@ -634,7 +701,9 @@ struct UsageHeatmapDayDetailView: View {
             tokenIntensityStrip
             detailColumns(activity: recordedRows(day), usage: day)
         }
-        .help("设备日志按 UTC 统计; 输入不含已单列的缓存, 缺失的权限和推理用量显示未知")
+        .help(context.period.isWeekly
+            ? String(localized: "usage.heatmap.recorded-week-help", defaultValue: "按 UTC 日期汇总已采集日志, 会话日数为每日会话数之和, 同一会话跨日会计多次")
+            : "设备日志按 UTC 统计; 输入不含已单列的缓存, 缺失的权限和推理用量显示未知")
     }
 
     private func detailColumns(activity: [RecordedMetricRow], usage: UsageDay?) -> some View {
@@ -667,11 +736,11 @@ struct UsageHeatmapDayDetailView: View {
     private func tokenRows(_ day: UsageDay?) -> [RecordedMetricRow] {
         let metrics = day?.metrics
         func tokens(_ value: Int64?) -> String {
-            value.map { TokenCountFormatter.parts(from: Int(clamping: $0)).text } ?? "未知"
+            value.map { TokenCountFormatter.parts(from: Int(clamping: $0)).text } ?? "—"
         }
         let input = metrics.map { $0.tokens - $0.output }
-        let cacheRate = input.flatMap { total in
-            total > 0 ? Double(metrics?.cacheRead ?? 0) / Double(total) : nil
+        let cacheRate = input.map { total in
+            total > 0 ? Double(metrics?.cacheRead ?? 0) / Double(total) : 0
         }
         return [
             RecordedMetricRow(label: "合计", value: tokens(day?.tokens), tint: .blue),
@@ -692,11 +761,11 @@ struct UsageHeatmapDayDetailView: View {
     private func recordedRows(_ day: UsageDay) -> [RecordedMetricRow] {
         let metrics = day.metrics
         func count(_ value: Int64?) -> String {
-            value?.formatted() ?? "未知"
+            value?.formatted() ?? "—"
         }
         return [
-            RecordedMetricRow(label: "主要模型", value: day.topModel ?? "未知", tint: .cyan),
-            RecordedMetricRow(label: "会话总数", value: count(metrics?.sessions), tint: .green),
+            RecordedMetricRow(label: "主要模型", value: day.topModel ?? "—", tint: .cyan),
+            RecordedMetricRow(label: sessionCountLabel, value: count(metrics?.sessions), tint: .green),
             RecordedMetricRow(label: "对话轮次", value: count(metrics?.turns), tint: .teal),
             RecordedMetricRow(label: "工具调用", value: count(metrics?.tools), tint: .orange),
             RecordedMetricRow(label: "子智能体", value: count(metrics?.subagents), tint: .indigo),
@@ -729,12 +798,15 @@ struct UsageHeatmapDayDetailView: View {
             LiquidGlassDivider().opacity(0.72)
             tokenIntensityStrip
             detailColumns(
-                activity: [RecordedMetricRow(label: "主要模型", value: context.day.workflow.mostUsedModel ?? "未知", tint: .cyan)]
-                    + workflowMetricRows.map { RecordedMetricRow(label: $0.label, value: $0.value.formatted(), tint: $0.tint) },
+                activity: [RecordedMetricRow(label: "主要模型", value: context.day.workflow.mostUsedModel ?? "—", tint: .cyan)]
+                    + workflowMetricRows.map { RecordedMetricRow(label: $0.label, value: $0.value.formatted(), tint: $0.tint) }
+                    + [RecordedMetricRow(label: "任务中断", value: context.day.workflow.interruptCount?.formatted() ?? "—", tint: .orange)],
                 usage: context.recordedDay
             )
         }
-        .help("顶部为官方账号用量; 左侧为本机 Hook, 右侧为已采集设备日志, 两者不相加")
+        .help(context.period.isWeekly
+            ? String(localized: "usage.heatmap.workflow-week-help", defaultValue: "顶部为官方账号用量, 本机 Hook 和设备日志分别汇总; 会话日数为每日会话数之和")
+            : "顶部为官方账号用量; 左侧为本机 Hook, 右侧为已采集设备日志, 两者不相加")
     }
 
     private var tokenOnlyContent: some View {
@@ -791,7 +863,7 @@ struct UsageHeatmapDayDetailView: View {
     private var workflowMetricRows: [WorkflowMetricRow] {
         [
             WorkflowMetricRow(
-                label: String(localized: "workflow.metric.sessions"),
+                label: sessionCountLabel,
                 value: context.day.workflow.sessionCount,
                 tint: .green
             ),
@@ -823,17 +895,30 @@ struct UsageHeatmapDayDetailView: View {
         ]
     }
 
+    private var sessionCountLabel: String {
+        context.period.isWeekly
+            ? String(localized: "usage.heatmap.session-days", defaultValue: "会话日数")
+            : String(localized: "workflow.metric.sessions")
+    }
+
     private var dateText: some View {
-        AnimatedDateText(startDate: context.day.startDate, font: dateFont)
-            .foregroundStyle(Color.codexSecondaryLabel)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .layoutPriority(1)
+        Group {
+            if context.period.isWeekly {
+                Text(verbatim: context.day.startDate + " ~ " + context.period.endDate)
+                    .font(dateFont)
+            } else {
+                AnimatedDateText(startDate: context.day.startDate, font: dateFont)
+            }
+        }
+        .foregroundStyle(Color.codexSecondaryLabel)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(1)
     }
 
     private var tokenText: some View {
         HeatmapTokenText(
-            tokenState: !context.showsWorkflow ? context.recordedDay.map { .available(Int(clamping: $0.tokens)) } ?? context.day.tokenState : context.day.tokenState,
+            tokenState: context.day.tokenState,
             font: tokenFont,
             numericWidth: Metrics.tokenMinimumWidth,
             unitWidth: Metrics.tokenUnitWidth

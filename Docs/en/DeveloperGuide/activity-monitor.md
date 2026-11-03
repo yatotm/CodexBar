@@ -18,7 +18,7 @@ Root thread and turn identify a task. Subagents remain under the parent; waiting
 
 ## Side effects and sleep
 
-Local Codex frames feed the existing monitor for notifications, haptics and local power control. Merged remote/Claude presentation does not feed power decisions. Replayed or reconnected terminal snapshots never generate old notifications or glows.
+Local Codex frames feed the existing monitor for notifications, haptics and local power control. Merged remote/Claude presentation does not feed power decisions. Replayed or reconnected terminal snapshots never generate old notifications or glows. Optional `reconciliationComplete` distinguishes a healthy socket from completed thread checks. Protection and notifications wait for full recovery; failed threads use bounded backoff. Explicit `thread_title` internal threads are excluded. Missing fields retain the prior behavior without changing schema, identity, or storage paths.
 
 Completed and terminated tasks remain visible for 10 minutes. An explicit backend end time takes precedence; otherwise the first observed terminal time is retained. Repeated polls and late token counts do not extend retention. A later explicit end time may correct the fallback. Historical terminal rows without an existing task or end time are ignored.
 

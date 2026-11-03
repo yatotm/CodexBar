@@ -7,6 +7,7 @@ struct AppSettingsView: View {
     @EnvironmentObject private var statusViewModel: CodexStatusViewModel
     @EnvironmentObject private var appUpdater: AppUpdater
     @StateObject private var loginItemSettings = LoginItemSettings()
+    @StateObject private var appearanceSettings = AppearanceSettings()
     @StateObject private var codexVersions = CodexCLIVersionViewModel()
     let codexHookSettings: CodexHookSettings
     @ObservedObject var globalHotKeySettings: GlobalHotKeySettings
@@ -62,6 +63,7 @@ struct AppSettingsView: View {
             .offset(y: isTabContentSettled ? 0 : Metrics.tabContentInitialOffset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .font(SettingsRowMetrics.bodyFont)
         .frame(width: Metrics.windowWidth)
         .frame(maxHeight: .infinity, alignment: .top)
         .liquidGlassSurface(
@@ -74,6 +76,7 @@ struct AppSettingsView: View {
             isOuterSurface: true
         )
         .onAppear {
+            appearanceSettings.refresh()
             loginItemSettings.refresh()
             menuBarQuotaSettings.refresh()
             mainPanelSettings.refresh()
@@ -82,6 +85,7 @@ struct AppSettingsView: View {
             refreshStatusRows()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            appearanceSettings.refresh()
             loginItemSettings.refresh()
             menuBarQuotaSettings.refresh()
             mainPanelSettings.refresh()
@@ -214,7 +218,7 @@ private extension AppSettingsView {
                         Text(tab.title)
                             .foregroundStyle(isSelected ? Color.primary : Color.secondary)
                     }
-                    .font(.subheadline.weight(.medium))
+                    .font(SettingsRowMetrics.tabFont)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Metrics.tabVerticalPadding)
                     .contentShape(shape)
@@ -263,6 +267,8 @@ private extension AppSettingsView {
     var generalSettingsPage: some View {
         VStack(alignment: .leading, spacing: Metrics.sectionSpacing) {
             VStack(alignment: .leading, spacing: Metrics.rowSpacing) {
+                appearanceThemeRow
+                LiquidGlassDivider()
                 mainPanelLayoutRow
                 LiquidGlassDivider()
                 mainPanelEntranceAnimationsRow
@@ -334,11 +340,27 @@ private extension AppSettingsView {
 
     // MARK: - 通用页各行
 
+    var appearanceThemeRow: some View {
+        HStack(spacing: SettingsRowMetrics.spacing) {
+            Image(systemName: "circle.lefthalf.filled")
+                .frame(width: SettingsRowMetrics.iconWidth)
+                .foregroundStyle(.tint)
+            SettingsHelpLabel(title: "settings.appearance.theme.title", help: "settings.appearance.theme.title.help")
+            Spacer()
+            SettingsOptionsPicker(
+                title: "settings.appearance.theme.title",
+                selection: Binding(get: { appearanceSettings.theme }, set: { appearanceSettings.setTheme($0) }),
+                options: AppearanceSettings.Theme.allCases, label: { $0.title }, width: 100, alignment: .trailing
+            )
+        }
+    }
+
     var launchAtLoginRow: some View {
         VStack(alignment: .leading, spacing: 4) {
             SettingsToggleRow(
                 icon: "power",
                 title: "settings.general.launch-at-login",
+                help: "settings.general.launch-at-login.help",
                 isOn: Binding(
                     get: { loginItemSettings.isEnabled },
                     set: { loginItemSettings.setEnabled($0) }
@@ -360,6 +382,7 @@ private extension AppSettingsView {
         SettingsToggleRow(
             icon: "arrow.triangle.2.circlepath",
             title: "settings.general.automatic-update-checks",
+            help: "settings.general.automatic-update-checks.help",
             isOn: Binding(
                 get: { appUpdater.automaticallyChecksForUpdates },
                 set: { appUpdater.setAutomaticallyChecksForUpdates($0) }
@@ -376,6 +399,7 @@ private extension AppSettingsView {
         SettingsToggleRow(
             icon: "gauge.with.dots.needle.50percent",
             title: "settings.menu-bar-quota.title",
+            help: "settings.menu-bar-quota.title.help",
             isOn: Binding(
                 get: { isMenuBarQuotaEnabled },
                 set: { menuBarQuotaSettings.setEnabled($0) }
@@ -399,6 +423,7 @@ private extension AppSettingsView {
         SettingsToggleRow(
             icon: "sparkles",
             title: "settings.main-panel.entrance-animations",
+            help: "settings.main-panel.entrance-animations.help",
             isOn: Binding(
                 get: { mainPanelSettings.areEntranceAnimationsEnabled },
                 set: { mainPanelSettings.setEntranceAnimationsEnabled($0) }
@@ -413,7 +438,7 @@ private extension AppSettingsView {
             Image(systemName: "timer")
                 .frame(width: SettingsRowMetrics.iconWidth)
                 .foregroundStyle(.tint)
-            Text("Codex 额度刷新")
+            SettingsHelpLabel(title: "Codex 额度刷新", help: "settings.data-update.interval.title.help")
             Spacer()
             SettingsOptionsPicker(
                 title: "Codex 额度刷新",
@@ -451,6 +476,7 @@ private extension AppSettingsView {
             SettingsToggleRow(
                 icon: "arrow.counterclockwise.circle",
                 title: "settings.auto-reset.title",
+                help: "settings.auto-reset.title.help",
                 isOn: Binding(
                     get: { autoResetSettings.isEnabled },
                     set: { enabled in
@@ -530,7 +556,7 @@ private extension AppSettingsView {
             HStack(spacing: SettingsRowMetrics.spacing) {
                 Image(systemName: "moon.zzz")
                     .frame(width: SettingsRowMetrics.iconWidth).foregroundStyle(.tint)
-                Text("settings.keep-alive.title")
+                SettingsHelpLabel(title: "settings.keep-alive.title", help: "settings.keep-alive.title.help")
                 Spacer()
                 SettingsDropdownPicker(
                     selection: keepAliveChoice,
@@ -664,7 +690,7 @@ private extension AppSettingsView {
                 .frame(width: SettingsRowMetrics.iconWidth)
                 .foregroundStyle(.tint)
 
-            Text("workflow.rebuild.title")
+            SettingsHelpLabel(title: "workflow.rebuild.title", help: "workflow.rebuild.title.help")
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
 
@@ -794,6 +820,7 @@ private extension AppSettingsView {
             SettingsToggleRow(
                 icon: "bell.badge",
                 title: "settings.notifications.system.title",
+                help: "settings.notifications.system.title.help",
                 isOn: Binding(
                     get: { notificationSettings.isEnabled },
                     set: { notificationSettings.setEnabled($0) }

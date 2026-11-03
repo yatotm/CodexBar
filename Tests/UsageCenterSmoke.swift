@@ -48,6 +48,7 @@ struct UsageCenterSmoke {
         precondition(dashboard.totals.tokens == 34, "Codex 缓存不重复加总, Claude 缓存单独计入")
         precondition(dashboard.days.first?.metrics?.tokens == 34, "每日详情应使用与总量相同的去重规则")
         precondition(dashboard.days.first?.topModel == "test", "每日主要模型从已有 usage 记录计算")
+        precondition(dashboard.days.first?.modelTokens["test"] == 34, "周模型汇总复用与每日总量一致的完整模型计数")
         precondition(dashboard.days.first?.longestTurnMs == nil, "缺少单轮时长不能伪造为零")
         let filtered = try await store.dashboard(filter: UsageFilter(sourceID: "local"))
         precondition(filtered.totals.tokens == 30, "单机筛选仅计算该机器可见记录")

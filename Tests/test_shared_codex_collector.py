@@ -41,6 +41,7 @@ def active_graph(now=1000):
     graph.metadata(dict(id="root", cwd="/private/project", model="gpt-test", reasoningEffort="high", source="cli",
                         status=dict(type="active", activeFlags=[])))
     graph.available = True
+    graph.reconciliation_complete = True
     graph.loaded = {"root"}
     graph.consume(event("turn/started", turn=dict(id="turn", status="inProgress", rootTurnId="turn", startedAt=now)), now)
     return graph
@@ -226,6 +227,41 @@ class SharedGraphTests(unittest.TestCase):
         graph.metadata(dict(id="guardian", source={"subAgent": {"other": "guardian"}}, status=dict(type="active")))
         graph.consume(event("turn/started", thread="guardian", turn=dict(id="turn", status="inProgress", rootTurnId="turn", startedAt=1000)), 1000)
         self.assertEqual(graph.tasks(1000), [])
+
+    def test_title_threads_are_excluded_without_rejecting_unknown_sources(self):
+        graph = active_graph()
+        graph.metadata(dict(id="title", source="appServer", threadSource="thread_title", status=dict(type="active")))
+        graph.consume(event("turn/started", thread="title", turn=dict(id="title-turn", status="inProgress", rootTurnId="title-turn", startedAt=1001)), 1001)
+        graph.consume(event("turn/completed", thread="title", turn=dict(id="title-turn", status="interrupted", completedAt=1002)), 1002)
+        graph.metadata(dict(id="future", source="future-client", threadSource="future-source", status=dict(type="active")))
+        graph.consume(event("turn/started", thread="future", turn=dict(id="future-turn", status="inProgress", rootTurnId="future-turn", startedAt=1001)), 1001)
+        self.assertEqual({task["id"] for task in graph.tasks(1002)}, {shared.digest("codex", "root", "turn"), shared.digest("codex", "future", "future-turn")})
+        self.assertEqual(graph.events, {})
+
+    def test_reasoning_content_shape_is_not_parsed_as_user_reply(self):
+        graph = active_graph()
+        for content in ("private reasoning", {"text": "private reasoning"}, ["private reasoning"]):
+            graph.consume(event("item/started", item=dict(id="reasoning", type="reasoning", content=content)), 1001)
+            self.assertEqual(graph.tasks(1001)[0]["stage"], "thinking")
+        self.assertNotIn("private reasoning", json.dumps(graph.tasks(1001)))
+
+    def test_interrupted_collaboration_is_not_overridden_by_child_failure(self):
+        graph = active_graph()
+        graph.consume(event("item/completed", item=dict(id="wait", type="collabAgentToolCall", status="interrupted",
+                                                       agentsStates={"child": {"status": "errored"}})), 1001)
+        task = graph.tasks(1001)[0]
+        self.assertEqual(task["recentEvent"], "agent-call-interrupted")
+        self.assertEqual(task["state"], "running")
+
+    def test_expired_turn_drops_late_token_cache_but_active_turn_keeps_baseline(self):
+        graph = active_graph()
+        graph.consume(event("thread/tokenUsage/updated", tokenUsage=dict(total=wire_usage(1), last=wire_usage(1))), 1001)
+        self.assertIn("tokenUsage", graph.tasks(1002 + shared.RETENTION)[0])
+        graph.consume(event("turn/completed", turn=dict(id="turn", status="completed", completedAt=1003)), 1003)
+        graph.consume(event("thread/tokenUsage/updated", tokenUsage=dict(total=wire_usage(2), last=wire_usage(1))), 1003 + shared.RETENTION)
+        graph.prune(1004 + shared.RETENTION, force=True)
+        self.assertEqual(graph.tasks(1004 + shared.RETENTION), [])
+        self.assertNotIn(shared.digest("codex", "root", "turn"), graph.tokens)
 
     def test_guardian_owned_by_root_does_not_keep_root_running(self):
         graph = active_graph()
@@ -428,6 +464,24 @@ class StateStoreTests(unittest.TestCase):
         result = self.store.save(empty, reason="socket-unavailable", now=1004)
         self.assertTrue(result["tasks"][0]["isHistoricalTerminal"])
 
+    def test_late_title_metadata_does_not_restore_ignored_task_from_saved_state(self):
+        graph = active_graph()
+        self.assertEqual(len(self.store.save(graph, now=1001)["tasks"]), 1)
+        graph.metadata(dict(id="root", threadSource="thread_title"))
+        self.assertEqual(self.store.save(graph, now=1002)["tasks"], [])
+
+    def test_reconciliation_completeness_is_separate_from_connection_health(self):
+        graph = active_graph()
+        graph.reconciliation_complete = False
+        partial = self.store.save(graph, now=1001)
+        self.assertTrue(partial["sourceAvailable"])
+        self.assertFalse(partial["reconciliationComplete"])
+        graph.reconciliation_complete = True
+        complete = self.store.save(graph, now=1002)
+        self.assertTrue(complete["reconciliationComplete"])
+        self.assertGreater(complete["revision"], partial["revision"])
+        self.assertFalse(self.store.snapshot(now=1078)["reconciliationComplete"])
+
     def test_database_does_not_contain_raw_thread_ids(self):
         graph = active_graph()
         graph.consume(event("thread/tokenUsage/updated", tokenUsage=dict(total=wire_usage(1), last=wire_usage(1))), 1001)
@@ -626,6 +680,134 @@ class ObserverTests(unittest.TestCase):
         with self.assertRaisesRegex(shared.CollectorError, "invalid-cursor"):
             shared.Observer(FakeRPC(), graph).reconcile(force=True)
         self.assertIn("known", graph.loaded)
+
+
+    def test_title_thread_is_never_subscribed_or_repeatedly_read(self):
+        graph = shared.TaskGraph()
+        rpc = self.rpc(graph, ["root", "title"])
+        original = rpc.request
+        def request(method, params):
+            if params.get("threadId") == "title":
+                rpc.calls.append((method, params))
+                self.assertEqual(method, "thread/read")
+                return dict(thread=dict(id="title", source="appServer", threadSource="thread_title", status=dict(type="active")))
+            return original(method, params)
+        rpc.request = request
+        observer = shared.Observer(rpc, graph)
+        observer.reconcile(force=True, now=1001)
+        observer.reconcile(now=1062)
+        self.assertEqual(sum(params.get("threadId") == "title" for _, params in rpc.calls), 1)
+        self.assertTrue(graph.reconciliation_complete)
+        self.assertEqual(len(graph.tasks(1062)), 1)
+
+    def test_budget_exhaustion_keeps_partial_recovery_until_all_threads_are_verified(self):
+        graph = shared.TaskGraph()
+        rpc = self.rpc(graph, ["root", "second"])
+        observer = shared.Observer(rpc, graph)
+        with patch.object(shared.time, "monotonic", side_effect=[0, 2]):
+            observer.reconcile(now=1001)
+        self.assertTrue(graph.available)
+        self.assertFalse(graph.reconciliation_complete)
+        self.assertEqual(len(graph.tasks(1001)), 1)
+        observer.reconcile(now=1006)
+        self.assertTrue(graph.reconciliation_complete)
+        self.assertEqual(len(graph.tasks(1006)), 2)
+
+    def test_missing_active_turn_remains_unconfirmed_until_later_read(self):
+        graph = active_graph()
+        rpc = self.rpc(graph, ["root"])
+        original = rpc.request
+        unavailable = [True]
+        def request(method, params):
+            if method == "thread/turns/list" and unavailable[0]:
+                rpc.calls.append((method, params))
+                return dict(data=[])
+            return original(method, params)
+        rpc.request = request
+        observer = shared.Observer(rpc, graph)
+        observer.reconcile(force=True, now=1001)
+        self.assertEqual(graph.tasks(1001)[0]["state"], "unknown")
+        self.assertFalse(graph.reconciliation_complete)
+        unavailable[0] = False
+        observer.reconcile(now=1006)
+        self.assertEqual(graph.tasks(1006)[0]["state"], "running")
+        self.assertTrue(graph.reconciliation_complete)
+
+    def test_thread_failures_back_off_and_delayed_source_can_recover(self):
+        graph = active_graph()
+        rpc = self.rpc(graph, ["root"])
+        original = rpc.request
+        unavailable = [True]
+        reads = []
+        clock = [1000]
+        def request(method, params):
+            if method == "thread/read":
+                reads.append(clock[0])
+                if unavailable[0]:
+                    raise shared.RPCError("rpc-rejected")
+            return original(method, params)
+        rpc.request = request
+        observer = shared.Observer(rpc, graph)
+        for now in (1000, 1001, 1004, 1005, 1010, 1019, 1020, 1040, 1050, 1109, 1110):
+            clock[0] = now
+            observer.reconcile(now=now)
+            self.assertFalse(graph.reconciliation_complete)
+        self.assertEqual(reads, [1000, 1005, 1020, 1050, 1110])
+        unavailable[0] = False
+        clock[0] = 1170
+        observer.reconcile(now=1170)
+        self.assertTrue(graph.reconciliation_complete)
+        self.assertEqual(observer.failures, {})
+
+    def test_finished_child_does_not_poll_unloaded_parent_forever(self):
+        graph = active_graph()
+        graph.metadata(dict(id="child", parentThreadId="root", source={"subAgent": {}}, status=dict(type="idle")))
+        graph.consume(event("turn/started", thread="child", turn=dict(id="child-turn", status="inProgress", rootTurnId="turn", startedAt=1001)), 1001)
+        graph.consume(event("turn/completed", thread="child", turn=dict(id="child-turn", status="completed", completedAt=1002)), 1002)
+        graph.consume(event("turn/completed", turn=dict(id="turn", status="completed", completedAt=1003)), 1003)
+        rpc = self.rpc(graph, [])
+        observer = shared.Observer(rpc, graph)
+        observer.scans["root"] = "old-cursor"
+        observer.reconcile(force=True, now=1004)
+        self.assertEqual([method for method, _ in rpc.calls], ["thread/loaded/list"])
+        self.assertEqual(observer.scans, {})
+        self.assertTrue(graph.reconciliation_complete)
+
+    def test_invalid_turn_shape_only_invalidates_affected_thread(self):
+        graph = shared.TaskGraph()
+        rpc = self.rpc(graph, ["broken", "root"])
+        original = rpc.request
+        def request(method, params):
+            if method == "thread/turns/list" and params.get("threadId") == "broken":
+                return dict(data=[dict(id=[], status="inProgress")])
+            return original(method, params)
+        rpc.request = request
+        observer = shared.Observer(rpc, graph)
+        observer.reconcile(force=True, now=1001)
+        self.assertTrue(graph.available)
+        self.assertFalse(graph.reconciliation_complete)
+        self.assertEqual(len(graph.tasks(1001)), 1)
+        self.assertEqual(graph.tasks(1001)[0]["state"], "running")
+
+    def test_pending_child_is_read_without_resuming_an_unloaded_session(self):
+        graph = active_graph()
+        graph.consume(event("item/completed", item=dict(id="spawn", type="subAgentActivity", kind="started", agentThreadId="child")), 1001)
+        graph.consume(event("turn/completed", turn=dict(id="turn", status="completed", completedAt=1002)), 1002)
+        calls = []
+        class FakeRPC:
+            def request(self, method, params):
+                calls.append((method, params))
+                if method == "thread/loaded/list": return dict(data=[])
+                if method == "thread/read":
+                    return dict(thread=dict(id="child", parentThreadId="root", source={"subAgent": {}}, status=dict(type="notLoaded")))
+                if method == "thread/turns/list":
+                    return dict(data=[dict(id="child-turn", rootTurnId="turn", status="completed", startedAt=1001, completedAt=1003)])
+                raise AssertionError(method)
+        observer = shared.Observer(FakeRPC(), graph)
+        observer.reconcile(force=True, now=1004)
+        self.assertEqual(graph.tasks(1004)[0]["state"], "completed")
+        self.assertTrue(graph.reconciliation_complete)
+        self.assertNotIn("thread/resume", [method for method, _ in calls])
 
 
 class WebSocketTests(unittest.TestCase):

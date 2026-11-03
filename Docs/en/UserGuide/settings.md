@@ -8,12 +8,15 @@ Right-click or Control-click the menu bar icon and choose `Settings`, or press `
 
 | Setting | Purpose | Default or initial state |
 | --- | --- | --- |
+| Theme | System, Light, or Dark across the menu, Settings, and Usage Center | System |
 | Main Panel Layout | Reorder Account, Tasks, Quota, Usage, Update Time, and Codex Service Status | Visible by default; Tasks requires a configured source |
 | Animation Effects | Animate quota bars and the heatmap when opening the panel | On |
 | Launch at Login | Start CodexBar when you sign in to your Mac | Follows the system login-item state |
 | Automatically Check for Updates | Periodically check for CodexBar updates | Follows the current update setting |
 | Menu Bar Quota Indicator | Show the remaining Codex weekly allowance | 7d |
 | Global Shortcut | Toggle the main panel from any app | `⌘⇧W` |
+
+Hover over a question mark for help without moving keyboard focus. Themes use native appearance switching; task cards retain their existing layout and effects.
 
 If Launch at Login needs system approval, its row shows the pending state. Use Open System Settings to approve it; returning to the app refreshes the result.
 

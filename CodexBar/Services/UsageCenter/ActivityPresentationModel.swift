@@ -239,6 +239,7 @@ final class ActivityPresentationModel: ObservableObject {
         case "agent-started": String(localized: "activity.event.starting-subagent")
         case "agent-completed": String(localized: "activity.event.subagent-completed")
         case "agent-interrupted": String(localized: "activity.recent.agent-interrupted", defaultValue: "子任务已中断")
+        case "agent-call-interrupted": String(localized: "activity.recent.agent-call-interrupted", defaultValue: "协作调用已中断")
         case "agent-failed": String(localized: "activity.recent.agent-failed", defaultValue: "子任务执行失败")
         default: nil
         }

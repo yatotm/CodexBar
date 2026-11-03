@@ -34,7 +34,9 @@ Reorder and show or hide sections in `Settings > General > Main Panel Layout`, w
 - Shows the minimum-version requirement when the Codex currently in use is too old
 - Shows `Initialization failed` when the Codex connection cannot initialize
 
-The About page in Settings shows the connection failure reason; the Logs window provides complete requests and responses.
+The About page shows connection failures. Once the account is verified, quota or usage failures fall back only to same-account cached data, shown faded with an explanation; the next refresh reconnects.
+
+Logs supports selecting multiple methods; no selection shows all. Clearing requires confirmation and includes hidden entries, without affecting device history or usage ledgers. Logs remain bounded to 500 in-memory entries.
 
 ## Rate Limits
 
@@ -70,6 +72,8 @@ The summary area shows:
 - Longest task duration
 
 The heatmap uses a 30-column by 7-row grid to show daily token usage over the last 30 weeks. Color intensity is relative to the highest value currently visible in the heatmap.
+
+Click Daily / Weekly above the heatmap to switch modes. Daily is the default; the choice is shared across All, Codex, and Claude and persists. Weekly details aggregate UTC dates and keep collected device logs even when official daily data is missing. Session-days sum daily session counts, counting a session again on each day it appears. Missing data remains unavailable.
 
 When `Animation Effects` is enabled, the day squares appear from the top left to the bottom right whenever the main panel opens.
 

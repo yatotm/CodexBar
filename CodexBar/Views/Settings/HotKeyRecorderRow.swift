@@ -164,13 +164,15 @@ private struct HotKeyCaptureView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: HotKeyCaptureNSView, context _: Context) {
+        nsView.isRecording = isRecording
         nsView.onCapture = onCapture
         nsView.onCancel = onCancel
         nsView.onWindowClose = onWindowClose
 
         if isRecording {
             Task { @MainActor [weak nsView] in
-                nsView?.window?.makeFirstResponder(nsView)
+                guard let nsView, nsView.isRecording else { return }
+                nsView.window?.makeFirstResponder(nsView)
             }
         } else if nsView.window?.firstResponder === nsView {
             nsView.window?.makeFirstResponder(nil)
@@ -179,13 +181,18 @@ private struct HotKeyCaptureView: NSViewRepresentable {
 }
 
 /// 捕获下一次按键并监听窗口关闭, 关闭时清理录制态
-private final class HotKeyCaptureNSView: NSView {
+final class HotKeyCaptureNSView: NSView {
+    var isRecording = false
     var onCapture: ((NSEvent) -> Void)?
     var onCancel: (() -> Void)?
     var onWindowClose: (() -> Void)?
 
     override var acceptsFirstResponder: Bool {
-        true
+        isRecording
+    }
+
+    override var canBecomeKeyView: Bool {
+        false
     }
 
     override func viewDidMoveToWindow() {
@@ -194,6 +201,10 @@ private final class HotKeyCaptureNSView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        guard isRecording else {
+            super.keyDown(with: event)
+            return
+        }
         if event.keyCode == UInt16(kVK_Escape) {
             onCancel?()
         } else {

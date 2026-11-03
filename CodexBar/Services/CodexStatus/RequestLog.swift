@@ -211,6 +211,21 @@ final class RequestLogStore: ObservableObject {
     static let shared = RequestLogStore()
 
     @Published private(set) var entries: [RequestLogEntry]
+    @Published private(set) var selectedMethods: Set<String> = []
+
+    var filteredEntries: [RequestLogEntry] {
+        guard !selectedMethods.isEmpty else { return entries }
+        return entries.filter { selectedMethods.contains($0.method ?? "") }
+    }
+
+    var availableMethods: [String] {
+        Set(entries.map { $0.method ?? "" }).union(selectedMethods).sorted()
+    }
+
+    func setSelectedMethods(_ methods: Set<String>) {
+        guard selectedMethods != methods else { return }
+        selectedMethods = methods
+    }
 
     private let storage: RequestLogStorage
 

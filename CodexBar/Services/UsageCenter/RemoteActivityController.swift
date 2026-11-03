@@ -53,6 +53,7 @@ nonisolated struct RemoteActivityFrame: Decodable, Sendable {
     var sourceReason: String?
     var backend: String?
     var serverVersion: String?
+    var reconciliationComplete: Bool?
 
     var isValid: Bool {
         schema == 1 && epoch.count == 32 && revision >= 0 && sentAt.isFinite && tasks.count <= 500
@@ -269,7 +270,7 @@ nonisolated enum ActivityStreamClient {
 @MainActor
 final class RemoteActivityController: ObservableObject {
     var onTransition: ((String, RemoteActivityTask) -> Void)?
-    var onLocalCodexUpdate: (([RemoteActivityTask], Bool, Bool) -> Void)?
+    var onLocalCodexUpdate: (([RemoteActivityTask], Bool, Bool, Bool) -> Void)?
     private let terminalSubject = PassthroughSubject<(String, RemoteActivityTask), Never>()
     var terminalPublisher: AnyPublisher<(String, RemoteActivityTask), Never> {
         terminalSubject.eraseToAnyPublisher()
@@ -284,6 +285,7 @@ final class RemoteActivityController: ObservableObject {
     private var generations: [String: UUID] = [:]
     private var backendTasks: [String: [RemoteActivityTask]] = [:]
     private var preparedBackends: Set<String> = []
+    private var reconciledBackends: Set<String> = []
     private var canConnect = false
     private var canReadLocal = false
     private static let settingsKey = "RemoteActivity.enabledSourceIDs"
@@ -336,9 +338,10 @@ final class RemoteActivityController: ObservableObject {
         let key = Self.connectionKey(source.id, provider: backend.provider)
         generations[key] = nil
         connections.removeValue(forKey: key)?.cancel()
+        reconciledBackends.remove(key)
         setState("已暂停", source: source, backend: backend)
         if source.transport == .local, backend == .sharedCodex {
-            onLocalCodexUpdate?([], false, true)
+            onLocalCodexUpdate?([], false, true, false)
         }
     }
 
@@ -399,7 +402,7 @@ final class RemoteActivityController: ObservableObject {
                     guard !Task.isCancelled, generations[key] == generation else { return }
                     setState("连接中断, 等待重连", source: source, backend: backend)
                     if source.transport == .local, backend == .sharedCodex {
-                        onLocalCodexUpdate?([], false, true)
+                        onLocalCodexUpdate?([], false, true, false)
                     }
                 }
                 failures = started.duration(to: .now) > .seconds(60) ? 1 : min(failures + 1, 7)
@@ -410,7 +413,7 @@ final class RemoteActivityController: ObservableObject {
     }
 
     static func liveTerminals(previous: [RemoteActivityTask], frame: RemoteActivityFrame, wasConnected: Bool) -> [RemoteActivityTask] {
-        guard wasConnected else { return [] }
+        guard wasConnected, frame.reconciliationComplete != false else { return [] }
         let oldByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
         return frame.tasks.filter { task in
             guard task.isHistoricalTerminal != true,
@@ -421,7 +424,7 @@ final class RemoteActivityController: ObservableObject {
     }
 
     static func liveTransitions(previous: [RemoteActivityTask], frame: RemoteActivityFrame, wasConnected: Bool) -> [RemoteActivityTask] {
-        guard wasConnected else { return [] }
+        guard wasConnected, frame.reconciliationComplete != false else { return [] }
         let completed = liveTerminals(previous: previous, frame: frame, wasConnected: true).filter { $0.state == "completed" }
         let oldByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
         let waiting = frame.tasks.filter { task in
@@ -441,10 +444,12 @@ final class RemoteActivityController: ObservableObject {
         let previous = Dictionary(uniqueKeysWithValues: (backendTasks[key] ?? []).map { ($0.id, $0) })
         let available = backend == .sharedCodex ? frame.sourceAvailable == true && frame.backend == "sharedCodex" : frame.sourceAvailable != false
         let wasConnected = states[key] == "实时连接"
+        let complete = frame.reconciliationComplete != false
+        let canPublish = wasConnected && available && complete && reconciledBackends.contains(key)
         let isLocalCodex = source.transport == .local && backend == .sharedCodex
-        let liveTerminals = Self.liveTerminals(previous: Array(previous.values), frame: frame, wasConnected: wasConnected && available)
+        let liveTerminals = Self.liveTerminals(previous: Array(previous.values), frame: frame, wasConnected: canPublish)
         // 首次和重连只恢复基线, 不把离线期间的旧变化当成新通知
-        if wasConnected, available, !isLocalCodex {
+        if canPublish, !isLocalCodex {
             for task in Self.liveTransitions(previous: Array(previous.values), frame: frame, wasConnected: true) {
                 onTransition?(sourceID, task)
             }
@@ -456,8 +461,13 @@ final class RemoteActivityController: ObservableObject {
         }
         let state = available ? "实时连接" : frame.sourceReason == "unsupported-server-version" ? "需升级 Codex 至 0.162.0" : "后台暂不可用"
         setState(state, source: source, backend: backend)
+        if available, complete {
+            reconciledBackends.insert(key)
+        } else {
+            reconciledBackends.remove(key)
+        }
         if isLocalCodex {
-            onLocalCodexUpdate?(frame.tasks, available, !wasConnected)
+            onLocalCodexUpdate?(frame.tasks, available, !wasConnected, complete)
         } else {
             for task in liveTerminals {
                 terminalSubject.send((sourceID, task))
@@ -477,7 +487,8 @@ private extension RemoteActivityFrame {
             sourceAvailable: sourceAvailable,
             sourceReason: sourceReason,
             backend: backend,
-            serverVersion: serverVersion
+            serverVersion: serverVersion,
+            reconciliationComplete: reconciliationComplete
         )
     }
 }

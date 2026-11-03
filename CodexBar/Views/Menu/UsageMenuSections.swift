@@ -4,7 +4,9 @@ struct UsageMenuSummaryView: View {
     let dashboard: UsageDashboard
     let onHoverContextChange: (UsageHeatmapHoverContext?) -> Void
     private let days: [UsageHeatmapDay?]
+    private let weeks: [UsageHeatmapPeriod?]
     private let peakTokens: Int
+    private let peakWeeklyTokens: Int
     @State private var selection: UsageHeatmapSelection?
     @State private var screenFrame: CGRect?
 
@@ -28,17 +30,21 @@ struct UsageMenuSummaryView: View {
             )
         }
         self.days = days
+        let weeks = UsageHeatmapPeriod.weeks(in: days)
+        self.weeks = weeks
         peakTokens = max(1, days.compactMap { $0?.tokensForHeatmap }.max() ?? 0)
+        peakWeeklyTokens = max(1, weeks.compactMap { $0?.tokensForHeatmap }.max() ?? 0)
     }
 
     private var hoverContext: UsageHeatmapHoverContext? {
         guard let selection,
-              let day = days.compactMap(\.self).first(where: { $0.id == selection.day.id }) else { return nil }
+              let column = selection.column(in: days),
+              let period = selection.period(in: days, weeks: weeks) else { return nil }
         return UsageHeatmapHoverContext(
-            day: day, showsWorkflow: false, alignmentScreenFrame: screenFrame,
-            preferredSide: UsageHeatmap.Metrics.preferredDetailSide(for: selection.column),
-            peakTokens: peakTokens,
-            recordedDay: dashboard.days.first { $0.day == day.id } ?? UsageDay(day: day.id, tokens: 0)
+            period: period, showsWorkflow: false, alignmentScreenFrame: screenFrame,
+            preferredSide: UsageHeatmap.Metrics.preferredDetailSide(for: column),
+            peakTokens: selection.mode == .daily ? peakTokens : peakWeeklyTokens,
+            recordedDay: period.recordedUsage(in: dashboard.days)
         )
     }
 
@@ -56,7 +62,7 @@ struct UsageMenuSummaryView: View {
             }
             .help("从最多 210 天的设备日志计算, 不代表账号全时累计; 最长单轮只采用日志明确记录的时长")
             UsageHeatmap(
-                days: days, selection: $selection, peakTokens: peakTokens,
+                days: days, weeks: weeks, selection: $selection, peakTokens: peakTokens, peakWeeklyTokens: peakWeeklyTokens,
                 onScreenFrameChange: { screenFrame = $0 }
             )
         }

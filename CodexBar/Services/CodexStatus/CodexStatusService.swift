@@ -78,6 +78,7 @@ private nonisolated enum ReadSkipReason {
 private nonisolated enum FetchFailure: Error {
     case notLoggedIn
     case needsRebuild
+    case accountChanged
 }
 
 private nonisolated struct CachedSupplementalRead<Value> {
@@ -539,50 +540,11 @@ actor CodexStatusService {
         trace: inout CodexFetchTrace
     ) throws -> CodexQuotaSnapshot {
         var didRefresh = false
-
-        func refreshTokenIfNeeded() throws {
-            guard !didRefresh else { throw FetchFailure.notLoggedIn }
-            didRefresh = true
-            try Self.refreshAccount(using: connection)
-        }
-
-        func readResultWithAuthRefresh<Value>(_ read: () -> ReadResult<Value>) throws -> ReadResult<Value> {
-            let firstAttempt = read()
-            guard firstAttempt.isAuthenticationRequired else {
-                return try firstAttempt.resultAfterAuthAttempt()
-            }
-
-            try refreshTokenIfNeeded()
-            return try read().resultAfterAuthAttempt()
-        }
-
-        func readSupplemental<Value: Decodable>(
-            _ method: String,
-            as type: Value.Type,
-            cache: inout Value?
-        ) throws -> CachedSupplementalRead<Value> {
-            if connection.session.isOpen {
-                do {
-                    let result = try readResultWithAuthRefresh {
-                        Self.read(method, using: connection, as: type)
-                    }
-                    return cachedRead(result, cache: &cache)
-                } catch FetchFailure.needsRebuild {
-                    try Task.checkCancellation()
-                    // 账户已确认, 不因补充请求超时丢弃本轮成功数据或同账号缓存
-                    // 关闭本客户端连接, 下一轮刷新再重连, 避免重复整轮慢请求
-                    connection.close()
-                }
-            }
-            return cachedRead(.skipped(.requestFailed), cache: &cache)
-        }
-
         // 新建连接已读过 account; 复用连接才刷新账户状态
-
         // 失败定位随流程推进, 不靠事后从别的字段反推
         trace.failureStage = .account
         if refreshAccountInfo {
-            let accountResult: ReadResult<AccountReadResponse> = try readResultWithAuthRefresh {
+            let accountResult: ReadResult<AccountReadResponse> = try readResultWithAuthRefresh(using: connection, didRefresh: &didRefresh) {
                 Self.read("account/read", params: ["refreshToken": false], using: connection, as: AccountReadResponse.self)
             }
             if let response = accountResult.value {
@@ -594,7 +556,64 @@ actor CodexStatusService {
             trace.account = .skipped
         }
 
-        guard let account = connection.accountResponse.account else {
+        do {
+            return try readSupplementalSnapshot(using: connection, didRefresh: &didRefresh, trace: &trace)
+        } catch FetchFailure.accountChanged {
+            // 退出缓存字段的 inout 访问后整轮重读, 保留本轮已经使用的认证预算
+            trace.account = .refreshed
+            trace.rateLimits = nil
+            trace.usage = nil
+            trace.resetCredits = nil
+            return try readSupplementalSnapshot(using: connection, didRefresh: &didRefresh, trace: &trace)
+        }
+    }
+
+    private func readResultWithAuthRefresh<Value>(
+        using connection: AppServerConnection,
+        didRefresh: inout Bool,
+        _ read: () throws -> ReadResult<Value>
+    ) throws -> ReadResult<Value> {
+        let firstAttempt = try read()
+        guard firstAttempt.isAuthenticationRequired else {
+            return try firstAttempt.resultAfterAuthAttempt()
+        }
+        guard !didRefresh else { throw FetchFailure.notLoggedIn }
+        didRefresh = true
+        try Self.refreshAccount(using: connection)
+        return try read().resultAfterAuthAttempt()
+    }
+
+    private func readSupplemental<Value: Decodable>(
+        _ method: String,
+        using connection: AppServerConnection,
+        didRefresh: inout Bool,
+        as type: Value.Type,
+        cache: inout Value?
+    ) throws -> CachedSupplementalRead<Value> {
+        if connection.session.isOpen {
+            let account = connection.accountResponse.account
+            do {
+                let result = try readResultWithAuthRefresh(using: connection, didRefresh: &didRefresh) {
+                    guard connection.accountResponse.account == account else { throw FetchFailure.accountChanged }
+                    return Self.read(method, using: connection, as: type)
+                }
+                return cachedRead(result, cache: &cache)
+            } catch FetchFailure.needsRebuild {
+                try Task.checkCancellation()
+                // 补充请求故障只降级对应数据, 下一轮再重连, 不重复整轮慢请求
+                connection.close()
+            }
+        }
+        return cachedRead(.skipped(.requestFailed), cache: &cache)
+    }
+
+    private func readSupplementalSnapshot(
+        using connection: AppServerConnection,
+        didRefresh: inout Bool,
+        trace: inout CodexFetchTrace
+    ) throws -> CodexQuotaSnapshot {
+        let accountResponse = connection.accountResponse
+        guard let account = accountResponse.account else {
             throw FetchFailure.notLoggedIn
         }
         trace.failureStage = .snapshot
@@ -605,6 +624,7 @@ actor CodexStatusService {
 
         let rateLimitsRead = try readSupplemental(
             "account/rateLimits/read",
+            using: connection, didRefresh: &didRefresh,
             as: AccountRateLimitsResponse.self,
             cache: &supplementalDataCache.rateLimits
         )
@@ -612,6 +632,7 @@ actor CodexStatusService {
 
         let usageRead = try readSupplemental(
             "account/usage/read",
+            using: connection, didRefresh: &didRefresh,
             as: AccountUsageResponse.self,
             cache: &supplementalDataCache.usage
         )
@@ -625,7 +646,7 @@ actor CodexStatusService {
         // rateLimits/usage 都可为空, 只要账户有效就让 UI 展示"暂无数据"
 
         guard let snapshot = try? CodexQuotaSnapshot(
-            accountResponse: connection.accountResponse,
+            accountResponse: accountResponse,
             rateLimitsResponse: rateLimitsRead.value,
             usageResponse: usageRead.value,
             isRateLimitsStale: rateLimitsRead.isStale,

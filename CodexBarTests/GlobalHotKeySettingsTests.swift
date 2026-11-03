@@ -1,8 +1,18 @@
+import AppKit
 import Carbon.HIToolbox
 import Combine
 import Testing
 
 struct GlobalHotKeySettingsTests {
+    @Test func shortcutCaptureOnlyAcceptsFocusWhileRecording() {
+        let view = HotKeyCaptureNSView()
+        #expect(!view.acceptsFirstResponder && !view.canBecomeKeyView)
+        view.isRecording = true
+        #expect(view.acceptsFirstResponder && !view.canBecomeKeyView)
+        view.isRecording = false
+        #expect(!view.acceptsFirstResponder)
+    }
+
     @Test func registrationFailurePreservesPublishedAndStoredShortcut() throws {
         let preferences = try TestPreferences()
         defer { preferences.remove() }

@@ -70,6 +70,65 @@ struct CodexSharedAccountTests {
         try server.finish()
     }
 
+    @Test(arguments: [
+        ("account/rateLimits/read", "success"), ("account/usage/read", "success"),
+        ("account/usage/read", "disconnected"), ("account/rateLimits/read", "authRequired")
+    ])
+    func authenticationRefreshRestartsSnapshotForChangedAccount(method: String, outcome: String) async throws {
+        let server = try SharedServerFixture { peer in
+            try Self.initialize(peer)
+            try Self.replyQuota(peer, used: 10)
+            try Self.replyUsage(peer, tokens: 100)
+            try peer.reply(to: Self.read(peer, method: "account/read"), result: Self.accountPayload())
+            if method == "account/usage/read" {
+                try Self.replyQuota(peer, used: 20)
+            }
+            let expired = try Self.read(peer, method: method)
+            try peer.send(["id": #require(expired["id"]), "error": ["message": "codex account authentication required"]])
+            let refresh = try Self.read(peer, method: "account/read")
+            #expect((refresh["params"] as? [String: Bool])?["refreshToken"] == true)
+            try peer.reply(to: refresh, result: Self.accountPayload("other@example.com"))
+            if outcome == "disconnected" {
+                _ = try Self.read(peer, method: "account/rateLimits/read")
+                return
+            }
+            if outcome == "authRequired" {
+                let request = try Self.read(peer, method: "account/rateLimits/read")
+                try peer.send(["id": #require(request["id"]), "error": ["message": "codex account authentication required"]])
+                var byte: UInt8 = 0
+                #expect(Darwin.read(peer.descriptor, &byte, 1) == 0)
+                return
+            }
+            try Self.replyQuota(peer, used: 80)
+            try Self.replyUsage(peer, tokens: 500)
+        }
+        defer { server.close() }
+        let domain = "io.github.yatotm.codexbar.shared-test.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: domain)?.removePersistentDomain(forName: domain) }
+        let service = try Self.makeService(domain: domain, socketURL: server.url)
+        #expect(try await Self.snapshot(service.fetchOutcome()).hasTrustedData)
+        let result = await service.fetchOutcome()
+        if outcome == "authRequired" {
+            guard case .notLoggedIn = result.outcome else {
+                Issue.record("整轮重读仍需认证时不能再次刷新令牌")
+                return
+            }
+        } else {
+            let snapshot = try Self.snapshot(result)
+            #expect(snapshot.account.email == "other@example.com")
+            #expect(result.trace.account == .refreshed)
+            if outcome == "disconnected" {
+                #expect(snapshot.limits.isEmpty && snapshot.usage == nil)
+                #expect(!snapshot.hasTrustedData)
+            } else {
+                #expect(snapshot.codexLimit?.window(ofKind: .primary)?.usedPercent == 80)
+                #expect(snapshot.usage?.summary.lifetimeTokens == 500)
+                #expect(!snapshot.isRateLimitsStale && !snapshot.isUsageStale)
+            }
+        }
+        try server.finish()
+    }
+
     @Test func changedAccountCannotReuseSupplementalCacheAfterTransportFailure() async throws {
         let server = try SharedServerFixture { peer in
             try Self.initialize(peer)

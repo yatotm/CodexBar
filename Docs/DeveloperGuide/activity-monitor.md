@@ -38,6 +38,8 @@ Claude 继续使用 `ActivityCollector.py` 和原生日志/Hook，不请求 Anth
 
 本机 Codex 帧交给 `CodexActivityMonitor.receiveSharedTasks`，统一发布通知、触觉和电源状态。`ActivityPresentationModel` 只合并展示，不重复计算本机任务，也不把远端任务交给本机防睡眠。
 
+共享帧的可选 `reconciliationComplete` 区分连接健康与线程核对完成。核对未完成时暂停异常任务判定和实时通知，按线程退避重试；明确标记为 `thread_title` 的内部线程不参与任务。旧帧缺少该字段时沿用原行为，schema、身份和存储位置不变。
+
 首次或重连时只恢复基线。只有此前可信运行的任务实时到达终态，才可发通知或流光。历史终态由 `isHistoricalTerminal` 抑制，完成和终止记录保留 10 分钟。
 
 结束时间优先使用后台的明确时间；缺失时保留首次确认的时间，重复轮询和迟到的 Token 统计不能延长展示期限。后续收到明确结束时间时仍可修正。没有已有任务或结束时间的历史终态不生成新记录。

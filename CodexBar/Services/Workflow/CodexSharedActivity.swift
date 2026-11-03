@@ -3,11 +3,14 @@ import Foundation
 
 extension CodexActivityMonitor {
     /// 心跳只刷新来源健康与覆盖时间, 不作为任务进展
-    func receiveSharedTasks(_ values: [RemoteActivityTask], available: Bool, bootstrap: Bool, now: Date = .now) {
+    func receiveSharedTasks(
+        _ values: [RemoteActivityTask], available: Bool, bootstrap: Bool,
+        reconciliationComplete: Bool = true, now: Date = .now
+    ) {
         guard usesSharedBackend, isStarted else { return }
         // 与协议同用 Unix 秒, 避免 Date 往返转换把零间隔舍入为负数
         let receivedAt = now.timeIntervalSince1970
-        let recovering = bootstrap || !isMonitoringAvailable
+        let recovering = bootstrap || !isMonitoringAvailable || isActivityProtectionRecoveryInProgress || !reconciliationComplete
         let healthy = updateSharedSourceHealth(available)
         if !healthy {
             sharedUnconfirmedTasks = tasks.values.filter { $0.state != .suppressed }.map(\.snapshot)
@@ -16,7 +19,7 @@ extension CodexActivityMonitor {
             return
         }
 
-        if recovering {
+        if recovering, !isActivityProtectionRecoveryInProgress {
             _ = beginActivityProtectionRecovery()
         }
         var next: [CodexActivityTaskKey: CodexActivityTask] = [:]
@@ -57,8 +60,8 @@ extension CodexActivityMonitor {
             invalidateActivityProtectionNotification(for: task.displayID)
         }
         tasks = next
-        isActivityProtectionRecoveryInProgress = false
-        if recovering || restoresUnconfirmedTask {
+        isActivityProtectionRecoveryInProgress = !reconciliationComplete
+        if reconciliationComplete, recovering || restoresUnconfirmedTask {
             sessionTransitionNotBefore = now
             applyPersistedActivityProtection(now: now)
             reconcileActivityProtection(now: now, sendsNotification: false)

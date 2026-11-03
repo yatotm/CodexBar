@@ -51,12 +51,13 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_: Notification) {
+        AppearanceSettings().apply()
         // Hook 子进程模式绝不会走到这里, 干净退出标志因此不会被它改写
         AppProcessDiagnostics.install()
         activityMonitor.start()
-        usageCenterViewModel.remoteActivity.onLocalCodexUpdate = { [weak self] tasks, available, bootstrap in
+        usageCenterViewModel.remoteActivity.onLocalCodexUpdate = { [weak self] tasks, available, bootstrap, reconciliationComplete in
             guard let self else { return }
-            activityMonitor.receiveSharedTasks(tasks, available: available, bootstrap: bootstrap)
+            activityMonitor.receiveSharedTasks(tasks, available: available, bootstrap: bootstrap, reconciliationComplete: reconciliationComplete)
             if available, !hasRetiredLegacyHooks {
                 hasRetiredLegacyHooks = true
                 codexHookSettings.retireInstalledHooks()
@@ -91,16 +92,17 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
         let notificationService = CodexNotificationService(
             settings: notificationSettings,
             statusViewModel: viewModel,
-            activityMonitor: activityMonitor
+            activityMonitor: activityMonitor,
+            remoteActivity: usageCenterViewModel.remoteActivity
         ) { [weak self, weak controller] in
-            self?.usageCenterViewModel.menuScope = .codex
+            self?.usageCenterViewModel.menuScope = .all
             controller?.openMenuSurfaceFromNotification()
         }
         notificationService.start()
         self.notificationService = notificationService
         usageCenterViewModel.remoteActivity.onTransition = { [weak self, weak notificationService] sourceID, task in
             guard let self, let source = usageCenterViewModel.sources.first(where: { $0.id == sourceID }) else { return }
-            notificationService?.notifyRemoteActivity(task, sourceName: source.name)
+            notificationService?.notifyRemoteActivity(task, sourceID: sourceID, sourceName: source.name)
         }
 
         let autoResetController = AutoResetController(

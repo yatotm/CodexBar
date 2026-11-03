@@ -13,24 +13,41 @@ nonisolated enum AutoResetFailureNotice: String, Sendable {
 /// 集中式提醒服务: 订阅额度与实时活动, 负责触觉反馈; 阈值判定; 去重; 重置识别与本地通知发送
 @MainActor
 final class CodexNotificationService: NSObject {
+    struct Delivery {
+        var setDelegate: (any UNUserNotificationCenterDelegate) -> Void = {
+            UNUserNotificationCenter.current().delegate = $0
+        }
+
+        var add: (UNNotificationRequest) async throws -> Void = {
+            try await UNUserNotificationCenter.current().add($0)
+        }
+
+        var remove: ([String]) -> Void = {
+            let center = UNUserNotificationCenter.current()
+            center.removeDeliveredNotifications(withIdentifiers: $0)
+            center.removePendingNotificationRequests(withIdentifiers: $0)
+        }
+    }
+
     private let settings: NotificationSettings
     private let statusViewModel: CodexStatusViewModel
     private let activityMonitor: CodexActivityMonitor
     private let defaults: UserDefaults
+    private let delivery: Delivery
+    private let remoteActivity: RemoteActivityController?
     private nonisolated let openMenuSurface: @MainActor @Sendable () -> Void
 
     private var cancellables = Set<AnyCancellable>()
     private var taskHapticFeedbackTask: Task<Void, Never>?
-    private var taskWaitingNotificationIdentifiers = Set<String>()
+    private var taskWaitingNotifications: [UUID: String] = [:]
+    private var remoteWaitingNotifications: [UUID: String] = [:]
+    private var remoteWaitingTaskIDs = Set<UUID>()
     private let creditExpiryReminderScheduler = ReminderCheckScheduler()
     private var latestQuotaSnapshot: CodexQuotaSnapshot?
 
     /// 已发送去重键的内存镜像, 变更时才写回 UserDefaults
     private var sentDedupKeys: [String]
     private var submittingDedupKeys = Set<String>()
-
-    /// 阈值穿越判定的会话内上一帧剩余比例, key 为 account|limitId|windowId
-    private var lowQuotaObservations: [String: LowQuotaObservation] = [:]
 
     /// 低额度判定依据的两个设置项
     /// 订阅回调跑在 @Published 的 willSet, 那时属性还是旧值, 只有回调参数是新的
@@ -49,19 +66,23 @@ final class CodexNotificationService: NSObject {
     }
 
     /// 可信快照中每个额度窗口的重置观察状态; 窗口消失后重现会获得新的生命周期标记
-    private var quotaWindowResetObservations: [String: QuotaWindowResetObservation] = [:]
+    private var quotaWindowObservations: [String: QuotaWindowObservation] = [:]
 
     init(
         settings: NotificationSettings,
         statusViewModel: CodexStatusViewModel,
         activityMonitor: CodexActivityMonitor,
         defaults: UserDefaults = .standard,
+        delivery: Delivery = Delivery(),
+        remoteActivity: RemoteActivityController? = nil,
         openMenuSurface: @escaping @MainActor @Sendable () -> Void
     ) {
         self.settings = settings
         self.statusViewModel = statusViewModel
         self.activityMonitor = activityMonitor
         self.defaults = defaults
+        self.delivery = delivery
+        self.remoteActivity = remoteActivity
         self.openMenuSurface = openMenuSurface
         let storedDedupKeys = defaults.stringArray(forKey: Self.sentKeysKey) ?? []
         sentDedupKeys = storedDedupKeys.filter { !$0.hasPrefix(Self.legacyResetDedupKeyPrefix) }
@@ -73,7 +94,7 @@ final class CodexNotificationService: NSObject {
     }
 
     func start() {
-        UNUserNotificationCenter.current().delegate = self
+        delivery.setDelegate(self)
         settings.refreshAuthorizationStatus()
 
         statusViewModel.$snapshot
@@ -114,95 +135,124 @@ final class CodexNotificationService: NSObject {
                 self?.reconcileTaskWaitingNotifications(with: snapshot)
             }
             .store(in: &cancellables)
+
+        if let remoteActivity {
+            Publishers.CombineLatest(remoteActivity.$tasks, remoteActivity.$states)
+                .sink { [weak self] tasks, states in
+                    self?.reconcileRemoteActivity(tasks: tasks, states: states)
+                }
+                .store(in: &cancellables)
+        }
     }
 
     // MARK: - Hook 任务提醒
 
-    private func handleActivityTransition(_ transition: CodexActivityTransition) {
+    @discardableResult
+    func handleActivityTransition(_ transition: CodexActivityTransition) -> Task<Bool, Never>? {
         guard !transition.isAnonymous else {
-            return
+            return nil
         }
         performTaskHapticFeedbackIfEnabled()
 
         guard settings.canDeliver else {
-            return
+            return nil
         }
 
         switch transition {
         case let .waitingApproval(task):
-            guard settings.isTaskWaitingEnabled else {
-                return
+            guard settings.isTaskWaitingEnabled, task.hasBlockingInputRequest != false else {
+                return nil
             }
             let taskID = task.id
-            let identifier = Self.taskWaitingNotificationIdentifier(for: taskID)
-            taskWaitingNotificationIdentifiers.insert(identifier)
-            send(
+            // 每次等待独立标识, 迟到的投递或失败回调不能影响同一任务后续的等待
+            let identifier = Self.taskWaitingNotificationIdentifier(for: taskID) + "|\(UUID().uuidString)"
+            if let previous = taskWaitingNotifications.updateValue(identifier, forKey: taskID) {
+                removeNotifications(withIdentifiers: [previous])
+            }
+            return send(
                 .taskWaiting(project: task.projectName, toolName: task.toolName),
                 sound: settings.taskWaitingSound,
                 identifier: identifier,
                 isStillRelevant: { [weak self] in
-                    self?.isTaskStillWaiting(
-                        taskID,
-                        notificationIdentifier: identifier
-                    ) ?? false
+                    guard let self, taskWaitingNotifications[taskID] == identifier else { return false }
+                    return activityMonitor.snapshot.waitingTasks.contains { $0.id == taskID && $0.hasBlockingInputRequest != false }
                 },
                 onSubmissionFailure: { [weak self] in
-                    self?.taskWaitingNotificationIdentifiers.remove(identifier)
+                    guard let self, taskWaitingNotifications[taskID] == identifier else { return }
+                    taskWaitingNotifications[taskID] = nil
                 }
             )
         case let .completed(completion):
             guard settings.isTaskCompletionEnabled,
                   let duration = completion.duration,
                   duration >= TimeInterval(settings.taskCompletionMinimumDurationSeconds) else {
-                return
+                return nil
             }
-            send(
+            return send(
                 .taskCompleted(project: completion.projectName, duration: duration),
                 sound: settings.taskCompletionSound
             )
         }
     }
 
-    func notifyRemoteActivity(_ task: RemoteActivityTask, sourceName: String) {
+    @discardableResult
+    func notifyRemoteActivity(_ task: RemoteActivityTask, sourceID: String, sourceName: String) -> Task<Bool, Never>? {
+        guard task.state == "waiting" || task.state == "completed",
+              task.state != "waiting" || task.hasBlockingInputRequest != false else { return nil }
         performTaskHapticFeedbackIfEnabled()
-        guard settings.canDeliver else { return }
+        guard settings.canDeliver else { return nil }
         let waiting = task.state == "waiting"
         let duration = task.updatedAt - task.startedAt
         guard waiting ? settings.isTaskWaitingEnabled
-            : settings.isTaskCompletionEnabled && duration >= Double(settings.taskCompletionMinimumDurationSeconds) else { return }
+            : settings.isTaskCompletionEnabled && duration >= Double(settings.taskCompletionMinimumDurationSeconds) else { return nil }
         let provider = task.provider == "codex" ? "Codex" : "Claude Code"
-        send(CodexNotificationContent(
-            kind: waiting ? "remoteTaskWaiting" : "remoteTaskCompleted",
-            title: "\(provider) · \(task.title)",
-            body: task.project.isEmpty ? sourceName : "\(sourceName) · \(task.project)"
-        ), sound: waiting ? settings.taskWaitingSound : settings.taskCompletionSound)
-    }
-
-    private func isTaskStillWaiting(
-        _ taskID: UUID,
-        notificationIdentifier: String
-    ) -> Bool {
-        let isStillWaiting = activityMonitor.snapshot.waitingTasks.contains {
-            $0.id == taskID
+        let identifier = UUID().uuidString
+        let taskID = ActivityPresentationModel.taskID(source: sourceID, task: task.id, startedAt: task.startedAt)
+        if waiting, let previous = remoteWaitingNotifications.updateValue(identifier, forKey: taskID) {
+            removeNotifications(withIdentifiers: [previous])
         }
-        if !isStillWaiting {
-            taskWaitingNotificationIdentifiers.remove(notificationIdentifier)
-        }
-        return isStillWaiting
+        let waitsForInput = task.stage == "waiting-input" || task.toolName == "AskUserQuestion"
+        let title = waiting && waitsForInput ? String(localized: "activity.stage.waiting-input", defaultValue: "等待回应") : task.title
+        return send(
+            CodexNotificationContent(
+                kind: waiting ? "remoteTaskWaiting" : "remoteTaskCompleted",
+                title: "\(provider) · \(title)",
+                body: task.project.isEmpty ? sourceName : "\(sourceName) · \(task.project)"
+            ),
+            sound: waiting ? settings.taskWaitingSound : settings.taskCompletionSound,
+            identifier: identifier,
+            isStillRelevant: { [weak self] in
+                guard waiting else { return true }
+                guard let self else { return false }
+                return remoteWaitingNotifications[taskID] == identifier && remoteWaitingTaskIDs.contains(taskID)
+            },
+            onSubmissionFailure: { [weak self] in
+                guard let self, remoteWaitingNotifications[taskID] == identifier else { return }
+                remoteWaitingNotifications[taskID] = nil
+            }
+        )
     }
 
     private func reconcileTaskWaitingNotifications(with snapshot: CodexActivitySnapshot) {
-        let activeIdentifiers = Set(snapshot.waitingTasks.map {
-            Self.taskWaitingNotificationIdentifier(for: $0.id)
-        })
-        let obsoleteIdentifiers = taskWaitingNotificationIdentifiers.subtracting(activeIdentifiers)
-        guard !obsoleteIdentifiers.isEmpty else {
-            return
-        }
+        let active = Set(snapshot.waitingTasks.filter { $0.hasBlockingInputRequest != false }.map(\.id))
+        let obsolete = taskWaitingNotifications.filter { !active.contains($0.key) }
+        guard !obsolete.isEmpty else { return }
+        removeNotifications(withIdentifiers: Array(obsolete.values))
+        taskWaitingNotifications = taskWaitingNotifications.filter { active.contains($0.key) }
+    }
 
-        let identifiers = Array(obsoleteIdentifiers)
-        removeNotifications(withIdentifiers: identifiers)
-        taskWaitingNotificationIdentifiers.subtract(obsoleteIdentifiers)
+    func reconcileRemoteActivity(tasks: [String: [RemoteActivityTask]], states: [String: String]) {
+        remoteWaitingTaskIDs = Set(tasks.flatMap { sourceID, values in
+            values.compactMap { task -> UUID? in
+                let health = states[RemoteActivityController.connectionKey(sourceID, provider: task.provider)] ?? states[sourceID]
+                guard health == "实时连接", task.state == "waiting", task.hasBlockingInputRequest != false else { return nil }
+                return ActivityPresentationModel.taskID(source: sourceID, task: task.id, startedAt: task.startedAt)
+            }
+        })
+        let obsolete = remoteWaitingNotifications.filter { !remoteWaitingTaskIDs.contains($0.key) }
+        guard !obsolete.isEmpty else { return }
+        removeNotifications(withIdentifiers: Array(obsolete.values))
+        remoteWaitingNotifications = remoteWaitingNotifications.filter { remoteWaitingTaskIDs.contains($0.key) }
     }
 
     private func performTaskHapticFeedbackIfEnabled() {
@@ -268,10 +318,10 @@ final class CodexNotificationService: NSObject {
 
     // MARK: - 快照处理
 
-    private func handleSnapshot(_ snapshot: CodexQuotaSnapshot?) {
+    func handleSnapshot(_ snapshot: CodexQuotaSnapshot?) {
         guard let snapshot else {
             latestQuotaSnapshot = nil
-            quotaWindowResetObservations.removeAll()
+            quotaWindowObservations.removeAll()
             scheduleNextCreditExpiryCheck(dates: [])
             return
         }
@@ -298,12 +348,12 @@ final class CodexNotificationService: NSObject {
         var observedWindowKeys = Set<String>()
         forEachQuotaWindowWithData(in: snapshot) { window, limit, stateKey in
             observedWindowKeys.insert(stateKey)
-            if quotaWindowResetObservations[stateKey] == nil {
-                quotaWindowResetObservations[stateKey] = QuotaWindowResetObservation()
+            if quotaWindowObservations[stateKey] == nil {
+                quotaWindowObservations[stateKey] = QuotaWindowObservation()
             }
             processQuotaWindow(window, limit: limit, stateKey: stateKey, lowQuota: lowQuota)
         }
-        quotaWindowResetObservations = quotaWindowResetObservations.filter {
+        quotaWindowObservations = quotaWindowObservations.filter {
             observedWindowKeys.contains($0.key)
         }
     }
@@ -342,7 +392,7 @@ final class CodexNotificationService: NSObject {
 
     private func resetLowQuotaObservation(for snapshot: CodexQuotaSnapshot) {
         forEachQuotaWindowWithData(in: snapshot) { _, _, stateKey in
-            lowQuotaObservations.removeValue(forKey: stateKey)
+            quotaWindowObservations[stateKey]?.lowQuota = LowQuotaObservation()
         }
     }
 
@@ -367,13 +417,13 @@ final class CodexNotificationService: NSObject {
             return
         }
 
-        let crossedThreshold = lowQuotaObservations[stateKey, default: LowQuotaObservation()].observe(
+        let crossedThreshold = quotaWindowObservations[stateKey]?.lowQuota.observe(
             remainingPercent: window.remainingPercent, resetsAt: window.resetsAt,
             thresholdPercent: lowQuota.thresholdPercent
         )
 
         guard let resetsAt = window.resetsAt,
-              crossedThreshold,
+              crossedThreshold == true,
               lowQuota.isEnabled else {
             return
         }
@@ -388,6 +438,7 @@ final class CodexNotificationService: NSObject {
         AppLog.notification.notice("阈值已穿越: \(details, privacy: .public)")
 
         let dedupKey = lowQuotaDedupKey(stateKey: stateKey, resetsAt: resetsAt)
+        let lifecycleToken = quotaWindowObservations[stateKey]?.lifecycleToken
         send(
             .lowQuota(
                 limitTitle: limit.title,
@@ -397,7 +448,9 @@ final class CodexNotificationService: NSObject {
             sound: settings.lowQuotaSound,
             dedupKey: dedupKey,
             onSubmissionFailure: { [weak self] in
-                self?.lowQuotaObservations.removeValue(forKey: stateKey)
+                guard let self, quotaWindowObservations[stateKey]?.lifecycleToken == lifecycleToken,
+                      quotaWindowObservations[stateKey]?.lowQuota.isSameCycle(as: resetsAt) == true else { return }
+                quotaWindowObservations[stateKey]?.lowQuota = LowQuotaObservation()
             }
         )
     }
@@ -411,14 +464,14 @@ final class CodexNotificationService: NSObject {
         window: QuotaWindow
     ) {
         if usedPercent > 0 {
-            quotaWindowResetObservations[stateKey]?.hasObservedConsumption = true
+            quotaWindowObservations[stateKey]?.hasObservedConsumption = true
         } else if usedPercent == 0,
-                  quotaWindowResetObservations[stateKey]?.hasObservedConsumption == true {
+                  quotaWindowObservations[stateKey]?.hasObservedConsumption == true {
             // 归零即消费待重置状态; 开关或授权此刻不可用时不保留补发
-            quotaWindowResetObservations[stateKey]?.hasObservedConsumption = false
+            quotaWindowObservations[stateKey]?.hasObservedConsumption = false
             guard settings.canDeliver,
                   settings.isQuotaResetEnabled,
-                  let lifecycleToken = quotaWindowResetObservations[stateKey]?.lifecycleToken else {
+                  let lifecycleToken = quotaWindowObservations[stateKey]?.lifecycleToken else {
                 return
             }
 
@@ -436,11 +489,11 @@ final class CodexNotificationService: NSObject {
                 dedupKey: dedupKey,
                 onSubmissionFailure: { [weak self] in
                     guard let self,
-                          quotaWindowResetObservations[stateKey]?.lifecycleToken == lifecycleToken else {
+                          quotaWindowObservations[stateKey]?.lifecycleToken == lifecycleToken else {
                         return
                     }
 
-                    quotaWindowResetObservations[stateKey]?.hasObservedConsumption = true
+                    quotaWindowObservations[stateKey]?.hasObservedConsumption = true
                 }
             )
         }
@@ -674,7 +727,7 @@ final class CodexNotificationService: NSObject {
                 return false
             }
             do {
-                try await UNUserNotificationCenter.current().add(request)
+                try await delivery.add(request)
                 guard isStillRelevant?() != false else {
                     // 投递后任务状态又变了, 撤回避免用户看到过期提醒
                     let details = LogFields.joined(
@@ -706,9 +759,7 @@ final class CodexNotificationService: NSObject {
     }
 
     private func removeNotifications(withIdentifiers identifiers: [String]) {
-        let center = UNUserNotificationCenter.current()
-        center.removeDeliveredNotifications(withIdentifiers: identifiers)
-        center.removePendingNotificationRequests(withIdentifiers: identifiers)
+        delivery.remove(identifiers)
     }
 
     private nonisolated static func accountKey(for snapshot: CodexQuotaSnapshot) -> String {
@@ -790,15 +841,20 @@ final class CodexNotificationService: NSObject {
                 && (previousRemaining.map { $0 > thresholdPercent } ?? true)
         }
 
+        func isSameCycle(as date: Date) -> Bool {
+            resetEpoch.map { Self.matchesReset($0, Int(date.timeIntervalSince1970)) } ?? false
+        }
+
         static func matchesReset(_ lhs: Int, _ rhs: Int) -> Bool {
             abs(TimeInterval(lhs) - TimeInterval(rhs)) <= 60
         }
     }
 
     /// 单个额度窗口的重置观察状态: 记录大于 0 的消耗, 归零时消费并发送
-    private struct QuotaWindowResetObservation {
+    private struct QuotaWindowObservation {
         /// 窗口生命周期标记, 迟到的发送失败回调据此丢弃
         let lifecycleToken = UUID()
+        var lowQuota = LowQuotaObservation()
         var hasObservedConsumption = false
     }
 }

@@ -143,13 +143,22 @@ struct StatusAccountCard: View {
 
 /// 额度和用量均无数据时的统一占位面板
 struct EmptyDataPanel: View {
+    var isLoading = false
+
     var body: some View {
-        Text("common.empty.no-data")
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.vertical, MenuMetrics.loadingVerticalPadding)
-            .padding(MenuMetrics.panelPadding)
-            .liquidGlassSurface(cornerRadius: MenuMetrics.panelCornerRadius)
+        HStack(spacing: 8) {
+            if isLoading {
+                ProgressView().controlSize(.small)
+                Text("codex-status.loading-data")
+            } else {
+                Text("common.empty.no-data")
+            }
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.vertical, MenuMetrics.loadingVerticalPadding)
+        .padding(MenuMetrics.panelPadding)
+        .liquidGlassSurface(cornerRadius: MenuMetrics.panelCornerRadius)
     }
 }
 
@@ -188,6 +197,7 @@ struct QuotaLimitsSection: View {
             HStack(spacing: 8) {
                 Text(limit.title)
                     .font(.caption.weight(.semibold))
+                    .padding(.vertical, showsPrimaryMetadata ? 2 : 0)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)

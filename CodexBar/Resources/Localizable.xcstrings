@@ -481,6 +481,22 @@
         }
       }
     },
+    "activity.recent.agent-call-interrupted" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent call interrupted"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "协作调用已中断"
+          }
+        }
+      }
+    },
     "activity.recent.agent-failed" : {
       "localizations" : {
         "en" : {
@@ -1661,6 +1677,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Codex app-server 不支持该接口"
+          }
+        }
+      }
+    },
+    "codex-status.loading-data" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading Codex quota…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在读取 Codex 额度…"
           }
         }
       }
@@ -3073,6 +3105,38 @@
         }
       }
     },
+    "log.clear.confirmation.message" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear request logs for all methods, including entries hidden by the filter. Device history and usage ledgers are unaffected."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将清空所有接口的请求日志，包括当前筛选隐藏的记录。设备历史和用量账本不受影响"
+          }
+        }
+      }
+    },
+    "log.clear.confirmation.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear request logs?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清空请求日志？"
+          }
+        }
+      }
+    },
     "log.empty.no-entries" : {
       "localizations" : {
         "en" : {
@@ -3085,6 +3149,86 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "暂无日志"
+          }
+        }
+      }
+    },
+    "log.filter.all-methods" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All methods"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部接口"
+          }
+        }
+      }
+    },
+    "log.filter.methods" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filter methods"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接口筛选"
+          }
+        }
+      }
+    },
+    "log.filter.no-matches" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No matching entries"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有符合筛选条件的记录"
+          }
+        }
+      }
+    },
+    "log.filter.other" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection and other errors"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接及其他错误"
+          }
+        }
+      }
+    },
+    "log.filter.selected-count" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld methods"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个接口"
           }
         }
       }
@@ -3638,13 +3782,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Codex is waiting for approval to continue"
+            "value" : "Codex is waiting for your response"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Codex 正在等待批准下一步操作"
+            "value" : "Codex 正在等待你的操作"
           }
         }
       }
@@ -3654,13 +3798,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Codex is waiting for approval to use %@"
+            "value" : "Codex is waiting for your response to %@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Codex 正在等待批准使用 %@"
+            "value" : "Codex 正在等待你处理 %@"
           }
         }
       }
@@ -3670,13 +3814,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A task in \"%@\" is waiting for action approval"
+            "value" : "A task in “%@” is waiting for your response"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「%@」正在等待批准操作"
+            "value" : "「%@」正在等待你的操作"
           }
         }
       }
@@ -3686,13 +3830,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A task in \"%1$@\" is waiting for approval to use %2$@"
+            "value" : "A task in “%1$@” is waiting for your response to %2$@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「%1$@」正在等待批准 %2$@ 操作"
+            "value" : "「%1$@」正在等待你处理 %2$@"
           }
         }
       }
@@ -3702,13 +3846,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Codex Is Waiting for Approval"
+            "value" : "Codex Needs Your Response"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Codex 等待批准"
+            "value" : "Codex 等待回应"
           }
         }
       }
@@ -4641,6 +4785,86 @@
         }
       }
     },
+    "settings.appearance.theme.dark" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dark"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "深色模式"
+          }
+        }
+      }
+    },
+    "settings.appearance.theme.light" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Light"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "浅色模式"
+          }
+        }
+      }
+    },
+    "settings.appearance.theme.system" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "System"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跟随系统"
+          }
+        }
+      }
+    },
+    "settings.appearance.theme.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Theme"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主题"
+          }
+        }
+      }
+    },
+    "settings.appearance.theme.title.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use the system, light, or dark appearance throughout CodexBar."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择跟随系统、浅色或深色外观，应用于菜单面板、用量中心和设置窗口"
+          }
+        }
+      }
+    },
     "settings.auto-reset.title" : {
       "localizations" : {
         "en" : {
@@ -4653,6 +4877,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动重置"
+          }
+        }
+      }
+    },
+    "settings.auto-reset.title.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enable or disable automatic use of banked resets that are about to expire"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用/禁用 自动使用临近过期的留存重置"
           }
         }
       }
@@ -4881,6 +5121,22 @@
         }
       }
     },
+    "settings.data-update.interval.title.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Controls Codex account polling only. Device logs and valuation keep their own schedule. Polling pauses during sleep."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只调整 Codex 账号额度的刷新间隔，不改变设备日志和价值统计的同步间隔；睡眠时暂停"
+          }
+        }
+      }
+    },
     "settings.general.automatic-update-checks" : {
       "localizations" : {
         "en" : {
@@ -4893,6 +5149,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "自动检查更新"
+          }
+        }
+      }
+    },
+    "settings.general.automatic-update-checks.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enable or disable automatic checks for new versions of CodexBar. You can still check for updates manually from the About page when this is disabled"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用/禁用 自动检查是否有新的 CodexBar 版本，关闭后仍可在关于页面手动检查更新"
           }
         }
       }
@@ -4941,6 +5213,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "设置开机启动失败"
+          }
+        }
+      }
+    },
+    "settings.general.launch-at-login.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enable or disable launching CodexBar automatically when you log in to macOS"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用/禁用 登录 macOS 后自动启动 CodexBar"
           }
         }
       }
@@ -5009,6 +5297,22 @@
         }
       }
     },
+    "settings.keep-alive.title.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manual mode keeps the Mac awake. Task mode follows verified local tasks; remote tasks do not control sleep."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手动模式持续防睡眠；随任务模式只跟随本机可信运行任务，远程任务不控制本机睡眠"
+          }
+        }
+      }
+    },
     "settings.main-panel.activity.requires-hook" : {
       "localizations" : {
         "en" : {
@@ -5053,6 +5357,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "动画效果"
+          }
+        }
+      }
+    },
+    "settings.main-panel.entrance-animations.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Animate quota bars when opening the panel. Task cards keep their existing subtle effects."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "控制额度条的入场动画，任务卡片沿用当前简约效果"
           }
         }
       }
@@ -5181,6 +5501,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "菜单栏额度指示"
+          }
+        }
+      }
+    },
+    "settings.menu-bar-quota.title.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show the remaining Codex 7-day quota in the menu bar."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在菜单栏显示 Codex 7d 剩余额度"
           }
         }
       }
@@ -5389,6 +5725,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "系统通知"
+          }
+        }
+      }
+    },
+    "settings.notifications.system.title.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configure quota and task notifications. Blocking approvals or questions can notify; waiting for subagents does not count as user confirmation."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置额度和任务通知；明确等待批准或回应时提醒，等待子 Agent 工作不算等待确认"
           }
         }
       }
@@ -5873,6 +6225,22 @@
         }
       }
     },
+    "usage.heatmap.daily-data" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Daily"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日数据"
+          }
+        }
+      }
+    },
     "usage.heatmap.intensity" : {
       "localizations" : {
         "en" : {
@@ -5921,6 +6289,54 @@
         }
       }
     },
+    "usage.heatmap.recorded-week-help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aggregates collected logs by UTC date. Session-days sum daily session counts; a session spanning multiple days is counted once per day."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按 UTC 日期汇总已采集日志，会话日数为每日会话数之和，同一会话跨日会计多次"
+          }
+        }
+      }
+    },
+    "usage.heatmap.session-days" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session-days"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话日数"
+          }
+        }
+      }
+    },
+    "usage.heatmap.switch-mode" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch between daily and weekly views"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点击切换日/周视图"
+          }
+        }
+      }
+    },
     "usage.heatmap.top-model" : {
       "localizations" : {
         "en" : {
@@ -5933,6 +6349,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最热模型"
+          }
+        }
+      }
+    },
+    "usage.heatmap.weekly-data" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Weekly"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "周数据"
+          }
+        }
+      }
+    },
+    "usage.heatmap.workflow-week-help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The header shows official account usage. Local Hook metrics and device logs are aggregated separately. Session-days sum daily session counts."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顶部为官方账号用量，本机 Hook 和设备日志分别汇总；会话日数为每日会话数之和"
           }
         }
       }
@@ -6429,6 +6877,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "重建数据"
+          }
+        }
+      }
+    },
+    "workflow.rebuild.title.help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rebuild legacy Hook aggregates from retained raw records without deleting Usage Center data or valuation history."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从保留的旧 Hook 原始记录重建历史聚合，不删除用量中心数据库或价值账本"
           }
         }
       }

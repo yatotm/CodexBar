@@ -91,6 +91,10 @@ struct CodexStatusMenuView: View {
 }
 
 private extension CodexStatusMenuView {
+    var isCodexLoading: Bool {
+        usageCenterViewModel.menuScope != .claude && viewModel.loadState == .loading && viewModel.snapshot == nil
+    }
+
     enum Metrics {
         static let padding: CGFloat = 12
         static let surfaceCornerRadius: CGFloat = 14
@@ -111,7 +115,7 @@ private extension CodexStatusMenuView {
             in: visibleSections,
             dataPlaceholderSection: dataPlaceholderSection
         ) {
-            EmptyDataPanel()
+            EmptyDataPanel(isLoading: isCodexLoading)
         }
     }
 
@@ -218,7 +222,7 @@ private extension CodexStatusMenuView {
             .id(usageCenterViewModel.menuScope)
             .id(menuSurfaceVisibility.presentationGeneration)
         } else if dataPlaceholderSection == .quota {
-            EmptyDataPanel()
+            EmptyDataPanel(isLoading: isCodexLoading)
         }
     }
 
@@ -239,7 +243,7 @@ private extension CodexStatusMenuView {
             UsageMenuSummaryView(dashboard: dashboard, onHoverContextChange: onUsageHeatmapHoverChange)
                 .id(menuSurfaceVisibility.presentationGeneration)
         } else if dataPlaceholderSection == .usage {
-            EmptyDataPanel()
+            EmptyDataPanel(isLoading: isCodexLoading)
         }
     }
 

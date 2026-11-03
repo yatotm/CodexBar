@@ -6,10 +6,11 @@ struct LogView: View {
     @ObservedObject var store: RequestLogStore
     @State private var preview = LogPreviewPresentation()
     @State private var scrollPosition = ScrollPosition(idType: UUID.self, edge: .top)
+    @State private var isShowingClearConfirmation = false
 
     var body: some View {
         // 每轮渲染只取一次发布快照复用
-        let entries = store.entries
+        let entries = store.filteredEntries
         VStack(spacing: 0) {
             header(entries: entries)
             Divider()
@@ -21,6 +22,16 @@ struct LogView: View {
             }
         }
         .frame(minWidth: 640, minHeight: 480)
+        .onChange(of: store.selectedMethods) { _, _ in
+            preview.cancel()
+            scrollPosition.scrollTo(edge: .top)
+        }
+        .alert("log.clear.confirmation.title", isPresented: $isShowingClearConfirmation) {
+            Button("common.action.cancel", role: .cancel) {}
+            Button("common.action.clear", role: .destructive) { store.clear() }
+        } message: {
+            Text("log.clear.confirmation.message")
+        }
         .task(id: preview.request?.id) {
             if let request = preview.request {
                 await preview.prepare(request)
@@ -30,7 +41,10 @@ struct LogView: View {
             FullLogTextView(item: item)
                 .onDisappear { preview.dismiss(item) }
         }
-        .onDisappear { preview.cancel() }
+        .onDisappear {
+            preview.cancel()
+            isShowingClearConfirmation = false
+        }
     }
 
     private func header(entries: [RequestLogEntry]) -> some View {
@@ -39,9 +53,9 @@ struct LogView: View {
                 .foregroundStyle(.tint)
 
             Text("log.window.app-server-title")
-                .font(.headline)
+                .font(.body.weight(.semibold))
 
-            Text(verbatim: "\(entries.count)")
+            Text(verbatim: store.selectedMethods.isEmpty ? "\(entries.count)" : "\(entries.count)/\(store.entries.count)")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 7)
@@ -50,16 +64,53 @@ struct LogView: View {
 
             Spacer()
 
+            methodFilter
+
             Button {
-                store.clear()
+                isShowingClearConfirmation = true
             } label: {
                 Label("common.action.clear", systemImage: "trash")
             }
             .controlSize(.small)
-            .disabled(entries.isEmpty)
+            .disabled(store.entries.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    private var methodFilter: some View {
+        Menu {
+            Button("log.filter.all-methods") { store.setSelectedMethods([]) }
+            Divider()
+            ForEach(store.availableMethods, id: \.self) { method in
+                Toggle(isOn: Binding(
+                    get: { store.selectedMethods.contains(method) },
+                    set: { selected in
+                        var methods = store.selectedMethods
+                        if selected {
+                            methods.insert(method)
+                        } else {
+                            methods.remove(method)
+                        }
+                        store.setSelectedMethods(methods)
+                    }
+                )) {
+                    Text(verbatim: method.isEmpty ? String(localized: "log.filter.other") : method)
+                }
+            }
+        } label: {
+            Label {
+                if store.selectedMethods.isEmpty {
+                    Text("log.filter.methods")
+                } else {
+                    Text(String(localized: "log.filter.selected-count", defaultValue: "\(store.selectedMethods.count) 个接口"))
+                }
+            } icon: {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+            }
+        }
+        .controlSize(.small)
+        .fixedSize()
     }
 
     private var emptyState: some View {
@@ -68,7 +119,7 @@ struct LogView: View {
                 .font(.largeTitle)
                 .foregroundStyle(.tertiary)
 
-            Text("log.empty.no-entries")
+            Text(store.selectedMethods.isEmpty ? "log.empty.no-entries" : "log.filter.no-matches")
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

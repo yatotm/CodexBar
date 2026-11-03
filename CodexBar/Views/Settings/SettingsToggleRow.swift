@@ -1,7 +1,12 @@
+import AppKit
 import SwiftUI
 
 /// 设置页行布局共享常量: 各行的图标列宽与行内间距必须一致才能对齐
 enum SettingsRowMetrics {
+    static let tabFont = Font.subheadline.weight(.semibold)
+    static let bodyFont = Font.body.weight(.regular)
+    static let captionFont = Font.caption.weight(.regular)
+    static let controlFont = Font.system(size: NSFont.smallSystemFontSize, weight: .regular)
     static let iconWidth: CGFloat = 18
     static let spacing: CGFloat = 10
     static let optionsButtonSize: CGFloat = 22
@@ -66,6 +71,7 @@ struct SettingsOptionsPicker<Option: Hashable>: View {
         .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
+        .font(SettingsRowMetrics.controlFont.monospacedDigit())
         .fixedSize(horizontal: true, vertical: false)
         .frame(minWidth: width, alignment: alignment)
     }
@@ -75,6 +81,7 @@ struct SettingsOptionsPicker<Option: Hashable>: View {
 struct SettingsToggleRow<Accessory: View>: View {
     let icon: String
     let title: LocalizedStringResource
+    let help: LocalizedStringResource?
     let isOn: Binding<Bool>
     let isEnabled: Bool
     private let accessory: Accessory
@@ -82,12 +89,14 @@ struct SettingsToggleRow<Accessory: View>: View {
     init(
         icon: String,
         title: LocalizedStringResource,
+        help: LocalizedStringResource? = nil,
         isOn: Binding<Bool>,
         isEnabled: Bool = true,
         @ViewBuilder accessory: () -> Accessory
     ) {
         self.icon = icon
         self.title = title
+        self.help = help
         self.isOn = isOn
         self.isEnabled = isEnabled
         self.accessory = accessory()
@@ -99,7 +108,11 @@ struct SettingsToggleRow<Accessory: View>: View {
                 .frame(width: SettingsRowMetrics.iconWidth)
                 .foregroundStyle(.tint)
 
-            Text(title)
+            if let help {
+                SettingsHelpLabel(title: title, help: help)
+            } else {
+                Text(title)
+            }
 
             Spacer()
 
@@ -118,10 +131,11 @@ extension SettingsToggleRow where Accessory == EmptyView {
     init(
         icon: String,
         title: LocalizedStringResource,
+        help: LocalizedStringResource? = nil,
         isOn: Binding<Bool>,
         isEnabled: Bool = true
     ) {
-        self.init(icon: icon, title: title, isOn: isOn, isEnabled: isEnabled) {
+        self.init(icon: icon, title: title, help: help, isOn: isOn, isEnabled: isEnabled) {
             EmptyView()
         }
     }

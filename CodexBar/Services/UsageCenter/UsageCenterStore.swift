@@ -356,14 +356,18 @@ actor UsageCenterStore {
         """, values: [])
         defer { sqlite3_finalize(models) }
         var topModels: [String: String] = [:]
+        var modelTokens: [String: [String: Int64]] = [:]
         while try nextRow(models) {
             let day = string(models, 0)
+            let model = string(models, 1)
+            modelTokens[day, default: [:]][model] = sqlite3_column_int64(models, 2)
             if topModels[day] == nil {
-                topModels[day] = string(models, 1)
+                topModels[day] = model
             }
         }
         for index in result.days.indices {
             result.days[index].topModel = topModels[result.days[index].day]
+            result.days[index].modelTokens = modelTokens[result.days[index].day] ?? [:]
         }
         let activity = try statement(cachedSelection + """
          SELECT id,machine,provider,project,model,state,observed FROM chosen

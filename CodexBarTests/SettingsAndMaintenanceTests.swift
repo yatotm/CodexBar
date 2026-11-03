@@ -1,8 +1,28 @@
+import AppKit
 import Combine
 import Foundation
 import Testing
 
 struct SettingsAndMaintenanceTests {
+    @Test func appearanceDefaultsToSystemAndRestoresOnlyKnownValues() throws {
+        let preferences = try TestPreferences()
+        defer { preferences.remove() }
+        var applied: [NSAppearance.Name?] = []
+        let settings = AppearanceSettings(defaults: preferences.defaults, applyAppearance: { applied.append($0?.name) })
+        #expect(settings.theme == .system && applied.isEmpty)
+        settings.setTheme(.dark)
+        settings.setTheme(.dark)
+        #expect(applied == [.darkAqua])
+        #expect(AppearanceSettings(defaults: preferences.defaults).theme == .dark)
+        settings.setTheme(.light)
+        #expect(applied[1] == NSAppearance.Name.aqua)
+        settings.setTheme(.system)
+        #expect(applied.count == 3 && applied[2] == nil)
+        preferences.defaults.set("invalid", forKey: "Appearance.theme")
+        settings.refresh()
+        #expect(settings.theme == .system && applied.count == 3)
+    }
+
     @Test func quotaRefreshIntervalDefaultsPersistsAndRejectsInvalidValues() throws {
         let preferences = try TestPreferences()
         defer { preferences.remove() }
