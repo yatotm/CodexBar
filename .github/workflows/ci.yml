@@ -19,10 +19,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install missing lint tools
+      - name: Install pinned lint tools
         run: |
-          command -v swiftformat >/dev/null || brew install swiftformat
-          command -v swiftlint >/dev/null || brew install swiftlint
+          python3 - <<'PY'
+          import hashlib
+          import io
+          import os
+          from pathlib import Path
+          import urllib.request
+          import zipfile
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "codexbar-lint"
+          packages = [
+              ("swiftformat", "https://github.com/nicklockwood/SwiftFormat/releases/download/0.63.0/swiftformat.zip", "28c7802e11fa5ae113d903066439c6bb1be20a8ac1ad9709c42616a7e273fb0f"),
+              ("swiftlint", "https://github.com/realm/SwiftLint/releases/download/0.65.1/portable_swiftlint.zip", "c1e429b0599cf1b516f369a2d9ec04eaf0e436f3c12b637df8851fa52ff694d0"),
+          ]
+          for name, url, digest in packages:
+              with urllib.request.urlopen(url, timeout=60) as response:
+                  data = response.read()
+              if hashlib.sha256(data).hexdigest() != digest:
+                  raise SystemExit(name + " checksum mismatch")
+              directory = root / name
+              directory.mkdir(parents=True, exist_ok=True)
+              with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                  archive.extractall(directory)
+              (directory / name).chmod(0o755)
+              with open(os.environ["GITHUB_PATH"], "a") as path_file:
+                  path_file.write(str(directory) + "\n")
+          PY
       - name: Check style
         run: |
           swiftformat --lint .

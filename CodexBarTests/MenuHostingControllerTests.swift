@@ -22,13 +22,13 @@ struct MenuHostingControllerTests {
             model.rows = rows
             try await settle(controller)
             #expect(abs(model.naturalSize.height - height) < 0.001)
-            #expect(abs(try #require(model.topFrame).minY - 12) < 0.001)
-            #expect(abs(try #require(model.bottomFrame).maxY - (height - 12)) < 0.001)
+            #expect(try abs(#require(model.topFrame).minY - 12) < 0.001)
+            #expect(try abs(#require(model.bottomFrame).maxY - (height - 12)) < 0.001)
 
             controller.resizeContent(to: model.naturalSize)
             window.setContentSize(controller.contentSize)
             try await settle(controller)
-            #expect(abs(try #require(model.topFrame).minY - 12) < 0.001)
+            #expect(try abs(#require(model.topFrame).minY - 12) < 0.001)
             #expect(try #require(model.bottomFrame).maxY <= controller.contentSize.height)
         }
     }
