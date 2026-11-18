@@ -1,9 +1,78 @@
 {
   "schema": 1,
-  "asOf": "2026-09-30",
+  "asOf": "2026-11-18",
   "apiSource": "https://developers.openai.com/api/docs/pricing",
   "creditSource": "https://learn.chatgpt.com/docs/pricing",
   "rates": [
+    {
+      "model": "gpt-6.2-astra",
+      "cacheWrite12h": 20,
+      "input": 8,
+      "cachedInput": 0.4,
+      "cacheWrite": 10,
+      "output": 40,
+      "longThreshold": 272000,
+      "creditInput": 200,
+      "creditCachedInput": 10,
+      "creditOutput": 1000,
+      "includedSpeed": {
+        "fast": 2,
+        "ultrafast": 6
+      },
+      "apiSpeed": {
+        "fast": 2,
+        "ultrafast": 6
+      },
+      "apiUltrafastPromo": {
+        "factor": 3,
+        "endExclusive": 1803888000
+      }
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "cacheWrite12h": 5,
+      "ultrafastOnPro20x": true,
+      "input": 2,
+      "cachedInput": 0.1,
+      "cacheWrite": 2.5,
+      "output": 10,
+      "longThreshold": 272000,
+      "creditInput": 50,
+      "creditCachedInput": 2.5,
+      "creditOutput": 250,
+      "includedSpeed": {
+        "fast": 2,
+        "ultrafast": 6
+      },
+      "apiSpeed": {
+        "fast": 2,
+        "ultrafast": 6
+      },
+      "apiUltrafastPromo": {
+        "factor": 3,
+        "endExclusive": 1803888000
+      }
+    },
+    {
+      "model": "gpt-6.1-terra",
+      "cacheWrite12h": 2.5,
+      "input": 1,
+      "cachedInput": 0.05,
+      "cacheWrite": 1.25,
+      "output": 5,
+      "longThreshold": 272000,
+      "creditInput": 25,
+      "creditCachedInput": 1.25,
+      "creditOutput": 125,
+      "includedSpeed": {
+        "fast": 2.5,
+        "flex": 0.5
+      },
+      "apiSpeed": {
+        "fast": 2,
+        "flex": 0.5
+      }
+    },
     {
       "model": "gpt-6-astra",
       "input": 10,
@@ -13,7 +82,18 @@
       "longThreshold": 272000,
       "creditInput": 250,
       "creditCachedInput": 25,
-      "creditOutput": 1250
+      "creditOutput": 1250,
+      "includedSpeed": {
+        "flex": 0.5,
+        "fast": 2.5,
+        "ultrafast": 8
+      },
+      "ultrafastFrom": 1790640000,
+      "apiSpeed": {
+        "fast": 2,
+        "ultrafast": 6,
+        "flex": 0.5
+      }
     },
     {
       "model": "gpt-6.1-sol",
@@ -24,7 +104,18 @@
       "longThreshold": 272000,
       "creditInput": 50,
       "creditCachedInput": 2.5,
-      "creditOutput": 250
+      "creditOutput": 250,
+      "includedSpeed": {
+        "flex": 0.5,
+        "fast": 2.5,
+        "ultrafast": 8
+      },
+      "ultrafastFrom": 1791417600,
+      "apiSpeed": {
+        "fast": 2,
+        "ultrafast": 6,
+        "flex": 0.5
+      }
     },
     {
       "model": "gpt-6-sol",
@@ -35,7 +126,11 @@
       "longThreshold": 272000,
       "creditInput": 50,
       "creditCachedInput": 5,
-      "creditOutput": 250
+      "creditOutput": 250,
+      "includedSpeed": {
+        "flex": 0.5,
+        "fast": 2.5
+      }
     },
     {
       "model": "gpt-6-luna",
@@ -46,7 +141,11 @@
       "longThreshold": 272000,
       "creditInput": 2.5,
       "creditCachedInput": 0.25,
-      "creditOutput": 12.5
+      "creditOutput": 12.5,
+      "includedSpeed": {
+        "flex": 0.5,
+        "fast": 2.5
+      }
     },
     {
       "model": "gpt-5.6-sol",
@@ -57,7 +156,11 @@
       "longThreshold": 272000,
       "creditInput": 100,
       "creditCachedInput": 10,
-      "creditOutput": 500
+      "creditOutput": 500,
+      "includedSpeed": {
+        "flex": 0.5,
+        "fast": 2.5
+      }
     },
     {
       "model": "gpt-5.6-terra",
@@ -68,7 +171,11 @@
       "longThreshold": 272000,
       "creditInput": 50,
       "creditCachedInput": 5,
-      "creditOutput": 300
+      "creditOutput": 300,
+      "includedSpeed": {
+        "flex": 0.5,
+        "fast": 2.5
+      }
     },
     {
       "model": "gpt-5.6-luna",
@@ -79,7 +186,11 @@
       "longThreshold": 272000,
       "creditInput": 5,
       "creditCachedInput": 0.5,
-      "creditOutput": 30
+      "creditOutput": 30,
+      "includedSpeed": {
+        "flex": 0.5,
+        "fast": 2.5
+      }
     },
     {
       "model": "gpt-5.5",
@@ -90,7 +201,11 @@
       "longThreshold": 272000,
       "creditInput": 125,
       "creditCachedInput": 12.5,
-      "creditOutput": 750
+      "creditOutput": 750,
+      "includedSpeed": {
+        "flex": 0.5,
+        "fast": 2.5
+      }
     },
     {
       "model": "gpt-5.4",
@@ -101,7 +216,11 @@
       "longThreshold": 272000,
       "creditInput": 62.5,
       "creditCachedInput": 6.25,
-      "creditOutput": 375
+      "creditOutput": 375,
+      "includedSpeed": {
+        "flex": 0.5,
+        "fast": 2
+      }
     },
     {
       "model": "gpt-5.4-mini",
@@ -112,7 +231,11 @@
       "longThreshold": null,
       "creditInput": 18.75,
       "creditCachedInput": 1.875,
-      "creditOutput": 113
+      "creditOutput": 113,
+      "includedSpeed": {
+        "flex": 0.5,
+        "fast": 2
+      }
     },
     {
       "model": "gpt-5.3-codex",
@@ -123,7 +246,10 @@
       "longThreshold": null,
       "creditInput": null,
       "creditCachedInput": null,
-      "creditOutput": null
+      "creditOutput": null,
+      "includedSpeed": {
+        "flex": 0.5
+      }
     },
     {
       "model": "gpt-5.2",
@@ -134,7 +260,10 @@
       "longThreshold": null,
       "creditInput": null,
       "creditCachedInput": null,
-      "creditOutput": null
+      "creditOutput": null,
+      "includedSpeed": {
+        "flex": 0.5
+      }
     }
   ]
 }

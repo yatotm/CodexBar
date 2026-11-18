@@ -68,16 +68,56 @@ nonisolated struct UsagePlanHistory: Codable {
 }
 
 nonisolated struct UsagePriceBook: Decodable {
+    struct APIPromotion: Decodable {
+        let factor: Double
+        let endExclusive: TimeInterval
+    }
+
     struct Rate: Decodable {
         let model: String
         let input: Double
         let cachedInput: Double
         let cacheWrite: Double?
+        let cacheWrite12h: Double?
         let output: Double
         let longThreshold: Int64?
         let creditInput: Double?
         let creditCachedInput: Double?
         let creditOutput: Double?
+        let includedSpeed: [String: Double]?
+        let ultrafastFrom: TimeInterval?
+        let ultrafastOnPro20x: Bool?
+        let apiSpeed: [String: Double]?
+        let apiUltrafastPromo: APIPromotion?
+
+        func apiMultiplier(for speed: String, start: Date, end: Date) -> ClosedRange<Double>? {
+            let tier = speed.lowercased()
+            if ["standard", "default", ""].contains(tier) {
+                return 1 ... 1
+            }
+            guard let factor = apiSpeed?[tier == "priority" ? "fast" : tier] else { return nil }
+            guard tier == "ultrafast", let promo = apiUltrafastPromo,
+                  start.timeIntervalSince1970 < promo.endExclusive else { return factor ... factor }
+            return end.timeIntervalSince1970 <= promo.endExclusive ? promo.factor ... promo.factor : promo.factor ... factor
+        }
+
+        func unrecordedSpeedRange(at timestamp: TimeInterval, plan: UsageQuotaReference? = nil) -> ClosedRange<Double> {
+            // 只用当时已知的订阅档位收窄未记录速度的范围
+            let fast = subscriptionMultiplier(for: "fast") ?? 1
+            if plan == .pro5x || (plan == .pro20x && ultrafastOnPro20x != true) {
+                return 1 ... fast
+            }
+            let ultra = timestamp >= (ultrafastFrom ?? 0) ? subscriptionMultiplier(for: "ultrafast") : nil
+            return 1 ... max(fast, ultra ?? 1)
+        }
+
+        func subscriptionMultiplier(for speed: String) -> Double? {
+            switch speed.lowercased() {
+            case "", "standard", "default": 1
+            case "priority": includedSpeed?["fast"]
+            default: includedSpeed?[speed.lowercased()]
+            }
+        }
     }
 
     let schema: Int

@@ -3,20 +3,7 @@ import Foundation
 /// 与 Quota Compass 相同的混合单价反推, 各模型假设采用当天相同的输入输出比例
 nonisolated enum UsageModelAllocation {
     static func multiplier(model: AnalyticsModel, prices: UsagePriceBook) -> Double? {
-        guard let rate = prices.rate(for: model.model) else { return nil }
-        switch model.speed.lowercased() {
-        case "standard", "": return 1
-        case "flex": return 0.5
-        case "fast":
-            if rate.model.hasPrefix("gpt-5.4") {
-                return 2
-            }
-            if ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"].contains(rate.model) || rate.model.hasPrefix("gpt-5.6") || rate.model == "gpt-5.5" {
-                return 2.5
-            }
-            return nil
-        default: return nil
-        }
+        prices.rate(for: model.model)?.subscriptionMultiplier(for: model.speed)
     }
 
     static func estimate(day: AnalyticsDay, prices: UsagePriceBook) -> [UsageModelEstimate]? {

@@ -102,7 +102,7 @@ nonisolated enum UsageAnalyticsValuation {
 
     static func periods(
         snapshot: UsageAnalyticsSnapshot, prices: UsagePriceBook, now: Date = Date(), sourceWindows: [UsageObservedWindow] = [],
-        tokenSources: [UsageTokenSource] = [], expectedTokenSources: Int = 0
+        tokenSources: [UsageTokenSource] = [], expectedTokenSources: Int = 0, plans: [UsagePlanObservation] = []
     ) -> [UsageAnalyticsPeriod] {
         let cutoff = min(now.timeIntervalSince1970, snapshot.fetchedAt.timeIntervalSince1970)
         let contexts = periodWindows(snapshot.windows + sourceWindows, acrossSources: !sourceWindows.isEmpty)
@@ -180,7 +180,7 @@ nonisolated enum UsageAnalyticsValuation {
             )
             period.logEstimate = UsageLogValuation.estimate(
                 context: context, officialDays: officialDays, needsFallback: hasUnpricedData || (dollars ?? 0) <= 0,
-                prices: prices, sources: tokenSources, expectedSources: expectedTokenSources, now: now
+                prices: prices, sources: tokenSources, expectedSources: expectedTokenSources, now: now, plans: plans
             )
             return period
         }.reversed()

@@ -57,7 +57,7 @@ struct UsageAnalyticsView: View {
             if model.periods.count > visibleCount {
                 Button("更多周期") { visibleCount += 8 }.buttonStyle(.plain).font(.caption)
             }
-            Text("官方明细按 Quota Compass 公式换算, 缺失时使用设备日志。Fast 按订阅额度倍率折合, 不代表实际 API 账单; 缓存写入与长上下文未单列。")
+            Text("订阅价值按标准 API 单价和订阅内速度倍率估算。官方明细缺失时使用设备日志。缓存写入和长上下文附加费未单列。")
                 .font(.caption2).foregroundStyle(.secondary)
             if let snapshot = model.snapshot {
                 Text("账本读取 \(snapshot.fetchedAt.formatted(date: .abbreviated, time: .shortened)) · 价格快照 \(model.prices?.asOf ?? "--")")
@@ -106,7 +106,7 @@ struct UsageAnalyticsView: View {
             Text("日志对齐至 \(estimate.valuedThrough.formatted(date: .abbreviated, time: .shortened)), 对应已用 \(estimate.usedPercent.formatted(.number.precision(.fractionLength(1))))% 周限")
                 .foregroundStyle(.secondary)
             if estimate.unknownSpeedCount > 0 {
-                Text("\(estimate.unknownSpeedCount) 条记录缺少速度设置, 对这部分按标准至 Fast 显示范围")
+                Text("\(estimate.unknownSpeedCount) 条记录缺少速度设置，金额按标准至该模型当时可用的最高加速档估算")
                     .foregroundStyle(.secondary)
             }
             if estimate.incomplete {
@@ -127,6 +127,7 @@ struct UsageAnalyticsView: View {
                                 value("输出", tokens(row.tokens.output))
                                 value("缓存读取", tokens(row.tokens.cached))
                             }
+                            apiUnitPrices(for: row.model, speed: row.speed, start: period.start, end: estimate.valuedThrough)
                         }
                     }
                 }
@@ -134,6 +135,28 @@ struct UsageAnalyticsView: View {
             Text("按已记录的模型和速度比例外推。纯云端任务可能未包含; 官方明细补齐后替换本估算, 不重复累计。")
                 .foregroundStyle(.secondary)
         }.font(.caption2)
+    }
+
+    @ViewBuilder
+    private func apiUnitPrices(for name: String, speed: String?, start: Date, end: Date) -> some View {
+        if let rate = model.prices?.rate(for: name) {
+            let tier = speed?.lowercased() ?? "standard"
+            let multiplier = rate.apiMultiplier(for: tier, start: start, end: end)
+            let label = multiplier == nil || ["standard", "default", ""].contains(tier) ? "Standard" : tier == "priority" ? "Fast" : tier.capitalized
+            let factors = multiplier ?? 1 ... 1
+            Text("短上下文 API \(label) / 百万 Token · 输入 \(unitPrice(rate.input, factors)) · 缓存读取 \(unitPrice(rate.cachedInput, factors)) · 输出 \(unitPrice(rate.output, factors))")
+                .foregroundStyle(.secondary)
+            if let short = rate.cacheWrite, let extended = rate.cacheWrite12h {
+                Text("缓存写入 / 百万 Token · 30 分钟 \(unitPrice(short, factors)) · 12 小时 \(unitPrice(extended, factors))")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func unitPrice(_ amount: Double, _ range: ClosedRange<Double>) -> String {
+        let format = FloatingPointFormatStyle<Double>.Currency(code: "USD").precision(.fractionLength(0 ... 4))
+        let lower = (range.lowerBound * amount).formatted(format)
+        return range.lowerBound == range.upperBound ? lower : lower + "–" + (range.upperBound * amount).formatted(format)
     }
 
     private func speedTitle(_ speed: String?) -> String {
@@ -193,6 +216,7 @@ struct UsageAnalyticsView: View {
                                 value("缓存读取", tokens(row.tokens.cached))
                                 value("估算 credits", row.credits.map { "≈ " + $0.formatted(.number.precision(.fractionLength(1))) } ?? "--")
                             }
+                            apiUnitPrices(for: row.model, speed: row.speed, start: period.start, end: period.valuedThrough)
                         }
                     }
                     Text("同一天各模型采用相同输入输出比例, 通过额度权重 ÷ 混合单价反推占比。模型 Token 与 credits 均为估算。")

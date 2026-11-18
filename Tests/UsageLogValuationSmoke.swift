@@ -52,10 +52,15 @@ nonisolated enum UsageLogValuationSmoke {
         let logs = [record("fast"), record("standard", speed: "standard"), record("unknown", speed: nil)]
         let result = periods(snapshot(), sources: [source(logs)])[0].logEstimate!
         precondition(result.tokens == sample + sample + sample)
-        precondition(abs(result.dollars.lowerBound - 76.5) < 0.000001 && abs(result.dollars.upperBound - 102) < 0.000001)
-        precondition(result.projected == 153 ... 204 && result.usedPercent == 50)
+        precondition(abs(result.dollars.lowerBound - 76.5) < 0.000001 && abs(result.dollars.upperBound - 195.5) < 0.000001)
+        precondition(result.projected == 153 ... 391 && result.usedPercent == 50)
         precondition(result.unknownSpeedCount == 1 && !result.incomplete)
-        precondition(result.credits == 1912.5 ... 2550, "缺失速度只对对应记录给出范围")
+        precondition(result.credits == 1912.5 ... 4887.5, "缺失速度只对对应记录给出范围")
+        let accelerated = periods(snapshot(), sources: [source([
+            record("astra", speed: "priority", model: "gpt-6.2-astra"), record("sol", speed: "ultrafast", model: "gpt-6.2-sol")
+        ])])[0].logEstimate!
+        precondition(abs(accelerated.dollars.lowerBound - 44.8) < 0.000001 && accelerated.dollars.upperBound == accelerated.dollars.lowerBound)
+        precondition(accelerated.tokens == sample + sample && accelerated.unknownModels.isEmpty)
         let duplicate = periods(snapshot(), sources: [source(logs), source(logs, name: "VPS")], expected: 2)[0].logEstimate!
         precondition(duplicate.dollars == result.dollars, "跨设备复制日志不能重复累加")
         let enriched = periods(snapshot(), sources: [source([record("same", speed: nil)]), source([record("same")])], expected: 2)[0].logEstimate!

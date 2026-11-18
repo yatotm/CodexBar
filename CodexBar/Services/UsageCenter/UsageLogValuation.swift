@@ -3,7 +3,7 @@ import Foundation
 nonisolated enum UsageLogValuation {
     static func estimate(
         context: UsageAnalyticsValuation.PeriodWindow, officialDays: [Int: AnalyticsTokens], needsFallback: Bool,
-        prices: UsagePriceBook, sources: [UsageTokenSource], expectedSources: Int, now: Date
+        prices: UsagePriceBook, sources: [UsageTokenSource], expectedSources: Int, now: Date, plans: [UsagePlanObservation] = []
     ) -> UsageLogEstimate? {
         let available = sources.filter { $0.evidence.ready && $0.evidence.scannedAt > context.start }
         guard let scannedAt = available.map(\.evidence.scannedAt).max() else { return nil }
@@ -34,7 +34,8 @@ nonisolated enum UsageLogValuation {
             return tokens.input > official.input || tokens.cached > official.cached || tokens.output > official.output
         }
         guard !records.isEmpty, needsFallback || missing else { return nil }
-        let aggregate = aggregate(records.values, prices: prices)
+        let windowPlans = plans.filter { abs($0.resetsAt - context.window.resetsAt) <= 2 && $0.at >= context.start }.sorted { $0.at < $1.at }
+        let aggregate = aggregate(records.values, prices: prices, plans: windowPlans)
         guard !aggregate.rows.isEmpty else { return nil }
         let rows = aggregate.rows
         let dollars = rows.reduce(0.0 ... 0.0) { sum($0, $1.dollars) }
@@ -66,7 +67,7 @@ nonisolated enum UsageLogValuation {
     }
 
     private static func aggregate(
-        _ records: Dictionary<String, UsageTokenRecord>.Values, prices: UsagePriceBook
+        _ records: Dictionary<String, UsageTokenRecord>.Values, prices: UsagePriceBook, plans: [UsagePlanObservation]
     ) -> ModelTotals {
         var models: [String: UsageLogModelEstimate] = [:]
         var unknown = Set<String>()
@@ -84,8 +85,7 @@ nonisolated enum UsageLogValuation {
                 }
                 factors = value ... value
             } else {
-                let fast = UsageModelAllocation.multiplier(model: .init(model: record.model, speed: "fast", weight: 1), prices: prices) ?? 1
-                factors = 1 ... fast
+                factors = rate.unrecordedSpeedRange(at: record.at, plan: plans.last(where: { $0.at <= record.at })?.reference)
                 unknownSpeedCount += 1
             }
             let tokens = record.tokens

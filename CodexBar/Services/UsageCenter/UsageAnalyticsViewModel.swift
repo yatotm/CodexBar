@@ -212,6 +212,7 @@ final class UsageAnalyticsViewModel: ObservableObject {
         let sourceWindows = history.accountKey == snapshot.accountKey ? history.windows : []
         let tokenSources = history.accountKey == snapshot.accountKey ? history.tokenSources : []
         let expectedSources = history.selectedSourceCount
+        let plans = planHistory.observations + (history.accountKey == snapshot.accountKey ? history.plans : [])
         calculation = Task { [weak self] in
             let work = Task.detached(priority: .utility) {
                 UsageAnalyticsValuation.periods(
@@ -219,7 +220,7 @@ final class UsageAnalyticsViewModel: ObservableObject {
                     prices: prices,
                     sourceWindows: sourceWindows,
                     tokenSources: tokenSources,
-                    expectedTokenSources: expectedSources
+                    expectedTokenSources: expectedSources, plans: plans
                 )
             }
             let value = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }

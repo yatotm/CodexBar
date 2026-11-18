@@ -6,13 +6,14 @@ struct UsageAnalyticsSmoke {
         let decoder = JSONDecoder()
         let currentPrices = try decoder.decode(UsagePriceBook.self, from: Data(contentsOf: URL(fileURLWithPath: "CodexBar/Resources/UsagePrices.json")))
         UsageLogValuationSmoke.run(prices: currentPrices)
+        verifyCurrentCodexPricing(currentPrices)
         let sol61 = currentPrices.rate(for: "gpt-6.1-sol")!
         precondition(sol61.input == 2 && sol61.cachedInput == 0.1 && sol61.cacheWrite == 2.5 && sol61.output == 10)
         precondition(sol61.creditInput == 50 && sol61.creditCachedInput == 2.5 && sol61.creditOutput == 250)
         precondition(currentPrices.rate(for: "gpt-6-sol")?.cachedInput == 0.2, "新 Sol 的缓存降价不能改写旧 Sol 历史")
         precondition(currentPrices.rate(for: "gpt-6.1-sol-2026-09-29")?.model == "gpt-6.1-sol")
         precondition(currentPrices.rate(for: "gpt-6.1-sol-preview") == nil)
-        precondition(currentPrices.rate(for: "gpt-6.2-sol") == nil, "新代际不能套用旧型号价格")
+        precondition(currentPrices.rate(for: "gpt-6.3-sol") == nil, "新代际不能套用旧型号价格")
         let sol61Day = AnalyticsDay(
             date: "2026-09-30", tokens: .init(input: 3000000, cached: 3000000, output: 3000000),
             models: [
@@ -25,7 +26,7 @@ struct UsageAnalyticsSmoke {
         precondition(sol61Estimates.allSatisfy { $0.tokens == .init(input: 1000000, cached: 1000000, output: 1000000) }, "混合新旧模型及速度模式时各类 Token 必须守恒")
         precondition(abs(sol61Estimates[1].dollars - 12.1) < 0.000001 && sol61Estimates[1].credits == 302.5)
         precondition(abs(sol61Estimates[2].dollars - 30.25) < 0.000001 && sol61Estimates[2].credits == 756.25, "Fast 延续订阅额度的估算口径")
-        precondition(UsageModelAllocation.multiplier(model: .init(model: "gpt-6.1-sol", speed: "ultrafast", weight: 1), prices: currentPrices) == nil, "不支持的速度模式不能默认为标准价")
+        precondition(UsageModelAllocation.multiplier(model: .init(model: "gpt-6.1-terra", speed: "ultrafast", weight: 1), prices: currentPrices) == nil, "不支持的速度模式不能默认为标准价")
         let newModels = AnalyticsDay(
             date: "2026-09-23", tokens: .init(input: 3000000, cached: 3000000, output: 3000000),
             models: [
@@ -282,5 +283,43 @@ struct UsageAnalyticsSmoke {
         )
         precondition(evidence.isValid && !evidence.matches(UsageAnalyticsIdentity.hash("codex-account", "two")), "不得把不同账号的来源合并")
         print("Analytics parsing, account isolation, missing data, early reset and valuation tests passed")
+    }
+
+    private static func verifyCurrentCodexPricing(_ prices: UsagePriceBook) {
+        let tokens = AnalyticsTokens(input: 1000000, cached: 1000000, output: 1000000)
+        for (name, input, cached, write, output, factor) in [
+            ("gpt-6.2-astra", 8.0, 0.4, 10.0, 40.0, 2.0),
+            ("gpt-6.2-sol", 2.0, 0.1, 2.5, 10.0, 2.0),
+            ("gpt-6.1-terra", 1.0, 0.05, 1.25, 5.0, 2.5)
+        ] {
+            let rate = prices.rate(for: name + "-2026-11-17")!
+            precondition(rate.model == name && rate.input == input && rate.cachedInput == cached && rate.cacheWrite == write && rate.output == output)
+            precondition(rate.cacheWrite12h == write * 2)
+            precondition(prices.rate(for: name + "-preview") == nil && rate.subscriptionMultiplier(for: "priority") == factor)
+            let modes = name == "gpt-6.1-terra" ? [("standard", 1.0), ("priority", factor)] : [("default", 1.0), ("fast", factor), ("ultrafast", 6.0)]
+            let total = modes.reduce(AnalyticsTokens.zero) { sum, _ in sum + tokens }
+            let day = AnalyticsDay(date: "2026-11-17", tokens: total, models: modes.map {
+                AnalyticsModel(model: name, speed: $0.0, weight: $0.1 * (input + cached + output) * 25)
+            })
+            let rows = UsageModelAllocation.estimate(day: day, prices: prices)!
+            precondition(rows.map(\.tokens) == modes.map { _ in tokens })
+            for (row, mode) in zip(rows, modes) {
+                precondition(abs(row.dollars - (input + cached + output) * mode.1) < 0.000001)
+                precondition(abs(row.credits! - row.dollars * 25) < 0.000001)
+            }
+            precondition(rate.subscriptionMultiplier(for: "unrecognized") == nil)
+            precondition(rate.unrecordedSpeedRange(at: 1794960000) == 1 ... (modes.last!.1))
+        }
+        let change = ISO8601DateFormatter().date(from: "2027-03-01T08:00:00Z")!
+        let astra = prices.rate(for: "gpt-6.2-astra")!
+        precondition(astra.unrecordedSpeedRange(at: change.timeIntervalSince1970, plan: .pro20x) == 1 ... 2)
+        let sol = prices.rate(for: "gpt-6.2-sol")!
+        precondition(sol.unrecordedSpeedRange(at: change.timeIntervalSince1970, plan: .pro20x) == 1 ... 6)
+        precondition(sol.unrecordedSpeedRange(at: change.timeIntervalSince1970, plan: .pro5x) == 1 ... 2)
+        precondition(astra.apiMultiplier(for: "ultrafast", start: change.addingTimeInterval(-86400), end: change) == 3 ... 3)
+        precondition(astra.apiMultiplier(for: "ultrafast", start: change.addingTimeInterval(-1), end: change.addingTimeInterval(1)) == 3 ... 6)
+        precondition(astra.apiMultiplier(for: "ultrafast", start: change, end: change.addingTimeInterval(1)) == 6 ... 6)
+        precondition(astra.subscriptionMultiplier(for: "ultrafast") == 6 && astra.subscriptionMultiplier(for: "flex") == nil)
+        precondition(prices.rate(for: "gpt-6.1-sol")!.unrecordedSpeedRange(at: 1780000000) == 1 ... 2.5)
     }
 }

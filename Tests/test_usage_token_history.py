@@ -57,12 +57,12 @@ class TokenHistoryTests(unittest.TestCase):
         self.assertNotIn("test-account", json.dumps(self.ledger.export(self.key)))
 
     def test_fast_switch_applies_to_requests_after_setting(self):
-        for index, speed in enumerate(("priority", "default", None)):
+        for index, speed in enumerate(("priority", "ultrafast", "default", None)):
             self.feed("event_msg", {"type": "thread_settings_applied", "thread_settings": {
-                "model": "gpt-6-astra", "model_provider_id": "openai", "service_tier": speed}})
+                "model": "gpt-6.2-sol", "model_provider_id": "openai", "service_tier": speed}})
             self.ledger.observe(self.usage(str(index), index), self.state)
             self.receipt()
-        self.assertEqual([row["speed"] for row in sorted(self.records(), key=lambda r: r["at"])], ["fast", "standard", "standard"])
+        self.assertEqual([row["speed"] for row in sorted(self.records(), key=lambda r: r["at"])], ["fast", "ultrafast", "standard", "standard"])
 
     def test_explicit_api_and_arbitrary_provider_are_excluded(self):
         for index, context in enumerate(({"auth_mode": "apiKey"}, {"model_provider": "any-api-provider"})):
