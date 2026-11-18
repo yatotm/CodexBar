@@ -6278,13 +6278,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "v%@ downloaded, ready to install and relaunch"
+            "value" : "%@ downloaded, ready to install and relaunch"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "v%@ 已下载，可安装并重启"
+            "value" : "%@ 已下载，可安装并重启"
           }
         }
       }
@@ -6310,13 +6310,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Version v%@ is available"
+            "value" : "Version %@ is available"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "发现新版本: v%@"
+            "value" : "发现新版本: %@"
           }
         }
       }

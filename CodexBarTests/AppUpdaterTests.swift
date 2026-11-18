@@ -55,6 +55,19 @@ struct AppUpdaterTests {
         #expect(Bundle.displayVersionLabel(version: nil, build: "11") == "--")
     }
 
+    @Test(arguments: ["zh-Hans", "en"])
+    func localizedUpdateMessagesUseSingleVersionPrefix(language: String) throws {
+        let url = try #require(Bundle(for: AppUpdater.self).url(forResource: language, withExtension: "lproj"))
+        let strings = try #require(Bundle(url: url))
+        let label = Bundle.displayVersionLabel(version: "1.2.3", build: "10")
+        for key in ["updater.status.update-available", "updater.status.ready-to-install.settings"] {
+            let format = strings.localizedString(forKey: key, value: nil, table: nil)
+            let message = String(format: format, label)
+            #expect(message.contains(label))
+            #expect(!message.contains("v" + label))
+        }
+    }
+
     private func updateItem() throws -> SUAppcastItem {
         try #require(SUAppcastItem(dictionary: [
             "sparkle:version": "10",
