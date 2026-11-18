@@ -53,14 +53,12 @@ enum SettingsOptionsPanelMetrics {
 }
 
 /// 子选项面板共用的下拉选择器
-/// 只有宽度和对齐各自定义, 其余样式必须同源, 否则各面板看起来就不是同一套控件
+/// 按选项内容使用固有宽度
 struct SettingsOptionsPicker<Option: Hashable>: View {
     let title: LocalizedStringResource
     @Binding var selection: Option
     let options: [Option]
     let label: (Option) -> String
-    let width: CGFloat
-    var alignment: Alignment = .center
 
     var body: some View {
         Picker(title, selection: $selection) {
@@ -73,7 +71,6 @@ struct SettingsOptionsPicker<Option: Hashable>: View {
         .controlSize(.small)
         .font(SettingsRowMetrics.controlFont.monospacedDigit())
         .fixedSize(horizontal: true, vertical: false)
-        .frame(minWidth: width, alignment: alignment)
     }
 }
 

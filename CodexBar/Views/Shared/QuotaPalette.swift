@@ -4,11 +4,16 @@ import SwiftUI
 /// 额度颜色按剩余百分比分档, 菜单栏图标与面板额度条共用同一套阈值和色值
 nonisolated enum QuotaPalette {
     static let tiers: [(lowerBound: Int, hex: Int)] = [
-        (0, 0xEE3F3F),
-        (20, 0xFF7A59),
-        (40, 0xF5B041),
-        (60, 0x5DADE2),
-        (80, 0x16A085)
+        (0, 0xD86960),
+        (10, 0xE57A54),
+        (20, 0xED8D48),
+        (30, 0xEF9F3C),
+        (40, 0xE7AD3C),
+        (50, 0xD9B73D),
+        (60, 0xBBBE4D),
+        (70, 0x99C266),
+        (80, 0x79C282),
+        (90, 0x5DBE9C)
     ]
 
     static func hex(for percent: Int) -> Int {
@@ -16,11 +21,17 @@ nonisolated enum QuotaPalette {
     }
 
     static func color(for percent: Int) -> Color {
-        Color(hex: hex(for: percent))
+        Color(nsColor: nsColor(for: percent))
     }
 
     static func nsColor(for percent: Int) -> NSColor {
-        NSColor(hex: hex(for: percent))
+        let rgb = hex(for: percent)
+        return NSColor(
+            displayP3Red: CGFloat((rgb >> 16) & 255) / 255,
+            green: CGFloat((rgb >> 8) & 255) / 255,
+            blue: CGFloat(rgb & 255) / 255,
+            alpha: 1
+        )
     }
 }
 

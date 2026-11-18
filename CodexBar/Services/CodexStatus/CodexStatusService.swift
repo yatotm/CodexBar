@@ -4,6 +4,7 @@ import os
 /// 刷新结果携带连接失败原因, 请求响应细节保留在交互日志中
 nonisolated enum CodexFetchOutcome {
     case data(CodexQuotaSnapshot)
+    case launcherMissing
     case notLoggedIn
     case unsupportedVersion(minimum: String)
     case initializationFailed(message: String)
@@ -11,6 +12,7 @@ nonisolated enum CodexFetchOutcome {
     var connectionErrorMessage: String? {
         switch self {
         case .data: nil
+        case .launcherMissing: CodexStatusError.executableNotFound.localizedDescription
         case .notLoggedIn: CodexStatusError.notLoggedIn.localizedDescription
         case let .unsupportedVersion(minimum): CodexStatusError.unsupportedVersion(minimum: minimum).localizedDescription
         case let .initializationFailed(message): message
@@ -57,6 +59,7 @@ nonisolated struct CodexFetchResult {
 
 private nonisolated enum ConnectionResolution {
     case ready(connection: AppServerConnection, reused: Bool)
+    case launcherMissing
     case notLoggedIn
     case unsupportedVersion(minimum: String)
     case initializationFailed(message: String)
@@ -235,6 +238,8 @@ actor CodexStatusService {
             let source = command?.source.rawValue ?? "shared"
             AppLog.codexCLI.notice("Codex 连接已切换: source=\(source, privacy: .public)")
             return candidate.commandInfo
+        case .launcherMissing:
+            throw CodexStatusError.executableNotFound
         case .notLoggedIn:
             throw CodexStatusError.notLoggedIn
         case let .unsupportedVersion(minimum):
@@ -337,6 +342,9 @@ actor CodexStatusService {
         trace: inout CodexFetchTrace
     ) -> CodexFetchOutcome {
         switch ensureConnection() {
+        case .launcherMissing:
+            trace.failureStage = .connect
+            return .launcherMissing
         case .notLoggedIn:
             trace.failureStage = .connect
             return .notLoggedIn
@@ -385,6 +393,8 @@ actor CodexStatusService {
         switch resolution {
         case let .ready(connection, _):
             return connection
+        case .launcherMissing:
+            throw CodexStatusError.executableNotFound
         case .notLoggedIn:
             throw CodexStatusError.notLoggedIn
         case let .unsupportedVersion(minimum):
@@ -479,7 +489,7 @@ actor CodexStatusService {
             AppLog.app.error("codex 连接失败: stage=version")
         case .initializationFailed:
             AppLog.app.error("codex 连接失败: stage=open")
-        case .notLoggedIn:
+        case .launcherMissing, .notLoggedIn:
             break
         }
         return resolution
@@ -775,6 +785,8 @@ actor CodexStatusService {
                 timeout: timeout,
                 usesCustomProxy: usesCustomProxy
             )
+        } catch CodexStatusError.executableNotFound {
+            return .launcherMissing
         } catch {
             RequestLogStorage.shared.recordFailure(
                 message: String(

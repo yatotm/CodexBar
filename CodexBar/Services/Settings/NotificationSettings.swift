@@ -8,6 +8,14 @@ import UserNotifications
 /// 授权请求/查询集中在这里, 通知与触觉反馈判定在 CodexNotificationService
 @MainActor
 final class NotificationSettings: ObservableObject {
+    enum AuthorizationState: Equatable {
+        case unknown
+        case notDetermined
+        case denied
+        case authorized
+        case unavailable
+    }
+
     @Published private(set) var isEnabled: Bool
     @Published private(set) var isLowQuotaEnabled: Bool
     @Published private(set) var isQuotaResetEnabled: Bool
@@ -28,27 +36,28 @@ final class NotificationSettings: ObservableObject {
     @Published private(set) var autoResetSound: NotificationSoundOption
     @Published private(set) var lowBatterySound: NotificationSoundOption
     @Published private(set) var keepAliveLimitSound: NotificationSoundOption
-    @Published private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
+    @Published private(set) var authorizationState: AuthorizationState = .unknown
 
-    /// 系统创建通知条目后仍可能等待用户回应, 申请中也需要显示未授权引导
+    /// 查询异常不代表用户关闭了权限, 只有明确未授权时才显示系统设置引导
     var needsAuthorization: Bool {
-        isEnabled && !canDeliver
+        isEnabled && (authorizationState == .notDetermined || authorizationState == .denied)
+    }
+
+    var authorizationMessage: String? {
+        guard isEnabled else { return nil }
+        switch authorizationState {
+        case .notDetermined, .denied:
+            return String(localized: "settings.notifications.system.permission-disabled")
+        case .unavailable:
+            return String(localized: "settings.notifications.system.permission-unavailable")
+        case .unknown, .authorized:
+            return nil
+        }
     }
 
     /// 总开关开启且系统已明确允许时才发送, 未决定或未知状态都按不可发送处理
     var canDeliver: Bool {
-        guard isEnabled else {
-            return false
-        }
-
-        switch authorizationStatus {
-        case .authorized, .provisional, .ephemeral:
-            return true
-        case .notDetermined, .denied:
-            return false
-        @unknown default:
-            return false
-        }
+        isEnabled && authorizationState == .authorized
     }
 
     /// 触觉反馈不依赖系统通知授权, 但服从 App 内通知总开关
@@ -66,18 +75,29 @@ final class NotificationSettings: ObservableObject {
 
     private let defaults: UserDefaults
     private let readAuthorizationStatus: () async -> UNAuthorizationStatus
-    private var authorizationTask: Task<Void, Never>?
-    private var isRequestingAuthorization = false
+    private let requestSystemAuthorization: () async throws -> Bool
+    private let sleep: (Duration) async throws -> Void
+    private var authorizationRefreshTask: Task<Void, Never>?
+    private var authorizationRequestTask: Task<Void, Never>?
+    private var requestsAuthorizationIfNeeded = false
     private var appActivationObserver: AnyCancellable?
 
     init(
         defaults: UserDefaults = .standard,
         readAuthorizationStatus: @escaping () async -> UNAuthorizationStatus = {
             await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        },
+        requestSystemAuthorization: @escaping () async throws -> Bool = {
+            try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+        },
+        sleep: @escaping (Duration) async throws -> Void = {
+            try await Task.sleep(for: $0)
         }
     ) {
         self.defaults = defaults
         self.readAuthorizationStatus = readAuthorizationStatus
+        self.requestSystemAuthorization = requestSystemAuthorization
+        self.sleep = sleep
         isEnabled = defaults.bool(forKey: Self.enabledKey)
         isLowQuotaEnabled = Self.bool(from: defaults, key: Self.lowQuotaEnabledKey, defaultValue: true)
         isQuotaResetEnabled = Self.bool(from: defaults, key: Self.quotaResetEnabledKey, defaultValue: true)
@@ -122,8 +142,11 @@ final class NotificationSettings: ObservableObject {
     }
 
     deinit {
-        authorizationTask?.cancel()
+        authorizationRefreshTask?.cancel()
+        authorizationRequestTask?.cancel()
     }
+
+    // MARK: - 偏好设置
 
     func setEnabled(_ enabled: Bool) {
         guard enabled != isEnabled else {
@@ -133,8 +156,12 @@ final class NotificationSettings: ObservableObject {
         AppLog.notification.notice("通知总开关变更: enabled=\(enabled ? 1 : 0)")
         isEnabled = enabled
         defaults.set(enabled, forKey: Self.enabledKey)
+        requestsAuthorizationIfNeeded = enabled
         if enabled {
-            requestAuthorization()
+            refreshAuthorizationStatus()
+        } else {
+            authorizationRefreshTask?.cancel()
+            authorizationRefreshTask = nil
         }
     }
 
@@ -229,31 +256,66 @@ final class NotificationSettings: ObservableObject {
     /// 用户可能在系统设置里改过权限, 回到 App 时需要重新读取
     func refreshAuthorizationStatus() {
         // 系统授权弹窗也会改变 App 与窗口焦点, 查询不能取消正在等待用户回应的请求
-        guard !isRequestingAuthorization else {
+        guard authorizationRequestTask == nil else {
             return
         }
-        authorizationTask?.cancel()
-        let readAuthorizationStatus = readAuthorizationStatus
-        authorizationTask = Task { @MainActor [weak self] in
-            let status = await readAuthorizationStatus()
-            guard let self, !Task.isCancelled else {
-                return
-            }
+        authorizationRefreshTask?.cancel()
+        authorizationRefreshTask = Task { @MainActor [weak self, readAuthorizationStatus, sleep] in
+            for delay: Duration in [.zero, .seconds(1), .seconds(3), .seconds(10)] {
+                do {
+                    if delay > .zero {
+                        try await sleep(delay)
+                    }
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                let status = await readAuthorizationStatus()
+                guard let self, !Task.isCancelled else { return }
 
-            let previousStatus = authorizationStatus
-            if status != previousStatus {
-                let details = LogFields.joined(
-                    "from=\(String(describing: previousStatus))",
-                    "to=\(String(describing: status))"
-                )
-                AppLog.notification.notice("通知授权变化: \(details, privacy: .public)")
+                acceptAuthorizationStatus(status)
+                let shouldRequest = requestsAuthorizationIfNeeded
+                requestsAuthorizationIfNeeded = false
+                if shouldRequest, isEnabled, authorizationState == .notDetermined {
+                    requestAuthorization()
+                    return
+                }
+                guard isEnabled, case .unavailable = authorizationState else {
+                    authorizationRefreshTask = nil
+                    return
+                }
             }
-            authorizationStatus = status
-            // 仅依据本轮系统查询判断重设, 初始化时的 notDetermined 占位不能清掉用户开关
-            if status == .notDetermined {
-                setEnabled(false)
-            }
+            self?.authorizationRefreshTask = nil
         }
+    }
+
+    private func acceptAuthorizationStatus(_ status: UNAuthorizationStatus) {
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            updateAuthorizationState(.authorized)
+        case .denied:
+            updateAuthorizationState(.denied)
+        case .notDetermined:
+            switch authorizationState {
+            case .unknown, .notDetermined:
+                updateAuthorizationState(.notDetermined)
+            case .authorized, .denied, .unavailable:
+                // 系统服务重启后可能把已决定的权限读成未决定, 不能据此再次申请
+                updateAuthorizationState(.unavailable)
+            }
+        @unknown default:
+            updateAuthorizationState(.unavailable)
+        }
+    }
+
+    private func updateAuthorizationState(_ state: AuthorizationState) {
+        guard state != authorizationState else { return }
+        let details = LogFields.joined(
+            "from=\(String(describing: authorizationState))",
+            "to=\(String(describing: state))"
+        )
+        AppLog.notification.notice("通知授权变化: \(details, privacy: .public)")
+        authorizationState = state
     }
 
     /// 引导用户到系统设置的 CodexBar 通知面板
@@ -270,32 +332,32 @@ final class NotificationSettings: ObservableObject {
     }
 
     private func requestAuthorization() {
-        guard isEnabled, !isRequestingAuthorization else {
+        guard isEnabled, authorizationRequestTask == nil else {
             return
         }
-        authorizationTask?.cancel()
-        isRequestingAuthorization = true
-        authorizationTask = Task { @MainActor [weak self] in
+        authorizationRefreshTask?.cancel()
+        authorizationRefreshTask = nil
+        authorizationRequestTask = Task { @MainActor [weak self, requestSystemAuthorization] in
             do {
-                _ = try await UNUserNotificationCenter.current()
-                    .requestAuthorization(options: [.alert, .sound])
+                let granted = try await requestSystemAuthorization()
+                guard let self, !Task.isCancelled else { return }
+                acceptAuthorizationStatus(granted ? .authorized : .denied)
             } catch {
-                guard !Task.isCancelled else {
-                    return
-                }
+                guard let self, !Task.isCancelled else { return }
                 let error = error as NSError
                 AppLog.notification.error("通知授权请求失败: domain=\(error.domain, privacy: .public); code=\(error.code)")
+                updateAuthorizationState(.unavailable)
             }
             guard let self, !Task.isCancelled else {
                 return
             }
 
-            // 授权等待结束后恢复普通查询, 后续焦点刷新才能替换尚未返回的旧查询
-            isRequestingAuthorization = false
-            authorizationTask = nil
+            authorizationRequestTask = nil
             refreshAuthorizationStatus()
         }
     }
+
+    // MARK: - 偏好读写
 
     private func setBool(_ value: Bool, current: inout Bool, key: String) {
         guard value != current else {

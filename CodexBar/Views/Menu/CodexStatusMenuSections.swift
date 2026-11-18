@@ -129,6 +129,8 @@ struct StatusAccountCard: View {
 
     private var statusDisplay: (text: LocalizedStringResource?, color: Color) {
         switch loadState {
+        case .launcherMissing:
+            ("codex-status.account.launcher-missing", .secondary)
         case .notLoggedIn:
             ("codex-status.account.not-signed-in", .orange)
         case let .unsupportedVersion(minimum):

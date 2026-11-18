@@ -81,7 +81,7 @@ struct CodexStatusMenuView: View {
         .onChange(of: usageCenterViewModel.menuScope) { _, _ in onScopeChange() }
         .transaction { transaction in
             // 已关闭的 NSPopover 仍可能绘制数字过渡, 让字体缓存逐轮增长
-            guard !animationState.allowsAnimations else {
+            guard !(animationState.allowsAnimations && mainPanelSettings.areEntranceAnimationsEnabled) else {
                 return
             }
             transaction.animation = nil

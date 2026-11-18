@@ -47,6 +47,7 @@ private struct SidePanelEntryRebuildHost<Content: View>: View {
 /// 与重置次数面板不同: 内容是交互控件, 用常驻 hosting controller + ObservableObject 驱动更新, 不替换 rootView
 @MainActor
 final class SettingsOptionsPanelController {
+    private let settings: MainPanelSettings
     private let animationKey: String
     private let initialPanelSize: CGSize
     /// 展开前的准备动作, 例如刷新只在这个面板里露面的设置项
@@ -70,6 +71,7 @@ final class SettingsOptionsPanelController {
     private var isEntryAnimationRunning = false
 
     init(
+        settings: MainPanelSettings,
         animationKey: String,
         initialPanelSize: CGSize,
         willShow: (() -> Void)? = nil,
@@ -77,6 +79,7 @@ final class SettingsOptionsPanelController {
         contentProvider: @escaping () -> some View,
         contentChanges: AnyPublisher<Void, Never>? = nil
     ) {
+        self.settings = settings
         self.animationKey = animationKey
         self.initialPanelSize = initialPanelSize
         self.willShow = willShow
@@ -86,8 +89,8 @@ final class SettingsOptionsPanelController {
             let controller = NSHostingController(
                 rootView: SidePanelEntryRebuildHost(cue: cue, content: contentProvider())
             )
-            // 高度重算依赖 preferredContentSize 提交的 fitting size
-            controller.sizingOptions = [.preferredContentSize]
+            // 内容报告固有高度, 窗口尺寸由控制器一次提交
+            controller.sizingOptions = [.intrinsicContentSize]
             return controller
         }
         // 只有内容行数会动态增删的面板才传变化源
@@ -131,7 +134,7 @@ final class SettingsOptionsPanelController {
         isEntryAnimationRunning = false
         // 原生输入框的焦点环不跟随内容层平移, 收起前结束编辑也避免下次展开恢复旧焦点
         panel?.makeFirstResponder(panel)
-        presenter.hide(immediate: immediate)
+        presenter.hide(immediate: immediate || !settings.areEntranceAnimationsEnabled)
     }
 
     private func scheduleResize() {
@@ -196,7 +199,7 @@ final class SettingsOptionsPanelController {
         panel.level = window.level
         panelResizeTask?.cancel()
         isEntryAnimationRunning = true
-        presenter.present(panel, at: position, relativeTo: window) { [weak self] in
+        presenter.present(panel, at: position, relativeTo: window, animated: settings.areEntranceAnimationsEnabled) { [weak self] in
             guard let self else {
                 return
             }
@@ -215,12 +218,13 @@ final class SettingsOptionsPanelController {
             return panel
         }
 
+        let hostingController = contentControllerProvider(entryCue)
+        let size = hostingController.view.validFittingSize ?? initialPanelSize
         let panel = SidePanelSupport.makePanel(
-            initialSize: initialPanelSize,
+            initialSize: size,
             ignoresMouseEvents: false,
             keyable: true
         )
-        let hostingController = contentControllerProvider(entryCue)
         panel.contentViewController = hostingController
         SidePanelSupport.configureLayers(
             hostingView: hostingController.view,
@@ -252,6 +256,10 @@ final class SettingsOptionsPanelController {
             targetFrame = SidePanelSupport.clampedVertically(targetFrame, in: visibleFrame)
         }
 
+        guard settings.areEntranceAnimationsEnabled else {
+            panel.setFrame(targetFrame, display: true)
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Metrics.resizeDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)

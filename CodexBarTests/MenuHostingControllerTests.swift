@@ -4,6 +4,18 @@ import SwiftUI
 import Testing
 
 struct MenuHostingControllerTests {
+    @Test func disabledMenuFadeCancelsPendingCompletionImmediately() async throws {
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        var closed = 0
+        var completed = 0
+        let fade = MenuSurfaceFadeCoordinator(contentViewProvider: { view }, closeActiveMenuSurface: { closed += 1 })
+        #expect(fade.fadeOut(duration: 0.01) { closed += 1 })
+        fade.fadeIn(duration: 0) { completed += 1 }
+        #expect(completed == 1 && view.alphaValue == 1)
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(closed == 0 && view.alphaValue == 1)
+    }
+
     @Test func dynamicContentMeasuresNaturallyAndStaysAtTopOfOldViewport() async throws {
         let model = MenuSizingProbeModel()
         let controller = MenuHostingController()

@@ -19,9 +19,7 @@ struct AutoResetOptionsView: View {
                     set: { settings.setLeadTime($0) }
                 ),
                 options: AutoResetLeadTime.allCases,
-                label: { $0.title },
-                width: Metrics.pickerWidth,
-                alignment: .trailing
+                label: { $0.title }
             )
         }
         .frame(height: Metrics.rowHeight)
@@ -45,7 +43,6 @@ struct AutoResetOptionsView: View {
         static let verticalPadding = SettingsOptionsPanelMetrics.verticalPadding
         static let rowHeight = SettingsOptionsPanelMetrics.rowHeight
         static let controlSpacing = SettingsOptionsPanelMetrics.controlSpacing
-        static let pickerWidth: CGFloat = 88
         static let cornerRadius = SettingsOptionsPanelMetrics.cornerRadius
     }
 }

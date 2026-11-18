@@ -169,8 +169,8 @@ private enum QuotaBarPalette {
             }
 
             let progress = (currentPercent - transitionStart) / colorTransitionSpan
-            return Color(hex: lowerTier.hex).mix(
-                with: Color(hex: upperTier.hex),
+            return QuotaPalette.color(for: lowerTier.lowerBound).mix(
+                with: QuotaPalette.color(for: upperTier.lowerBound),
                 by: smoothStep(progress),
                 in: .device
             )

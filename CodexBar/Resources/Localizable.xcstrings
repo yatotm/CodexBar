@@ -1553,6 +1553,22 @@
         }
       }
     },
+    "codex-status.account.launcher-missing" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Codex launcher not found"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未找到 Codex 启动器"
+          }
+        }
+      }
+    },
     "codex-status.account.not-signed-in" : {
       "localizations" : {
         "en" : {
@@ -5313,6 +5329,70 @@
         }
       }
     },
+    "settings.licenses.attribution" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notices"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "署名"
+          }
+        }
+      }
+    },
+    "settings.licenses.done" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭"
+          }
+        }
+      }
+    },
+    "settings.licenses.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open source licenses"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开源许可"
+          }
+        }
+      }
+    },
+    "settings.licenses.unavailable" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The license file could not be read."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "许可文件无法读取"
+          }
+        }
+      }
+    },
     "settings.main-panel.activity.requires-hook" : {
       "localizations" : {
         "en" : {
@@ -5366,13 +5446,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Animate quota bars when opening the panel. Task cards keep their existing subtle effects."
+            "value" : "Animate quota bars, the menu panel and its drawers when they open or resize."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "控制额度条的入场动画，任务卡片沿用当前简约效果"
+            "value" : "控制额度条入场、主面板伸缩和侧边面板的开合动画"
           }
         }
       }
@@ -5709,6 +5789,22 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "系统通知权限未开启"
+          }
+        }
+      }
+    },
+    "settings.notifications.system.permission-unavailable" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notification permission is temporarily unavailable. CodexBar will retry."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取系统通知权限，将自动重试"
           }
         }
       }

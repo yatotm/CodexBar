@@ -21,6 +21,7 @@ struct AppSettingsView: View {
     let onOptionsAction: (SettingsOptionsPanelAction) -> Void
     let onContentHeightChanged: (CGFloat) -> Void
     @State private var selectedTab = SettingsTab.general
+    @State private var showsLicenses = false
     @State private var isTabContentSettled = true
     @State private var notificationAnchorProvider = ScreenFrameProvider()
     @State private var autoResetAnchorProvider = ScreenFrameProvider()
@@ -324,6 +325,17 @@ private extension AppSettingsView {
                 serviceStatusLinkRow
                 LiquidGlassDivider()
                 githubProjectRow
+                LiquidGlassDivider()
+                Button { showsLicenses = true } label: {
+                    HStack(spacing: SettingsRowMetrics.spacing) {
+                        Image(systemName: "doc.plaintext").frame(width: SettingsRowMetrics.iconWidth).foregroundStyle(.tint)
+                        Text("settings.licenses.title")
+                        Spacer()
+                        Image(systemName: "chevron.right").imageScale(.small).foregroundStyle(.secondary)
+                    }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showsLicenses) { OpenSourceLicensesView() }
             }
             .padding(Metrics.panelPadding)
             .liquidGlassSurface(cornerRadius: Metrics.panelCornerRadius)
@@ -350,7 +362,7 @@ private extension AppSettingsView {
             SettingsOptionsPicker(
                 title: "settings.appearance.theme.title",
                 selection: Binding(get: { appearanceSettings.theme }, set: { appearanceSettings.setTheme($0) }),
-                options: AppearanceSettings.Theme.allCases, label: { $0.title }, width: 100, alignment: .trailing
+                options: AppearanceSettings.Theme.allCases, label: { $0.title }
             )
         }
     }
@@ -444,7 +456,7 @@ private extension AppSettingsView {
                 title: "Codex 额度刷新",
                 selection: Binding(get: { statusViewModel.quotaRefreshInterval }, set: { statusViewModel.setQuotaRefreshInterval($0) }),
                 options: CodexQuotaRefreshInterval.allCases,
-                label: { $0.title }, width: 90
+                label: { $0.title }
             )
         }
         .frame(minHeight: SettingsRowMetrics.optionsButtonSize)
@@ -833,8 +845,8 @@ private extension AppSettingsView {
                 }
             }
 
-            if notificationSettings.needsAuthorization {
-                NotificationAuthorizationRow(settings: notificationSettings)
+            if let message = notificationSettings.authorizationMessage {
+                NotificationAuthorizationRow(settings: notificationSettings, message: message)
                     .transition(.identity)
                     .transaction { transaction in
                         transaction.animation = nil

@@ -76,6 +76,8 @@ Haptic feedback does not require macOS notification permission, but it still fol
 
 ## Codex TUI Notifications
 
+The toggle becomes available after CodexBar connects and reads the configuration. A temporary failure to read system notification permissions preserves the saved preference and triggers bounded retries.
+
 This option controls Codex’s own notifications independently of CodexBar notifications.
 
 ## Notification Interaction

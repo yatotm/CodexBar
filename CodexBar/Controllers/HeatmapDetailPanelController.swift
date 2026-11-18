@@ -5,6 +5,12 @@ import SwiftUI
 /// 热力图 hover 详情控制器, 负责左右贴边定位和抽屉式切换动画
 @MainActor
 final class HeatmapDetailPanelController {
+    private let settings: MainPanelSettings
+
+    init(settings: MainPanelSettings) {
+        self.settings = settings
+    }
+
     private let contentHost = SidePanelContentHost<UsageHeatmapDayDetailView>(
         initialSize: UsageHeatmapDayDetailView.panelSize(showsWorkflow: true),
         ignoresMouseEvents: true,
@@ -58,7 +64,7 @@ final class HeatmapDetailPanelController {
         }
 
         // AppKit 隐藏父窗口后仍保留子窗口关系, 必须移除才能避免重开时恢复旧详情
-        guard !immediate, panel.isVisible else {
+        guard !immediate, settings.areEntranceAnimationsEnabled, panel.isVisible else {
             drawerAnimator.resetVisualState(for: panel)
             orderOut(panel)
             return
@@ -127,6 +133,18 @@ final class HeatmapDetailPanelController {
             SidePanelSupport.restoreMenuSurfaceKeyWindow(menuSurfaceWindow)
         }
 
+        if !settings.areEntranceAnimationsEnabled {
+            visibilityGeneration += 1
+            pendingSideSwitchRequest = nil
+            drawerTransition = .idle
+            apply(request, to: panel)
+            drawerAnimator.resetVisualState(for: panel)
+            if !wasVisible {
+                attach(panel, to: menuSurfaceWindow)
+                panel.order(.above, relativeTo: menuSurfaceWindow.windowNumber)
+            }
+            return
+        }
         if wasVisible {
             updateVisiblePanel(request, on: panel)
             return

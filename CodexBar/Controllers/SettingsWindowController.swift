@@ -187,6 +187,7 @@ final class SettingsWindowController: HostingWindowController {
             makeMainPanelOptionsPanelController()
         case .taskGlow:
             SettingsOptionsPanelController(
+                settings: mainPanelSettings,
                 animationKey: "CodexBar.taskGlowOptionsDrawerTransform",
                 initialPanelSize: TaskGlowOptionsView.initialPanelSize,
                 willHide: { [taskGlowSettings] in taskGlowSettings.endColorPreview() },
@@ -196,6 +197,7 @@ final class SettingsWindowController: HostingWindowController {
             )
         case .notification:
             SettingsOptionsPanelController(
+                settings: mainPanelSettings,
                 animationKey: "CodexBar.notificationOptionsDrawerTransform",
                 initialPanelSize: NotificationOptionsView.initialPanelSize,
                 willShow: { [codexCLINotificationSettings] in
@@ -229,6 +231,7 @@ final class SettingsWindowController: HostingWindowController {
             )
         case .autoReset:
             SettingsOptionsPanelController(
+                settings: mainPanelSettings,
                 animationKey: "CodexBar.autoResetOptionsDrawerTransform",
                 initialPanelSize: AutoResetOptionsView.initialPanelSize,
                 contentProvider: { [autoResetSettings] in
@@ -237,6 +240,7 @@ final class SettingsWindowController: HostingWindowController {
             )
         case .keepAlive:
             SettingsOptionsPanelController(
+                settings: mainPanelSettings,
                 animationKey: "CodexBar.keepAliveOptionsDrawerTransform",
                 initialPanelSize: KeepAliveOptionsView.initialPanelSize,
                 contentProvider: { [keepAliveController, activityProtectionSettings] in
@@ -255,6 +259,7 @@ final class SettingsWindowController: HostingWindowController {
 
     private func makeMainPanelOptionsPanelController() -> SettingsOptionsPanelController {
         SettingsOptionsPanelController(
+            settings: mainPanelSettings,
             animationKey: "CodexBar.mainPanelOptionsDrawerTransform",
             initialPanelSize: MainPanelOptionsView.initialPanelSize,
             willShow: { [mainPanelSettings] in

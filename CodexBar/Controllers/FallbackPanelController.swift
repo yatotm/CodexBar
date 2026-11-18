@@ -30,7 +30,7 @@ final class FallbackPanelController {
         panel.setFrame(frame(for: contentSize, on: screen), display: false)
     }
 
-    func resizeContent(to size: CGSize) {
+    func resizeContent(to size: CGSize, animated: Bool) {
         measuredContentSize = size
         guard let panel, panel.frame.size != size else { return }
         let frame = NSRect(
@@ -39,8 +39,12 @@ final class FallbackPanelController {
             width: size.width,
             height: size.height
         )
+        guard panel.isVisible, animated else {
+            panel.setFrame(frame, display: true)
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = panel.isVisible ? 0.20 : 0
+            context.duration = 0.20
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().setFrame(frame, display: true)
         }

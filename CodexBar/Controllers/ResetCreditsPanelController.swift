@@ -4,6 +4,12 @@ import SwiftUI
 /// 重置次数详情控制器, 复用共享侧边抽屉定位和动画
 @MainActor
 final class ResetCreditsPanelController {
+    private let settings: MainPanelSettings
+
+    init(settings: MainPanelSettings) {
+        self.settings = settings
+    }
+
     private let contentHost = SidePanelContentHost<ResetCreditsPanelView>(
         initialSize: ResetCreditsPanelView.initialPanelSize,
         ignoresMouseEvents: false,
@@ -43,7 +49,7 @@ final class ResetCreditsPanelController {
     }
 
     func hide(immediate: Bool = false) {
-        presenter.hide(immediate: immediate)
+        presenter.hide(immediate: immediate || !settings.areEntranceAnimationsEnabled)
     }
 
     private func show(
@@ -85,7 +91,7 @@ final class ResetCreditsPanelController {
         }
 
         contentHost.updateContent(ResetCreditsPanelView(context: resolvedContext), size: panelSize)
-        presenter.present(panel, at: position, relativeTo: menuSurfaceWindow)
+        presenter.present(panel, at: position, relativeTo: menuSurfaceWindow, animated: settings.areEntranceAnimationsEnabled)
     }
 
     private func panelMaximumHeight(

@@ -5,58 +5,87 @@ import os
 /// Codex TUI 通知设置, 通过 app-server 读写用户级 config.toml
 @MainActor
 final class CodexCLINotificationSettings: ObservableObject {
-    @Published private(set) var isEnabled = true
+    @Published private(set) var isEnabled: Bool?
     @Published private(set) var isUpdating = false
     @Published private(set) var errorMessage: String?
 
-    private let codexStatusService: CodexStatusService
-    private let updateCoordinator = RefreshTaskCoordinator()
+    var isAvailable: Bool {
+        isEnabled != nil
+    }
 
-    init(codexStatusService: CodexStatusService) {
-        self.codexStatusService = codexStatusService
+    private let read: @MainActor () async throws -> Bool
+    private let write: @MainActor (Bool) async throws -> Void
+    private let updateCoordinator = RefreshTaskCoordinator()
+    private var isConnected = false
+    private var connectionObserver: AnyCancellable?
+
+    convenience init(codexStatusService: CodexStatusService, connectionAvailability: AnyPublisher<Bool, Never>) {
+        self.init(
+            connectionAvailability: connectionAvailability,
+            read: { try await codexStatusService.readCodexConfig().areTUINotificationsEnabled },
+            write: { _ = try await codexStatusService.writeCodexConfigBatch(edits: [.init(keyPath: "tui.notifications", value: $0, mergeStrategy: "upsert")]) }
+        )
+    }
+
+    init(
+        connectionAvailability: AnyPublisher<Bool, Never>,
+        read: @escaping @MainActor () async throws -> Bool,
+        write: @escaping @MainActor (Bool) async throws -> Void
+    ) {
+        self.read = read
+        self.write = write
+        connectionObserver = connectionAvailability
+            .removeDuplicates()
+            .sink { [weak self] connected in
+                self?.updateConnection(connected)
+            }
+    }
+
+    private func updateConnection(_ connected: Bool) {
+        isConnected = connected
+        if connected {
+            refresh()
+        } else {
+            // 断开后丢弃在途结果, 展示占位不能写回 Codex 配置
+            updateCoordinator.cancel()
+            isEnabled = nil
+            isUpdating = false
+            errorMessage = nil
+        }
     }
 
     func refresh() {
-        guard !isUpdating else {
+        guard isConnected, !isUpdating else {
             return
         }
 
         runLatestUpdate(operation: .read) { settings, generation in
-            let response = try await settings.codexStatusService.readCodexConfig()
+            let enabledOnServer = try await settings.read()
             try settings.ensureCurrentUpdate(generation)
-            return response.areTUINotificationsEnabled
+            return enabledOnServer
         }
     }
 
     func setEnabled(_ enabled: Bool) {
-        AppLog.settings.notice("Codex TUI 通知变更: enabled=\(enabled ? 1 : 0)")
-        guard enabled != isEnabled else {
+        guard isAvailable, !isUpdating, enabled != isEnabled else {
             return
         }
+        AppLog.settings.notice("Codex TUI 通知变更: enabled=\(enabled ? 1 : 0)")
 
         runLatestUpdate(operation: .write) { settings, generation in
-            _ = try await settings.codexStatusService.writeCodexConfigBatch(
-                edits: [
-                    .init(
-                        keyPath: Self.configKeyPath,
-                        value: enabled,
-                        mergeStrategy: Self.configMergeStrategy
-                    )
-                ]
-            )
+            try await settings.write(enabled)
             try settings.ensureCurrentUpdate(generation)
 
-            let response = try await settings.codexStatusService.readCodexConfig()
+            let enabledOnServer = try await settings.read()
             try settings.ensureCurrentUpdate(generation)
-            guard response.areTUINotificationsEnabled == enabled else {
+            guard enabledOnServer == enabled else {
                 throw SettingsError.verificationFailed
             }
             return enabled
         }
     }
 
-    /// 一次操作的用户文案与日志标题由它一处派生, 不在调用点各写一份
-    /// 两者都是固定字面量, 日志标题仍然能直接 grep
+    /// 操作文案和日志阶段在这里定义, 使用固定字面量方便检索
     private enum ConfigOperation {
         case read
         case write
@@ -106,6 +135,9 @@ final class CodexCLINotificationSettings: ObservableObject {
                 )
                 AppLog.settings.error("Codex TUI 通知失败: \(details, privacy: .public)")
                 errorMessage = operation.errorPrefix
+                if operation == .read {
+                    isEnabled = nil
+                }
             }
 
             updateCoordinator.finish(generation) {
@@ -128,7 +160,4 @@ final class CodexCLINotificationSettings: ObservableObject {
             String(localized: "codex-tui-notifications.error.state-mismatch")
         }
     }
-
-    private static let configKeyPath = "tui.notifications"
-    private static let configMergeStrategy = "upsert"
 }

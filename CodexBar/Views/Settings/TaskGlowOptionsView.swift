@@ -22,9 +22,7 @@ struct TaskGlowOptionsView: View {
                         set: { settings.setAnimationSpeed($0) }
                     ),
                     options: TaskGlowAnimationSpeed.allCases,
-                    label: { $0.title },
-                    width: 100,
-                    alignment: .trailing
+                    label: { $0.title }
                 )
             }
             optionRow("task-glow.duration.title") {
@@ -35,9 +33,7 @@ struct TaskGlowOptionsView: View {
                         set: { settings.setTerminalDuration($0) }
                     ),
                     options: TaskGlowSettings.terminalDurationOptions,
-                    label: { String(localized: "duration.seconds", defaultValue: "\(Int($0), specifier: "%lld")") },
-                    width: 100,
-                    alignment: .trailing
+                    label: { String(localized: "duration.seconds", defaultValue: "\(Int($0), specifier: "%lld")") }
                 )
             }
             optionRow("task-glow.brightness.title") {

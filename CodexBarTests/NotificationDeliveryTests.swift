@@ -1,9 +1,68 @@
+import Combine
 import Foundation
 import Testing
 import UserNotifications
 
 @MainActor
 struct NotificationDeliveryTests {
+    @Test(arguments: [true, false])
+    func disablingWaitingOrGlobalSwitchWithdrawsInFlightDelivery(global: Bool) async throws {
+        let fixture = try NotificationFixture()
+        defer { fixture.stop() }
+        try await fixture.start()
+        fixture.recorder.suspendsNextSubmission = true
+        fixture.publishWaiting(blockingQuestion: true)
+        try await waitUntil { fixture.recorder.pending != nil }
+        if global {
+            fixture.settings.setEnabled(false)
+        } else {
+            fixture.settings.setTaskWaitingEnabled(false)
+        }
+        fixture.recorder.releasePending()
+        try await waitUntil { fixture.recorder.completedSubmissions == 1 }
+        #expect(fixture.recorder.delivered.isEmpty)
+    }
+
+    @Test func temporaryPermissionReadFailurePreservesUserIntentAndRecovers() async throws {
+        let preferences = try TestPreferences()
+        defer { preferences.remove() }
+        preferences.defaults.set(true, forKey: "Notification.enabled")
+        var replies: [UNAuthorizationStatus] = [.authorized, .notDetermined, .authorized]
+        let settings = NotificationSettings(defaults: preferences.defaults, readAuthorizationStatus: {
+            replies.isEmpty ? .authorized : replies.removeFirst()
+        }, requestSystemAuthorization: { Issue.record("状态核对不能申请系统授权")
+            return false
+        }, sleep: { _ in await Task.yield() })
+        settings.refreshAuthorizationStatus()
+        try await waitUntil { settings.canDeliver }
+        settings.refreshAuthorizationStatus()
+        try await waitUntil { replies.isEmpty && settings.canDeliver }
+        #expect(settings.isEnabled && preferences.defaults.bool(forKey: "Notification.enabled"))
+    }
+
+    @Test func disconnectedTUISettingsCannotWriteOrApplyAnOldRead() async throws {
+        let connection = CurrentValueSubject<Bool, Never>(false)
+        var pending: CheckedContinuation<Bool, Never>?
+        var writes: [Bool] = []
+        var reads = 0
+        let settings = CodexCLINotificationSettings(connectionAvailability: connection.eraseToAnyPublisher(), read: {
+            reads += 1
+            if reads == 1 {
+                return await withCheckedContinuation { pending = $0 }
+            }
+            return false
+        }, write: { writes.append($0) })
+        settings.setEnabled(true)
+        connection.send(true)
+        try await waitUntil { pending != nil }
+        connection.send(false)
+        connection.send(true)
+        try await waitUntil { settings.isEnabled == false }
+        pending?.resume(returning: true)
+        await Task.yield()
+        #expect(settings.isEnabled == false && writes.isEmpty)
+    }
+
     @Test(arguments: [false, true])
     func resolvedWaitingIsWithdrawnWhileSubagentsAndAsyncQuestionsContinue(blockingQuestion: Bool) async throws {
         let fixture = try NotificationFixture()

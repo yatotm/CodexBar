@@ -27,13 +27,14 @@ nonisolated enum CodexQuotaRefreshInterval: Int, CaseIterable, Sendable {
 nonisolated enum CodexLoadState: Equatable {
     case loading
     case loaded
+    case launcherMissing
     case notLoggedIn
     case unsupportedVersion(minimum: String)
     case initializationFailed
 
     var isError: Bool {
         switch self {
-        case .notLoggedIn, .unsupportedVersion, .initializationFailed: true
+        case .launcherMissing, .notLoggedIn, .unsupportedVersion, .initializationFailed: true
         case .loading, .loaded: false
         }
     }
@@ -189,6 +190,9 @@ final class CodexStatusViewModel: ObservableObject {
                 case let .data(snapshot):
                     self.snapshot = snapshot
                     loadState = .loaded
+                case .launcherMissing:
+                    snapshot = nil
+                    loadState = .launcherMissing
                 case .notLoggedIn:
                     snapshot = nil
                     loadState = .notLoggedIn
@@ -275,6 +279,8 @@ final class CodexStatusViewModel: ObservableObject {
                 "elapsed=\(elapsed)"
             )
             AppLog.app.notice("额度刷新完成: \(details, privacy: .public)")
+        case .launcherMissing:
+            AppLog.app.notice("额度刷新已跳过: reason=launcherMissing")
         case .notLoggedIn:
             // 未登录是正常状态, 混进失败词根会让每分钟一条噪声盖掉真故障
             let details = LogFields.joined(
@@ -355,6 +361,7 @@ final class CodexStatusViewModel: ObservableObject {
         } catch {
             loadState = switch error {
             case CodexStatusError.notLoggedIn: .notLoggedIn
+            case CodexStatusError.executableNotFound: .launcherMissing
             case let CodexStatusError.unsupportedVersion(minimum): .unsupportedVersion(minimum: minimum)
             default: .initializationFailed
             }

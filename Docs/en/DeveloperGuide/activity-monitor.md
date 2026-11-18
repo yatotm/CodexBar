@@ -27,3 +27,5 @@ Sleep and lid closure without a working external display suspend Mac streams. Ph
 Protection only considers healthy local running tasks. Heartbeats renew coverage without moving progress timestamps. The existing protection hash and schema 1 file are preserved. Unknown token baselines and incomplete durations remain unavailable.
 
 The old Hook/tail state machine remains for historical compatibility and regression tests; production explicitly selects the shared backend.
+
+Each host retires its live turns on explicit close, archive, and deletion events. A revert triggers a fresh turn scan, and replies from before that event are discarded. Running child tasks retain their parent identity. A resumed primary turn matches its own token counts by thread and turn. Structured provider errors isolate the affected thread so verified peers can continue reporting.

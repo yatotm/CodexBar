@@ -113,9 +113,7 @@ struct KeepAliveOptionsView: View {
                 title: title,
                 selection: selection,
                 options: options,
-                label: { $0[keyPath: label] },
-                width: Metrics.pickerWidth,
-                alignment: .trailing
+                label: { $0[keyPath: label] }
             )
         }
     }
@@ -173,7 +171,6 @@ struct KeepAliveOptionsView: View {
         static let rowHeight = SettingsOptionsPanelMetrics.rowHeight
         static let captionRowHeight = SettingsOptionsPanelMetrics.secondaryRowHeight
         static let controlSpacing = SettingsOptionsPanelMetrics.controlSpacing
-        static let pickerWidth: CGFloat = 88
         static let cornerRadius = SettingsOptionsPanelMetrics.cornerRadius
     }
 }

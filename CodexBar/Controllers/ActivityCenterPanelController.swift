@@ -5,6 +5,7 @@ import SwiftUI
 /// 点击活动卡片后展开的并发任务中心, 复用菜单侧边抽屉定位和动画
 @MainActor
 final class ActivityCenterPanelController {
+    private let settings: MainPanelSettings
     private let activityPresentation: ActivityPresentationModel
     private let presentationState: CodexActivityCenterPresentationState
     private let contentHost = SidePanelContentHost<CodexActivityCenterView>(
@@ -28,8 +29,9 @@ final class ActivityCenterPanelController {
 
     init(
         activityPresentation: ActivityPresentationModel,
-        presentationState: CodexActivityCenterPresentationState
+        presentationState: CodexActivityCenterPresentationState, settings: MainPanelSettings
     ) {
+        self.settings = settings
         self.activityPresentation = activityPresentation
         self.presentationState = presentationState
 
@@ -78,7 +80,7 @@ final class ActivityCenterPanelController {
         } else if !immediate {
             return
         }
-        presenter.hide(immediate: immediate)
+        presenter.hide(immediate: immediate || !settings.areEntranceAnimationsEnabled)
     }
 
     private func schedulePresentation(
@@ -148,7 +150,7 @@ final class ActivityCenterPanelController {
         defer {
             SidePanelSupport.restoreMenuSurfaceKeyWindow(menuSurfaceWindow)
         }
-        presenter.present(panel, at: layout.position, relativeTo: menuSurfaceWindow)
+        presenter.present(panel, at: layout.position, relativeTo: menuSurfaceWindow, animated: settings.areEntranceAnimationsEnabled)
     }
 
     private func panelLayout(
@@ -206,6 +208,10 @@ final class ActivityCenterPanelController {
             snapshot: snapshot
         )
         guard panel.frame != layout.position.frame else {
+            return
+        }
+        guard settings.areEntranceAnimationsEnabled else {
+            panel.setFrame(layout.position.frame, display: true)
             return
         }
         NSAnimationContext.runAnimationGroup { context in

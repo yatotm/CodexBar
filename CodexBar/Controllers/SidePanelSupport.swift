@@ -219,6 +219,7 @@ final class SidePanelDrawerPresenter {
         _ panel: NSPanel,
         at position: SidePanelPosition,
         relativeTo parentWindow: NSWindow,
+        animated: Bool = true,
         completion: @escaping @MainActor () -> Void = {}
     ) {
         self.panel = panel
@@ -229,13 +230,17 @@ final class SidePanelDrawerPresenter {
 
         let generation = visibilityGeneration
         let hidden = drawerAnimator.hiddenTranslation(for: currentSide, panelWidth: panel.frame.width)
-        drawerAnimator.setTranslation(usesUntranslatedInitialLayout ? 0 : hidden)
-        panel.alphaValue = 0
+        drawerAnimator.setTranslation(!animated || usesUntranslatedInitialLayout ? 0 : hidden)
+        panel.alphaValue = animated ? 0 : 1
         self.parentWindow = parentWindow
         SidePanelSupport.attach(panel, to: parentWindow)
         panel.order(.above, relativeTo: parentWindow.windowNumber)
         if makesKey {
             panel.makeKey()
+        }
+        guard animated else {
+            completion()
+            return
         }
         drawerAnimator.animateEntryAfterInitialLayout(
             from: hidden,

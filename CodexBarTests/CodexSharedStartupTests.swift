@@ -3,6 +3,16 @@ import Testing
 
 @Suite(.timeLimit(.minutes(1)))
 struct CodexSharedStartupTests {
+    @Test nonisolated func absentSocketAndMissingLauncherHaveAnActionableError() throws {
+        let home = try FixtureHome()
+        defer { home.remove() }
+        do {
+            _ = try AppServerSession.launch(command: nil, environment: home.environment, timeout: 1)
+            Issue.record("后台和启动器都不存在时应提示缺少启动器")
+        } catch CodexStatusError.executableNotFound {}
+        #expect(!FileManager.default.fileExists(atPath: home.marker.path))
+    }
+
     @Test nonisolated func malformedExistingEndpointNeverLaunchesAnotherDaemon() throws {
         let home = try FixtureHome()
         defer { home.remove() }

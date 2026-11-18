@@ -229,10 +229,10 @@ struct NotificationOptionsView: View {
             optionRow(
                 title: "settings.notifications.codex-tui.title",
                 isOn: Binding(
-                    get: { codexCLINotificationSettings.isEnabled },
+                    get: { codexCLINotificationSettings.isEnabled ?? false },
                     set: { codexCLINotificationSettings.setEnabled($0) }
                 ),
-                isEnabled: !codexCLINotificationSettings.isUpdating
+                isEnabled: codexCLINotificationSettings.isAvailable && !codexCLINotificationSettings.isUpdating
             ) {
                 if codexCLINotificationSettings.isUpdating {
                     ProgressView()
@@ -383,8 +383,7 @@ struct NotificationOptionsView: View {
             title: title,
             selection: selection,
             options: options,
-            label: label,
-            width: Metrics.pickerWidth
+            label: label
         )
     }
 
@@ -469,7 +468,6 @@ struct NotificationOptionsView: View {
         static let notificationRowHeight = rowHeight + soundRowHeight
         static let captionedRowHeight = rowHeight + secondaryRowHeight
         static let notificationControlSpacing = SettingsOptionsPanelMetrics.controlSpacing
-        static let pickerWidth: CGFloat = 68
         static let soundMenuWidth: CGFloat = 160
         static let soundPreviewButtonSize: CGFloat = 18
         static let soundPreviewIconSize: CGFloat = 13
@@ -480,21 +478,24 @@ struct NotificationOptionsView: View {
 
 struct NotificationAuthorizationRow: View {
     let settings: NotificationSettings
+    let message: String
 
     var body: some View {
         SettingsIndentedRow {
-            Text("settings.notifications.system.permission-disabled")
+            Text(message)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 8)
 
-            Button("common.action.open-system-settings") {
-                settings.openSystemNotificationSettings()
+            if settings.needsAuthorization {
+                Button("common.action.open-system-settings") {
+                    settings.openSystemNotificationSettings()
+                }
+                .controlSize(.small)
+                .fixedSize()
             }
-            .controlSize(.small)
-            .fixedSize()
         }
     }
 }

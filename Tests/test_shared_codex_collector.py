@@ -48,6 +48,26 @@ def active_graph(now=1000):
 
 
 class SharedGraphTests(unittest.TestCase):
+    def test_resumed_primary_uses_its_own_turn_and_children_stay_with_the_named_parent_turn(self):
+        graph = active_graph()
+        graph.consume(event("thread/tokenUsage/updated", tokenUsage=dict(total=wire_usage(1), last=wire_usage(1))), 1001)
+        graph.consume(event("turn/completed", turn=dict(id="turn", status="completed", completedAt=1002)), 1002)
+        graph.consume(event("turn/started", turn=dict(id="resumed", rootTurnId="turn", status="inProgress", startedAt=1003)), 1003)
+        graph.consume(event("thread/tokenUsage/updated", turn="resumed", tokenUsage=dict(total=wire_usage(4), last=wire_usage(3))), 1004)
+        graph.metadata(dict(id="child", parentThreadId="root", source={"subAgent": {}}))
+        graph.consume(event("turn/started", thread="child", turn=dict(id="child-turn", rootTurnId="resumed", status="inProgress", startedAt=1004)), 1004)
+        graph.consume(event("thread/tokenUsage/updated", thread="child", turn="child-turn", tokenUsage=dict(total=wire_usage(2), last=wire_usage(2))), 1005)
+        tasks = {row["state"]: row for row in graph.tasks(1005)}
+        self.assertEqual(tasks["completed"]["tokenUsage"]["output_tokens"], 1)
+        self.assertEqual(tasks["running"]["id"], shared.digest("codex", "root", "resumed"))
+        self.assertEqual(tasks["running"]["tokenUsage"]["output_tokens"], 5)
+        self.assertEqual(tasks["running"]["activeSubagentCount"], 1)
+        graph.consume(event("thread/closed"), 1006)
+        remaining = [row for row in graph.tasks(1006) if row["state"] == "running"]
+        self.assertEqual([row["id"] for row in remaining], [tasks["running"]["id"]])
+        graph.consume(event("thread/archived", thread="child"), 1007)
+        self.assertEqual([row["state"] for row in graph.tasks(1007)], ["completed"])
+
     def test_stage_and_terminal(self):
         graph = active_graph()
         graph.consume(event("item/reasoning/textDelta", delta="private-thought"), 1001)
@@ -396,6 +416,15 @@ class SharedGraphTests(unittest.TestCase):
 
 
 class StateStoreTests(unittest.TestCase):
+    def test_explicit_close_does_not_restore_an_unconfirmed_task_from_saved_frame(self):
+        for method in ("thread/closed", "thread/archived", "thread/deleted"):
+            with self.subTest(method=method):
+                graph = active_graph()
+                self.store.save(graph, now=1001)
+                graph.consume(event(method), 1002)
+                self.assertEqual(self.store.save(graph, now=1002)["tasks"], [])
+                self.assertEqual(self.store.save(shared.TaskGraph(), now=1003)["tasks"], [])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.store = shared.StateStore(Path(self.temp.name))
@@ -632,6 +661,74 @@ class SharedHistoryTests(unittest.TestCase):
 
 
 class ObserverTests(unittest.TestCase):
+    def test_stale_thread_read_cannot_restart_subscription_after_lifecycle_change(self):
+        for change in ("thread/closed", "thread/archived", "thread/deleted"):
+            with self.subTest(change=change):
+                graph = active_graph()
+                rpc = self.rpc(graph, ["root"])
+                original = rpc.request
+                def request(method, params):
+                    if method == "thread/read":
+                        graph.consume(event(change), 1001)
+                    return original(method, params)
+                rpc.request = request
+                observer = shared.Observer(rpc, graph)
+                observer.reconcile(force=True, now=1001)
+                observer.reconcile(now=1062)
+                self.assertNotIn("thread/resume", [method for method, _ in rpc.calls])
+                self.assertEqual(graph.tasks(1062), [])
+                if change != "thread/deleted":
+                    graph.consume(event("turn/started", turn=dict(id="new", status="inProgress", startedAt=1063)), 1063)
+                    self.assertEqual(graph.tasks(1063)[0]["id"], shared.digest("codex", "root", "new"))
+
+    def test_revert_only_drops_missing_turn_after_a_complete_rescan(self):
+        graph = active_graph()
+        graph.consume(event("turn/started", turn=dict(id="lost", status="inProgress", startedAt=1002)), 1002)
+        graph.consume(event("thread/reverted"), 1004)
+        self.assertEqual([t["state"] for t in graph.tasks(1004)], ["unknown", "unknown"])
+        rpc = self.rpc(graph, ["root"])
+        original = rpc.request
+        def request(method, params):
+            if method == "thread/turns/list":
+                cursor = params.get("cursor")
+                if cursor == "b":
+                    return dict(data=[dict(id="turn", status="inProgress", startedAt=1000)])
+                return dict(data=[], nextCursor="a" if cursor is None else "b")
+            return original(method, params)
+        rpc.request = request
+        observer = shared.Observer(rpc, graph)
+        observer.reconcile(now=1005)
+        self.assertFalse(graph.reconciliation_complete)
+        self.assertEqual(len(graph.tasks(1005)), 2)
+        observer.reconcile(now=1011)
+        rows = graph.tasks(1011)
+        self.assertTrue(graph.reconciliation_complete)
+        self.assertEqual([(t["id"], t["state"]) for t in rows], [(shared.digest("codex", "root", "turn"), "running")])
+
+    def test_only_a_structured_provider_refusal_releases_the_other_threads_recovery_barrier(self):
+        graph = active_graph()
+        rpc = self.rpc(graph, ["root", "provider"])
+        original = rpc.request
+        refusal = [None]
+        def request(method, params):
+            if refusal[0] and method == "thread/read" and params["threadId"] == "provider":
+                raise refusal[0]
+            return original(method, params)
+        rpc.request = request
+        observer = shared.Observer(rpc, graph)
+        observer.reconcile(force=True, now=1001)
+        refusal[0] = shared.ThreadProviderError("thread-provider-unavailable")
+        observer.reconcile(now=1006)
+        self.assertTrue(graph.reconciliation_complete)
+        self.assertEqual(sorted(row["state"] for row in graph.tasks(1006)), ["running", "unknown"])
+        refusal[0] = shared.RPCError("rpc-rejected")
+        observer.reconcile(now=1012)
+        self.assertFalse(graph.reconciliation_complete)
+        refusal[0] = None
+        observer.reconcile(now=1075)
+        self.assertTrue(graph.reconciliation_complete)
+        self.assertTrue(all(row["state"] == "running" for row in graph.tasks(1075)))
+
     def rpc(self, graph, loaded, thread_status="active", missing=False):
         class FakeRPC:
             calls = []
@@ -906,6 +1003,26 @@ class WebSocketTests(unittest.TestCase):
                 rpc.initialize()
         finally:
             rpc.close()
+
+    def test_rpc_classifies_only_the_three_structured_provider_errors_without_echoing_payload(self):
+        cases = [(-32600, name, shared.ThreadProviderError) for name in shared.PROVIDER_ERRORS]
+        cases += [(-32600, "other", shared.RPCError), (-32000, "modelProviderMismatch", shared.RPCError)]
+        def serve(connection):
+            for code, kind, _ in cases:
+                _, request = self.receive(connection)
+                self.send(connection, dict(id=request["id"], error=dict(code=code, message="PRIVATE_CONFIG",
+                                                                        data=dict(type=kind, provider="PRIVATE_ID"))))
+        path, errors = self.server(serve)
+        rpc = shared.RPC(path, lambda _: None)
+        try:
+            for _, _, error_type in cases:
+                with self.assertRaises(shared.RPCError) as raised:
+                    rpc.request("thread/read", dict(threadId="example"))
+                self.assertIs(type(raised.exception), error_type)
+                self.assertNotIn("PRIVATE", str(raised.exception))
+        finally:
+            rpc.close()
+        self.assertEqual(errors, [])
 
     def test_fragmented_message_and_ping(self):
         def serve(connection):

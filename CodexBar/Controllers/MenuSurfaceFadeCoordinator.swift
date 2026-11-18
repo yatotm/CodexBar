@@ -32,6 +32,11 @@ final class MenuSurfaceFadeCoordinator {
 
     func fadeIn(duration: TimeInterval, completion: @escaping () -> Void) {
         cancel()
+        guard duration > 0 else {
+            resetAlpha()
+            completion()
+            return
+        }
         fade(to: 1, duration: duration)
 
         completionTask = Task { @MainActor [weak self] in

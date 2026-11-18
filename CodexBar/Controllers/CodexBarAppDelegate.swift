@@ -12,7 +12,8 @@ final class CodexBarAppDelegate: NSObject, NSApplicationDelegate {
     let usageCenterViewModel = UsageCenterViewModel()
     lazy var codexHookSettings = CodexHookSettings(codexStatusService: codexStatusService)
     lazy var codexCLINotificationSettings = CodexCLINotificationSettings(
-        codexStatusService: codexStatusService
+        codexStatusService: codexStatusService,
+        connectionAvailability: viewModel.$codexConnectionInfo.map { $0 != nil }.eraseToAnyPublisher()
     )
     let taskGlowSettings = TaskGlowSettings()
     lazy var activityPresentation = ActivityPresentationModel(local: activityMonitor, usage: usageCenterViewModel)

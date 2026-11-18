@@ -18,6 +18,10 @@ Claude 继续使用 `ActivityCollector.py` 和原生日志/Hook，不请求 Anth
 
 新变化合并落盘，空闲时不反复写同一快照。已加载列表每 5 秒核对；活跃任务补查有每轮时间预算，空闲会话至少间隔 60 秒。
 
+`thread/closed`、`thread/archived` 和 `thread/deleted` 会撤下该线程的活动状态，保留已采集的历史与仍有活动的关联子任务。`thread/reverted` 先把受影响轮次标为待确认，读取回退后的轮次列表后再撤下已消失的轮次。跨越这些事件才返回的读取结果会丢弃。恢复的主任务按 `threadId` 和 `turnId` 匹配自身用量，子任务另行核对 `rootTurnId`。
+
+只有 RPC 错误码为 `-32600` 且 `data.type` 为 `modelProviderMismatch`、`modelProviderNotConfigured` 或 `modelProviderPolicyConflict` 时，才将该会话作为提供方不可用单独重试。已知受影响的任务显示待确认，其他已经核对的会话继续更新。
+
 ## 任务归属与等待语义
 
 根 thread 与根 turn 共同决定任务身份。子 Agent 汇总在主任务内，等待子 Agent 时主任务仍属于运行中。自动审核代理不成为主任务，也不延长其防睡眠时间。

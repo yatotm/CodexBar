@@ -10,7 +10,7 @@ Right-click or Control-click the menu bar icon and choose `Settings`, or press `
 | --- | --- | --- |
 | Theme | System, Light, or Dark across the menu, Settings, and Usage Center | System |
 | Main Panel Layout | Reorder Account, Tasks, Quota, Usage, Update Time, and Codex Service Status | Visible by default; Tasks requires a configured source |
-| Animation Effects | Animate quota bars and the heatmap when opening the panel | On |
+| Animation Effects | Animate quota bars, the heatmap, and menu panels when opening or resizing | On |
 | Launch at Login | Start CodexBar when you sign in to your Mac | Follows the system login-item state |
 | Automatically Check for Updates | Periodically check for CodexBar updates | Follows the current update setting |
 | Menu Bar Quota Indicator | Show the remaining Codex weekly allowance | 7d |
@@ -96,6 +96,7 @@ Automatic Reset runs independently of notifications. Configure result alerts in 
 | CodexBar Version / Check for Updates | Check for updates, or install and relaunch when an update is ready |
 | Release Notes | Open the current fork version's GitHub Release |
 | OpenAI Service Status | Open the public official status page |
+| Open source licenses | Read and select the bundled notices, GPLv3, and Sparkle license offline |
 | GitHub Project | Open this fork's project page |
 | Quit CodexBar | Exit the app |
 

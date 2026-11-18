@@ -459,7 +459,12 @@ final class RemoteActivityController: ObservableObject {
         if tasks[sourceID] != merged {
             tasks[sourceID] = merged
         }
-        let state = available ? "实时连接" : frame.sourceReason == "unsupported-server-version" ? "需升级 Codex 至 0.162.0" : "后台暂不可用"
+        let state = switch (available, frame.sourceReason) {
+        case (true, _): "实时连接"
+        case (false, "unsupported-server-version"): "需升级 Codex 至 0.162.0"
+        case (false, "socket-absent"): "等待 Codex 后台启动"
+        default: "后台暂不可用"
+        }
         setState(state, source: source, backend: backend)
         if available, complete {
             reconciledBackends.insert(key)

@@ -172,6 +172,7 @@ final class CodexNotificationService: NSObject {
             return send(
                 .taskWaiting(project: task.projectName, toolName: task.toolName),
                 sound: settings.taskWaitingSound,
+                enabledWhen: \.isTaskWaitingEnabled,
                 identifier: identifier,
                 isStillRelevant: { [weak self] in
                     guard let self, taskWaitingNotifications[taskID] == identifier else { return false }
@@ -190,7 +191,8 @@ final class CodexNotificationService: NSObject {
             }
             return send(
                 .taskCompleted(project: completion.projectName, duration: duration),
-                sound: settings.taskCompletionSound
+                sound: settings.taskCompletionSound,
+                enabledWhen: \.isTaskCompletionEnabled
             )
         }
     }
@@ -220,6 +222,7 @@ final class CodexNotificationService: NSObject {
                 body: task.project.isEmpty ? sourceName : "\(sourceName) · \(task.project)"
             ),
             sound: waiting ? settings.taskWaitingSound : settings.taskCompletionSound,
+            enabledWhen: waiting ? \.isTaskWaitingEnabled : \.isTaskCompletionEnabled,
             identifier: identifier,
             isStillRelevant: { [weak self] in
                 guard waiting else { return true }
@@ -446,6 +449,7 @@ final class CodexNotificationService: NSObject {
                 thresholdPercent: lowQuota.thresholdPercent
             ),
             sound: settings.lowQuotaSound,
+            enabledWhen: \.isLowQuotaEnabled,
             dedupKey: dedupKey,
             onSubmissionFailure: { [weak self] in
                 guard let self, quotaWindowObservations[stateKey]?.lifecycleToken == lifecycleToken,
@@ -486,6 +490,7 @@ final class CodexNotificationService: NSObject {
                     windowLabel: window.label
                 ),
                 sound: settings.quotaResetSound,
+                enabledWhen: \.isQuotaResetEnabled,
                 dedupKey: dedupKey,
                 onSubmissionFailure: { [weak self] in
                     guard let self,
@@ -512,6 +517,7 @@ final class CodexNotificationService: NSObject {
         send(
             .autoResetSucceeded(remainingCount: remainingCount),
             sound: settings.autoResetSound,
+            enabledWhen: \.isAutoResetEnabled,
             dedupKey: "autoResetSucceeded|\(dedupToken)"
         )
     }
@@ -527,6 +533,7 @@ final class CodexNotificationService: NSObject {
         send(
             .autoResetFailed(reason: reason),
             sound: settings.autoResetSound,
+            enabledWhen: \.isAutoResetEnabled,
             dedupKey: "autoResetFailed|\(dedupToken)|\(reason.rawValue)"
         )
     }
@@ -544,7 +551,8 @@ final class CodexNotificationService: NSObject {
 
         return await send(
             .lowBattery(percent: percent),
-            sound: settings.lowBatterySound
+            sound: settings.lowBatterySound,
+            enabledWhen: \.isLowBatteryEnabled
         )?.value ?? false
     }
 
@@ -559,7 +567,8 @@ final class CodexNotificationService: NSObject {
 
         return await send(
             .keepAliveLimit(durationText: durationText),
-            sound: settings.keepAliveLimitSound
+            sound: settings.keepAliveLimitSound,
+            enabledWhen: \.isKeepAliveLimitEnabled
         )?.value ?? false
     }
 
@@ -590,6 +599,7 @@ final class CodexNotificationService: NSObject {
             send(
                 .creditExpiry(count: groupedDates.count, expirationDate: date),
                 sound: settings.creditExpirySound,
+                enabledWhen: \.isCreditExpiryEnabled,
                 dedupKey: dedupKey
             )
         }
@@ -661,6 +671,7 @@ final class CodexNotificationService: NSObject {
     private func send(
         _ notification: CodexNotificationContent,
         sound: NotificationSoundOption,
+        enabledWhen: KeyPath<NotificationSettings, Bool>? = nil,
         identifier: String = UUID().uuidString,
         dedupKey: String? = nil,
         isStillRelevant: (() -> Bool)? = nil,
@@ -694,6 +705,7 @@ final class CodexNotificationService: NSObject {
             await self?.deliver(
                 request,
                 kind: kind,
+                enabledWhen: enabledWhen,
                 dedupKey: dedupKey,
                 isStillRelevant: isStillRelevant,
                 onSubmissionFailure: onSubmissionFailure,
@@ -706,6 +718,7 @@ final class CodexNotificationService: NSObject {
     private func deliver(
         _ request: UNNotificationRequest,
         kind: String,
+        enabledWhen: KeyPath<NotificationSettings, Bool>?,
         dedupKey: String?,
         isStillRelevant: (() -> Bool)?,
         onSubmissionFailure: (() -> Void)?,
@@ -717,7 +730,15 @@ final class CodexNotificationService: NSObject {
             }
         }
 
+        func isEnabled() -> Bool {
+            settings.canDeliver && (enabledWhen.map { settings[keyPath: $0] } ?? true)
+        }
+
         for _ in 0 ... max(0, retryCount) {
+            guard isEnabled() else {
+                onSubmissionFailure?()
+                return false
+            }
             guard isStillRelevant?() != false else {
                 let details = LogFields.joined(
                     "kind=\(kind)",
@@ -728,7 +749,7 @@ final class CodexNotificationService: NSObject {
             }
             do {
                 try await delivery.add(request)
-                guard isStillRelevant?() != false else {
+                guard isEnabled(), isStillRelevant?() != false else {
                     // 投递后任务状态又变了, 撤回避免用户看到过期提醒
                     let details = LogFields.joined(
                         "kind=\(kind)",

@@ -28,13 +28,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let popoverAnimationState = MenuSurfaceAnimationState()
     private let fallbackPanelAnimationState = MenuSurfaceAnimationState()
     private let activityCenterPresentationState = CodexActivityCenterPresentationState()
-    private let heatmapDetailPanelController = HeatmapDetailPanelController()
-    private let resetCreditsPanelController = ResetCreditsPanelController()
+    private lazy var heatmapDetailPanelController = HeatmapDetailPanelController(settings: mainPanelSettings)
+    private lazy var resetCreditsPanelController = ResetCreditsPanelController(settings: mainPanelSettings)
     private let activityPresentation: ActivityPresentationModel
     private let taskGlowSettings: TaskGlowSettings
     private lazy var activityCenterPanelController = ActivityCenterPanelController(
         activityPresentation: activityPresentation,
-        presentationState: activityCenterPresentationState
+        presentationState: activityCenterPresentationState, settings: mainPanelSettings
     )
     private var activeMenuSurface = ActiveMenuSurface.none
     private lazy var globalHotKeyController = GlobalHotKeyController { [weak self] in
@@ -659,7 +659,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         activeMenuSurface = .popover
 
         popoverAnimationState.allowsAnimations = true
-        menuSurfaceFadeCoordinator.prepareForFadeIn()
+        if mainPanelSettings.areEntranceAnimationsEnabled {
+            menuSurfaceFadeCoordinator.prepareForFadeIn()
+        }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         completeMenuSurfaceOpen()
     }
@@ -672,7 +674,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menuSurfaceState = .opening
         activeMenuSurface = .fallbackPanel
 
-        menuSurfaceFadeCoordinator.prepareForFadeIn()
+        if mainPanelSettings.areEntranceAnimationsEnabled {
+            menuSurfaceFadeCoordinator.prepareForFadeIn()
+        }
         fallbackPanelController.show()
         completeMenuSurfaceOpen()
     }
@@ -688,7 +692,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             }
         )
 
-        menuSurfaceFadeCoordinator.fadeIn(duration: Metrics.fadeInDuration) { [weak self] in
+        menuSurfaceFadeCoordinator.fadeIn(duration: mainPanelSettings.areEntranceAnimationsEnabled ? Metrics.fadeInDuration : 0) { [weak self] in
             guard let self, isActiveMenuSurfaceVisible else { return }
             menuSurfaceState = .shown
             // 淡入完成后刷新共享状态, 避免同时触发整个面板重算
@@ -859,7 +863,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             return
         }
 
-        guard animated else {
+        guard animated, mainPanelSettings.areEntranceAnimationsEnabled else {
             // 关闭菜单面板时短暂禁止辅助窗口抢回 key
             // 避免设置/日志窗口闪前
             suspendAuxiliaryWindowKeyFocus()
@@ -1129,15 +1133,15 @@ private extension StatusItemController {
             controller?.resizeContent(to: size)
             if usesPreferredContentSize {
                 guard popover.contentSize != size else { return }
-                popover.animates = popover.isShown
+                popover.animates = popover.isShown && mainPanelSettings.areEntranceAnimationsEnabled
                 NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.20
+                    context.duration = popover.animates ? 0.20 : 0
                     context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                     popover.contentSize = size
                 }
                 popover.animates = false
             } else {
-                fallbackPanelController.resizeContent(to: size)
+                fallbackPanelController.resizeContent(to: size, animated: mainPanelSettings.areEntranceAnimationsEnabled)
             }
         }
 

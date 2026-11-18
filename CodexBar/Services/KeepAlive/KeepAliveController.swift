@@ -113,7 +113,7 @@ final class KeepAliveController: ObservableObject {
     private var retryTask: Task<Void, Never>?
     private var requestTimeoutTask: Task<Void, Never>?
     private let helperRuntimeStatusMonitor = HelperRuntimeStatusMonitor()
-    private var retryAttempt = 0
+    private var sleepRetry = SleepPreventionRetry()
     private var helperRegistrationTask: Task<Void, Never>?
     private let helperPackageValidation = HelperPackageValidation()
     /// 与 hasRunningTasks 同理: 只经由派生状态影响 UI, 自己不发信号
@@ -743,16 +743,17 @@ final class KeepAliveController: ObservableObject {
         }
 
         guard wantsSleepDisabled else {
-            cancelRetryTask()
             if mayHaveHelperLease || isPreventingSleep {
                 applySleepPreventionRequested(false)
             } else {
+                cancelRetryTask()
                 releaseSleepPrevention()
             }
             return
         }
 
         if force {
+            cancelRetryTask()
             appliedSleepPreventionRequested = nil
         }
         applySleepPreventionRequested(true)
@@ -851,8 +852,16 @@ final class KeepAliveController: ObservableObject {
         _ requested: Bool,
         force: Bool = false,
         isObservation: Bool = false,
+        isRetry: Bool = false,
         completion: ((Bool) -> Void)? = nil
     ) {
+        if force || (sleepRetry.requested != nil && sleepRetry.requested != requested) {
+            cancelRetryTask()
+        }
+        guard sleepRetry.allowsRequest(isRetry: isRetry) else {
+            completion?(false)
+            return
+        }
         guard force || appliedSleepPreventionRequested != requested else {
             completion?(true)
             return
@@ -1357,7 +1366,7 @@ final class KeepAliveController: ObservableObject {
         retryTask?.cancel()
         retryTask = nil
         // 成功或任务结束都会走到这里, 重试预算随之重置
-        retryAttempt = 0
+        sleepRetry = SleepPreventionRetry()
     }
 
     private func cancelHelperRegistrationTask() {
@@ -1379,7 +1388,7 @@ final class KeepAliveController: ObservableObject {
 
         // 每次重试都会重建特权连接并以 root 拉起 pmset
         // 固定 2 秒无上限重试会让持续失败的 helper 变成无限循环
-        guard retryAttempt < KeepAliveHelperConfiguration.sleepToggleRetryDelays.count else {
+        guard let delay = sleepRetry.nextDelay(for: requested, delays: KeepAliveHelperConfiguration.sleepToggleRetryDelays) else {
             AppLog.keepAlive.error(
                 "KeepAlive 切换重试已放弃: attempts=\(KeepAliveHelperConfiguration.sleepToggleRetryDelays.count)"
             )
@@ -1387,9 +1396,7 @@ final class KeepAliveController: ObservableObject {
             return
         }
 
-        let delay = KeepAliveHelperConfiguration.sleepToggleRetryDelays[retryAttempt]
-        retryAttempt += 1
-        let attempt = retryAttempt
+        let attempt = sleepRetry.attempt
         let wait = LogDuration.seconds(delay)
         let details = LogFields.joined(
             "attempt=\(attempt)",
@@ -1413,7 +1420,7 @@ final class KeepAliveController: ObservableObject {
                 return
             }
             appliedSleepPreventionRequested = nil
-            applySleepPreventionRequested(requested)
+            applySleepPreventionRequested(requested, isRetry: true)
         }
     }
 
