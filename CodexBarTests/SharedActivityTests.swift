@@ -225,6 +225,29 @@ struct SharedActivityTests {
         #expect(monitor.snapshot.runningTasks.first?.pendingInputCount == 1)
     }
 
+    @Test func remoteClaudeShellStaysInTheParentTask() {
+        let source = UsageSource(id: "remote", name: "remote", address: "remote", includesClaude: true)
+        let now = Date(timeIntervalSince1970: 1200)
+        let task = RemoteActivityTask(
+            id: String(repeating: "a", count: 64), provider: "claude", state: "running", project: "project",
+            updatedAt: 1100, startedAt: 1000, modelName: "claude-model", eventName: "PreToolUse",
+            toolName: "Bash", activeSubagentCount: 0, stage: "background-shell"
+        )
+        for scope in [UsageMenuScope.all, .claude, .codex] {
+            let snapshot = ActivityPresentationModel.merge(
+                local: .empty, tasks: [source.id: [task]], states: [source.id: "实时连接"],
+                enabled: [source.id], sources: [source], scope: scope, now: now
+            )
+            #expect(snapshot.waitingTasks.isEmpty)
+            #expect(snapshot.runningTasks.count == (scope == .codex ? 0 : 1))
+            if let row = snapshot.runningTasks.first {
+                #expect(row.machineName == source.name)
+                #expect(row.activeSubagentCount == 0)
+                #expect(row.stageTitle == String(localized: "activity.stage.background-shell", defaultValue: "后台 Shell 运行中"))
+            }
+        }
+    }
+
     @Test func codexDisconnectDoesNotHideHealthyClaudeOnSameHost() {
         var source = UsageSource.local
         source.transport = .ssh

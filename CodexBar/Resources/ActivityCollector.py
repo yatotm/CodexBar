@@ -13,6 +13,7 @@ import select
 import shlex
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -148,6 +149,22 @@ def background_agents(payload):
     return result
 
 
+def background_shell(payload):
+    tasks = payload.get("background_tasks")
+    if not isinstance(tasks, list) or len(tasks) > 1000:
+        return None
+    complete = True
+    for task in tasks:
+        if not isinstance(task, dict) or not isinstance(task.get("type"), str):
+            complete = False
+        elif task["type"] == "shell":
+            if identifier(task.get("id")) and task.get("status") in ("running", "pending"):
+                return True
+            if task.get("status") not in ("completed", "failed", "killed", "cancelled"):
+                complete = False
+    return False if complete else None
+
+
 def record(db, payload, provider, now=None):
     event = payload.get("hook_event_name")
     session = payload.get("session_id")
@@ -178,7 +195,9 @@ def record(db, payload, provider, now=None):
     pid, birth = parent_identity(provider)
     terminal = event in ("Stop", "StopFailure", "SessionEnd", "Interrupt")
     subagent_event = event in ("SubagentStart", "SubagentStop")
-    background = background_agents(payload) if provider == "claude" and event in ("Stop", "SubagentStop") else None
+    registry_event = provider == "claude" and event in ("Stop", "SubagentStop")
+    background = background_agents(payload) if registry_event else None
+    shell = background_shell(payload) if registry_event else None
     with db:
         # 并发 Hook 先获得写锁再读取旧状态, 避免相互覆盖审批和轮次
         db.execute("BEGIN IMMEDIATE")
@@ -192,14 +211,20 @@ def record(db, payload, provider, now=None):
         if background is not None:
             background.difference_update(closed_agents)
         # 官方后台注册表可以恢复旧采集器提前清空的子任务, 孤立终态仍不创建任务
-        recovering_children = provider == "claude" and previous and previous[0] == "completed" and (
-            bool(background - {agent}) if background is not None else event == "SubagentStart" and agent is not None)
+        previous_event = details.get("eventName")
+        was_shell = previous_event == "BackgroundShell"
+        if was_shell and previous:
+            details.setdefault("pendingStop", previous[4])
+        has_shell = was_shell if shell is None else shell
+        recovering_children = provider == "claude" and previous and previous[0] == "completed" and not details.get("sessionEnded") and (
+            shell is True or (bool(background - {agent}) if background is not None else event == "SubagentStart" and agent is not None))
         if recovering_children:
             details["pendingStop"] = previous[4]
         known_agents = {row[0] for row in db.execute("SELECT agent FROM agents WHERE parent=?", (task_id,))} if provider == "claude" else set()
         untracked_stop = provider == "claude" and event == "SubagentStop" and agent not in known_agents
         # 提示建议等内部 Agent 只有 Stop, 注册表没有新信息时不覆盖真实任务阶段
-        if untracked_stop and (background is None or (background <= known_agents and not recovering_children)):
+        shell_changed = shell is not None and shell != was_shell and (details.get("pendingStop") is not None or recovering_children)
+        if untracked_stop and not shell_changed and (background is None or (background <= known_agents and not recovering_children)):
             return
         if terminal and (not previous or (previous[0] not in ("running", "waiting", "unknown") and not recovering_children)):
             return
@@ -244,7 +269,7 @@ def record(db, payload, provider, now=None):
             if not db.execute("SELECT 1 FROM agents WHERE parent=? AND agent=?", (task_id, agent)).fetchone():
                 if provider == "codex" and previous and root_turn and root_turn == old_turn:
                     db.execute("INSERT OR IGNORE INTO agents VALUES(?,?)", (task_id, agent))
-                elif not (provider == "claude" and event == "SubagentStop" and background is not None):
+                elif not (provider == "claude" and event == "SubagentStop" and (background is not None or shell_changed)):
                     return
         if agent and event == "SubagentStart":
             if db.execute("SELECT COUNT(*) FROM agents WHERE parent=?", (task_id,)).fetchone()[0] < 1000:
@@ -292,7 +317,7 @@ def record(db, payload, provider, now=None):
                     waits.pop(owner)
         state = "waiting" if any(provider == "claude" or reviewers.get(key) == "user" for key in waits) else "unknown" if waits else "running"
         has_children = provider == "claude" and db.execute("SELECT 1 FROM agents WHERE parent=? LIMIT 1", (task_id,)).fetchone()
-        started = previous[1] if previous and (event != "UserPromptSubmit" or has_children) else now
+        started = previous[1] if previous and (event != "UserPromptSubmit" or has_children or previous_event in ("BackgroundShell", "ShellResumed")) else now
         if not previous or started != previous[1]:
             token_paths = []
             token_agents = []
@@ -338,7 +363,7 @@ def record(db, payload, provider, now=None):
             waits.pop(owner, None)
             state = "waiting" if any(provider == "claude" or reviewers.get(key) == "user" for key in waits) else "unknown" if waits else "running"
             event = "SubagentStop"
-        elif event == "SessionEnd" and (provider == "codex" or (details.get("pendingStop") is not None and not has_children)):
+        elif event == "SessionEnd" and (provider == "codex" or (details.get("pendingStop") is not None and not has_children and not has_shell)):
             details.setdefault("pendingStop", now)
             details["sessionEnded"] = True
         elif event in ("SessionEnd", "Interrupt", "StopFailure") or (event == "PostToolUseFailure" and payload.get("is_interrupt") is True):
@@ -369,7 +394,17 @@ def record(db, payload, provider, now=None):
         if untracked_stop:
             event = "SubagentStart" if recovering_children else details.get("eventName", "SubagentStart")
             tool = details.get("toolName")
-        details.update(observedAt=now, eventName="PermissionRequest" if waits else event,
+            if was_shell and shell is False:
+                event = "SubagentStop"
+        if waits:
+            event = "PermissionRequest"
+        if has_shell and state in ("running", "waiting") and details.get("pendingStop") is not None:
+            event = "BackgroundShell"
+            # 旧的流读取器也会处理 pendingStop, 后台工作期间不能启动完成倒计时
+            details.pop("pendingStop")
+            if not waits:
+                tool = None
+        details.update(observedAt=now, eventName=event,
                        toolName=tool, waits=waits, reviewers=reviewers, waitStarted=wait_started,
                        stateChangedAt=changed_at)
         if provider == "claude":
@@ -568,8 +603,101 @@ class CodexTerminalReader:
                 task["isHistoricalTerminal"] = True
 
 
-def reconcile(db, now=None, terminal_reader=None):
+def claude_session_states(home, now):
+    states = {}
+    try:
+        domain = "darwin" if sys.platform == "darwin" else "linux:" + Path("/etc/machine-id").read_text().strip() + ":" + os.readlink("/proc/self/ns/pid")
+        with os.scandir(home / "sessions") as files:
+            for index, entry in enumerate(files):
+                if index >= 1024 or len(states) >= 256:
+                    break
+                if not re.fullmatch(r"[1-9][0-9]{0,9}\.json", entry.name):
+                    continue
+                try:
+                    with os.fdopen(os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+                        info = os.fstat(stream.fileno())
+                        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > 16384:
+                            continue
+                        data = stream.read(16385)
+                    if len(data) > 16384:
+                        continue
+                    row = json.loads(data)
+                    if not isinstance(row, dict) or row.get("spare") or row.get("pidDomain") != domain:
+                        continue
+                    pid, birth, session = row.get("pid"), row.get("procStart"), row.get("sessionId")
+                    at = event_time(row.get("statusUpdatedAt"))
+                    if (type(pid) is not int or pid != int(entry.name[:-5]) or not isinstance(birth, str) or not 0 < len(birth) <= 80
+                            or not isinstance(session, str) or not 0 < len(session) <= 512 or not at or not 0 < at <= now + 2):
+                        continue
+                    key = hashlib.sha256(("claude\0" + session).encode()).hexdigest()
+                    if key not in states or at > states[key][0]:
+                        states[key] = (at, pid, birth, row.get("status"))
+                except (OSError, ValueError, RecursionError):
+                    continue
+    except OSError:
+        pass
+    return states
+
+
+def reconcile_claude_shells(db, home, now):
+    for task_id, (at, pid, birth, status) in claude_session_states(home, now).items():
+        if status not in ("shell", "idle", "busy"):
+            continue
+        row = db.execute("SELECT t.state,t.started,t.updated,d.payload,t.pid,t.birth FROM tasks t JOIN details d USING(id) "
+                         "WHERE t.id=? AND t.provider='claude' AND t.state IN ('running','unknown','completed')", (task_id,)).fetchone()
+        if not row:
+            continue
+        state, started, updated, raw, old_pid, old_birth = row
+        details = json.loads(raw)
+        if details.get("observedAt") != updated or details.get("sessionEnded") or details.get("waits") or at < started:
+            continue
+        event = details.get("eventName")
+        if status == "shell":
+            # 只接回已暂停的主回复, 旧会话状态不能覆盖新一轮工具或审批
+            same_phase = event == "BackgroundShell" and state == "running"
+            if (same_phase and (pid, birth) == (old_pid, old_birth)) or (not same_phase and at < updated):
+                continue
+            if event not in ("Stop", "SubagentStop", "BackgroundShell", "ShellResumed"):
+                continue
+            if state != "completed" and event in ("Stop", "SubagentStop") and details.get("pendingStop") is None:
+                continue
+            next_state, next_event = "running", "BackgroundShell"
+            details.pop("pendingStop", None)
+        else:
+            if event not in ("BackgroundShell", "ShellResumed") or at < updated:
+                continue
+            if status == "busy":
+                if event == "ShellResumed" and state == "running":
+                    continue
+                next_state, next_event = "running", "ShellResumed"
+                details.pop("pendingStop", None)
+            elif details.get("activeSubagentCount"):
+                next_state, next_event = "running", "SubagentStart"
+                details.setdefault("pendingStop", at)
+            else:
+                next_state, next_event = "completed", "Stop"
+                details.pop("pendingStop", None)
+        # 后台会话的 Hook 祖先进程可能是共享监督进程, 用注册表里的工作进程及其启动时间核实身份
+        identity = process_identity(pid)
+        if not identity or identity[1].split() != birth.split():
+            continue
+        observed = max(updated, min(now, at))
+        if event != next_event or state != next_state:
+            details["stateChangedAt"] = observed
+        details.update(eventName=next_event, toolName=None, observedAt=observed)
+        with db:
+            result = db.execute("UPDATE tasks SET state=?,updated=?,pid=?,birth=? WHERE id=? AND state=? AND updated=? "
+                                "AND EXISTS(SELECT 1 FROM details WHERE id=? AND payload=?)",
+                                (next_state, observed, pid, identity[1], task_id, state, updated, task_id, raw))
+            if result.rowcount:
+                db.execute("UPDATE details SET payload=? WHERE id=?", (json.dumps(details), task_id))
+                db.execute("UPDATE meta SET revision=revision+1")
+
+
+def reconcile(db, now=None, terminal_reader=None, claude_home=None):
     now = time.time() if now is None else now
+    if claude_home is not None:
+        reconcile_claude_shells(db, claude_home, now)
     rows = db.execute("SELECT t.id,t.provider,t.state,t.pid,t.birth,t.updated,t.started,d.payload FROM tasks t "
                       "LEFT JOIN details d ON d.id=t.id WHERE t.state IN ('running','waiting','unknown')").fetchall()
     # 文件和进程检查在写事务外执行, 不阻塞同时到达的 Hook
@@ -592,7 +720,7 @@ def reconcile(db, now=None, terminal_reader=None):
             child_count = db.execute("SELECT COUNT(*) FROM agents WHERE parent=?", (task_id,)).fetchone()[0] if provider == "claude" else 0
             completed_at = max(pending, updated) if provider == "claude" and details.get("eventName") == "SubagentStop" else pending
             if provider == "claude":
-                terminal = ("completed", completed_at) if child_count == 0 and now - completed_at >= 2 else None
+                terminal = ("completed", completed_at) if child_count == 0 and details.get("eventName") != "BackgroundShell" and now - completed_at >= 2 else None
             else:
                 terminal = terminal_reader.terminal(task_id, details, started, now) if terminal_reader else codex_terminal(details, started, now)
             if terminal:
@@ -668,7 +796,13 @@ def current_details(payload, updated):
     if details.get("observedAt") != updated:
         return {}
     result = {key: details[key] for key in ("eventName", "toolName", "activeSubagentCount", "effort", "stateChangedAt") if key in details}
-    if details.get("pendingStop") is not None:
+    if result.get("eventName") == "BackgroundShell" and details.get("waits"):
+        result["eventName"] = "PermissionRequest"
+    elif result.get("eventName") == "BackgroundShell":
+        result.update(eventName="PreToolUse", toolName="Bash", stage="background-shell")
+    elif result.get("eventName") == "ShellResumed":
+        result.update(eventName="UserPromptSubmit", stage="thinking")
+    elif details.get("pendingStop") is not None:
         if (details.get("activeSubagentCount") or 0) > 0:
             if result.get("eventName") == "Stop":
                 result["eventName"] = "SubagentStart"
@@ -1021,7 +1155,7 @@ class ChangeWatcher:
             os.close(descriptor)
 
 
-def stream(root, db):
+def stream(root, db, claude_home=None):
     watcher = ChangeWatcher(root)
     token_reader = ActivityTokenReader()
     terminal_reader = CodexTerminalReader()
@@ -1033,7 +1167,7 @@ def stream(root, db):
         while True:
             now = time.monotonic()
             if now >= next_reconcile:
-                reconcile(db, terminal_reader=terminal_reader)
+                reconcile(db, terminal_reader=terminal_reader, claude_home=claude_home)
                 next_reconcile = now + 60
             frame = snapshot(db, token_reader, terminal_reader)
             next_reconcile = min(next_reconcile, now + pending_stop_delay(frame))
@@ -1164,9 +1298,14 @@ def managed_command(candidate, command):
 
 def configure(args):
     script = Path.home() / ".local/share/codexbar-usage/ActivityCollector.py"
-    if args.action == "install":
+    if args.action in ("install", "refresh"):
+        if args.action == "refresh" and (script.is_symlink() or not script.is_file() or script.stat().st_uid != os.getuid()):
+            return
         code = globals().get("CODEXBAR_SCRIPT_SOURCE") or Path(__file__).read_bytes()
-        atomic_write(script, code)
+        if args.action == "install" or script.stat().st_size != len(code) or script.read_bytes() != code:
+            atomic_write(script, code)
+        if args.action == "refresh":
+            return
     for provider in args.providers.split(","):
         home = Path(os.path.expanduser(getattr(args, provider + "_home") or os.environ.get(
             "CODEX_HOME" if provider == "codex" else "CLAUDE_CONFIG_DIR", str(Path.home() / ("." + provider)))))
@@ -1216,7 +1355,7 @@ def configure(args):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("record", "stream", "install", "uninstall"))
+    parser.add_argument("action", choices=("record", "stream", "install", "uninstall", "refresh"))
     parser.add_argument("--provider", choices=("codex", "claude"), default="codex")
     parser.add_argument("--providers", default="codex")
     parser.add_argument("--codex-home", default="")
@@ -1224,7 +1363,7 @@ def main():
     args = parser.parse_args()
     if set(args.providers.split(",")) - {"codex", "claude"}:
         parser.error("无效工具类型")
-    if args.action in ("install", "uninstall"):
+    if args.action in ("install", "uninstall", "refresh"):
         configure(args)
         print('{"schema":1,"ok":true}')
         return
@@ -1235,7 +1374,8 @@ def main():
             if len(data) <= LIMIT:
                 record(db, json.loads(data), args.provider)
         else:
-            stream(directory(), db)
+            home = args.claude_home or os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude"
+            stream(directory(), db, Path(home).expanduser())
     finally:
         db.close()
 

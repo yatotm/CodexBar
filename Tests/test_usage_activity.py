@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import select
 import subprocess
 import sys
@@ -222,6 +223,126 @@ class ActivityTests(unittest.TestCase):
         raw=self.db.execute('SELECT payload FROM details').fetchone()[0]
         self.assertNotIn("private-description", raw)
         self.assertNotIn("private-command", raw)
+
+    def test_background_shell_keeps_one_claude_task_until_main_resumes(self):
+        shell = dict(type="shell", id="shell-job", status="running", command="private command")
+        self.emit("UserPromptSubmit")
+        self.emit("Stop", 1005, background_tasks=[shell])
+        activity.reconcile(self.db, 1065)
+        task = self.task()
+        self.assertEqual((task["provider"], task["state"], task["stage"], task["activeSubagentCount"]),
+                         ("claude", "running", "background-shell", 0))
+        self.assertEqual(len(activity.snapshot(self.db)["tasks"]), 1)
+        raw = self.db.execute("SELECT payload FROM details").fetchone()[0]
+        self.assertNotIn("pendingStop", json.loads(raw))
+        for private in ("shell-job", "private command"):
+            self.assertNotIn(private, raw)
+        self.emit("UserPromptSubmit", 1100)
+        self.assertEqual((self.task()["id"], self.task()["startedAt"]), (task["id"], task["startedAt"]))
+        self.assertNotIn("stage", self.task())
+        self.emit("Stop", 1110, background_tasks=[])
+        activity.reconcile(self.db, 1112)
+        self.assertEqual((self.task()["state"], self.task()["updatedAt"]), ("completed", 1110))
+
+    def test_background_shell_and_subagent_approval_have_independent_lifetimes(self):
+        self.emit("UserPromptSubmit")
+        self.emit("SubagentStart", 1001, agent_id="child")
+        self.emit("Stop", 1002, background_tasks=[dict(type="subagent", id="child", status="running"),
+                                                  dict(type="shell", id="job", status="running")])
+        self.emit("PermissionRequest", 1003, agent_id="child", tool_name="Edit", tool_use_id="call")
+        self.assertEqual((self.task()["state"], self.task()["eventName"], self.task()["toolName"]), ("waiting", "PermissionRequest", "Edit"))
+        self.emit("PostToolUse", 1004, agent_id="child", tool_name="Edit", tool_use_id="call")
+        self.emit("SubagentStop", 1005, agent_id="child")
+        activity.reconcile(self.db, 1010)
+        self.assertEqual((self.task()["state"], self.task()["stage"], self.task()["activeSubagentCount"]), ("running", "background-shell", 0))
+        self.emit("SessionEnd", 1011)
+        self.assertEqual(self.task()["state"], "ended")
+
+    def session_status(self, home, status, at, **extra):
+        pid = os.getpid()
+        domain = "darwin" if sys.platform == "darwin" else "linux:" + Path("/etc/machine-id").read_text().strip() + ":" + os.readlink("/proc/self/ns/pid")
+        fields = dict(sessionId="session", pid=pid, pidDomain=domain, procStart=activity.process_identity(pid)[1],
+                      status=status, statusUpdatedAt=at * 1000)
+        path = home / "sessions" / (str(pid) + ".json")
+        path.parent.mkdir(exist_ok=True, parents=True)
+        path.write_text(json.dumps(dict(fields, **extra)))
+        return path
+
+    def test_live_shell_registry_recovers_old_completion_and_observes_automatic_resume(self):
+        home = Path(self.temp.name) / "claude"
+        start = 1800000000
+        self.emit("UserPromptSubmit", start)
+        self.emit("Stop", start + 5)
+        activity.reconcile(self.db, start + 8)
+        before = self.task()
+        self.assertEqual(before["state"], "completed")
+        self.session_status(home, "shell", start + 6)
+        activity.reconcile(self.db, start + 3600, claude_home=home)
+        self.assertEqual((self.task()["id"], self.task()["startedAt"], self.task()["stage"]),
+                         (before["id"], start, "background-shell"))
+        revision = activity.snapshot(self.db)["revision"]
+        activity.reconcile(self.db, start + 3700, claude_home=home)
+        self.assertEqual((activity.snapshot(self.db)["revision"], self.task()["updatedAt"]), (revision, start + 6))
+        self.session_status(home, "busy", start + 3800)
+        activity.reconcile(self.db, start + 3801, claude_home=home)
+        self.assertEqual((self.task()["state"], self.task()["stage"]), ("running", "thinking"))
+        self.session_status(home, "idle", start + 3810)
+        activity.reconcile(self.db, start + 3820, claude_home=home)
+        self.assertEqual((self.task()["state"], self.task()["updatedAt"]), ("completed", start + 3810))
+
+    def test_stale_foreign_or_invalid_worker_does_not_resurrect_a_task(self):
+        home = Path(self.temp.name) / "claude"
+        start = 1800000000
+        self.emit("UserPromptSubmit", start)
+        self.emit("Stop", start + 10, background_tasks=[])
+        activity.reconcile(self.db, start + 13)
+        before = self.task()
+        for fields in [dict(statusUpdatedAt=(start + 1) * 1000), dict(procStart="stale"), dict(pidDomain="another-host"),
+                       dict(sessionId="another-session"), dict(spare=True), dict(statusUpdatedAt=(start + 3000) * 1000)]:
+            with self.subTest(fields=fields):
+                self.session_status(home, "shell", start + 11, **fields)
+                activity.reconcile(self.db, start + 60, claude_home=home)
+                self.assertEqual(self.task(), before)
+        path = self.session_status(home, "shell", start + 11)
+        target = path.with_suffix(".key")
+        path.rename(target)
+        path.symlink_to(target)
+        activity.reconcile(self.db, start + 60, claude_home=home)
+        self.assertEqual(self.task(), before)
+
+    def test_shell_does_not_create_orphan_or_survive_explicit_terminal_registry(self):
+        shell = dict(id="job", type="shell", status="running")
+        self.emit("Stop", 1000, background_tasks=[shell])
+        self.assertFalse(activity.snapshot(self.db)["tasks"])
+        self.emit("UserPromptSubmit", 1001)
+        self.emit("Stop", 1002, background_tasks=[shell])
+        self.emit("SubagentStop", 1003, agent_id="internal", background_tasks=[dict(shell, status="killed")])
+        activity.reconcile(self.db, 1005)
+        self.assertEqual((self.task()["state"], self.task()["updatedAt"]), ("completed", 1003))
+
+    def test_collector_refresh_only_updates_existing_managed_script(self):
+        home = Path(self.temp.name)
+        script = home / ".local/share/codexbar-usage/ActivityCollector.py"
+        settings = home / ".claude/settings.json"
+        settings.parent.mkdir()
+        original = b'{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"user-handler"}]}]}}'
+        settings.write_bytes(original)
+        args = SimpleNamespace(action="refresh")
+        with patch.object(activity.Path, "home", return_value=home), patch.dict(activity.__dict__, CODEXBAR_SCRIPT_SOURCE=b"updated"):
+            activity.configure(args)
+            self.assertFalse(script.exists())
+            script.parent.mkdir(parents=True)
+            script.write_bytes(b"previous")
+            activity.configure(args)
+            self.assertEqual(script.read_bytes(), b"updated")
+            inode = script.stat().st_ino
+            activity.configure(args)
+            self.assertEqual(script.stat().st_ino, inode)
+            script.unlink()
+            script.symlink_to(settings)
+            activity.configure(args)
+            self.assertTrue(script.is_symlink())
+            self.assertEqual(settings.read_bytes(), original)
 
     def test_claude_subagent_stop_registry_recovers_legacy_premature_completion(self):
         self.emit("UserPromptSubmit")

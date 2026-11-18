@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import os
 
 nonisolated struct RemoteActivityTask: Decodable, Identifiable, Equatable, Sendable {
     let id: String
@@ -153,6 +154,23 @@ nonisolated enum ActivityStreamClient {
     }
 
     static func configure(source: UsageSource, backend: ActivityBackend, install: Bool) async throws {
+        try await configure(source: source, backend: backend, action: install ? "install" : "uninstall")
+    }
+
+    static func prepare(source: UsageSource, backend: ActivityBackend) async throws {
+        if backend == .sharedCodex {
+            try await configure(source: source, backend: backend, action: "install")
+        } else {
+            do {
+                try await configure(source: source, backend: backend, action: "refresh")
+            } catch {
+                try Task.checkCancellation()
+                AppLog.app.notice("Claude 采集脚本未刷新, 继续使用已安装版本")
+            }
+        }
+    }
+
+    private static func configure(source: UsageSource, backend: ActivityBackend, action: String) async throws {
         let resource = backend == .sharedCodex ? "SharedCodexCollector" : "ActivityCollector"
         guard source.validationError == nil, source.transport != .https,
               let url = Bundle.main.url(forResource: resource, withExtension: "py") else {
@@ -160,12 +178,12 @@ nonisolated enum ActivityStreamClient {
         }
         let code = try await Task.detached { try Data(contentsOf: url) }.value
         let bootstrap = "import sys; CODEXBAR_SCRIPT_SOURCE=sys.stdin.buffer.read(1048576); exec(compile(CODEXBAR_SCRIPT_SOURCE,'\(resource).py','exec'))"
-        var arguments = ["python3", "-c", bootstrap, install ? "install" : "uninstall"]
+        var arguments = ["python3", "-c", bootstrap, action]
         if backend == .sharedCodex {
             if !source.codexHome.isEmpty {
                 arguments += ["--codex-home", source.codexHome]
             }
-            if install {
+            if action == "install" {
                 arguments.append("--retire-legacy-hooks")
             }
         } else {
@@ -217,9 +235,10 @@ nonisolated enum ActivityStreamClient {
         let process = Process()
         let input = Pipe(), output = Pipe()
         process.executableURL = URL(fileURLWithPath: source.transport == .local ? python : "/usr/bin/ssh")
+        let arguments = backend == .claudeHooks && !source.claudeHome.isEmpty ? ["stream", "--claude-home", source.claudeHome] : ["stream"]
         process.arguments = source.transport == .local
-            ? [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(backend.installedScript).path, "stream"]
-            : sshArguments(source, command: "exec python3 \"$HOME/\(backend.installedScript)\" stream")
+            ? [FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(backend.installedScript).path] + arguments
+            : sshArguments(source, command: "exec python3 \"$HOME/\(backend.installedScript)\" " + arguments.map(quote).joined(separator: " "))
         process.environment = CodexCLIResolver.environment
         process.standardInput = input
         process.standardOutput = output
@@ -389,8 +408,8 @@ final class RemoteActivityController: ObservableObject {
                 setState("正在连接", source: source, backend: backend)
                 let started = ContinuousClock.now
                 do {
-                    if backend == .sharedCodex, !preparedBackends.contains(key) {
-                        try await ActivityStreamClient.configure(source: source, backend: backend, install: true)
+                    if !preparedBackends.contains(key) {
+                        try await ActivityStreamClient.prepare(source: source, backend: backend)
                         try Task.checkCancellation()
                         guard generations[key] == generation else { return }
                         preparedBackends.insert(key)

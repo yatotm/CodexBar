@@ -218,6 +218,7 @@ final class ActivityPresentationModel: ObservableObject {
         case "recovering-auth": String(localized: "activity.stage.recovering-auth", defaultValue: "恢复登录")
         case "retrying": String(localized: "activity.stage.retrying", defaultValue: "正在重试")
         case "agent-waiting": String(localized: "activity.stage.agent-waiting", defaultValue: "子任务运行中")
+        case "background-shell": String(localized: "activity.stage.background-shell", defaultValue: "后台 Shell 运行中")
         default: nil
         }
     }

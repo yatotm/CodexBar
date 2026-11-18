@@ -29,3 +29,5 @@ Protection only considers healthy local running tasks. Heartbeats renew coverage
 The old Hook/tail state machine remains for historical compatibility and regression tests; production explicitly selects the shared backend.
 
 Each host retires its live turns on explicit close, archive, and deletion events. A revert triggers a fresh turn scan, and replies from before that event are discarded. Running child tasks retain their parent identity. A resumed primary turn matches its own token counts by thread and turn. Structured provider errors isolate the affected thread so verified peers can continue reporting.
+
+Claude background shells stay on the parent task while it waits. Stop hooks supply the in-flight shell status. On reconnect or heartbeat, the collector can recover a prematurely completed row from a matching live Claude worker under `sessions/<pid>.json`. It checks the session ID, process domain and start time. Only the stage is sent to the Mac. Codex usage written by a nested `codex exec` is counted from its own rollout.

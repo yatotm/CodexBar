@@ -8,6 +8,8 @@ Codex 的正式运行路径使用每台机器自己的共享后台，最低实�
 
 Claude 继续使用 `ActivityCollector.py` 和原生日志/Hook，不请求 Anthropic。两者在 Mac 复用同一任务卡片、任务中心、机器标签和通知外观。
 
+Claude 的 `Stop` 和 `SubagentStop` 可通过 `background_tasks` 报告仍在执行的 shell。采集器把它归到原会话，单独统计子 Agent 和审批。连接或保活时，只读当前 Claude 配置目录下的 `sessions/<pid>.json`，按会话、机器、PID 和进程启动时间核对。已提前完成的记录可以按 `shell` 状态恢复，主会话重新工作或空闲时再切换阶段。传到 Mac 的只有任务阶段，不包含命令或输出。[Claude Stop Hook](https://code.claude.com/docs/en/hooks#stop-input)
+
 ## 快照与连接
 
 `RemoteActivityController` 的连接键包含来源 ID 与提供方。同一机器的 Codex 和 Claude 有独立的健康状态、重试与代次；某一端失败不能把另一端标为失联。

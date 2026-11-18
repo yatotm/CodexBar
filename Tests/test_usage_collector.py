@@ -261,6 +261,17 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(self.records("activity")[0]["state"], "completed")
         self.assertEqual(self.records("duration")[0]["durationMs"], 123)
 
+    def test_exec_rollout_is_counted_as_codex_with_a_separate_claude_parent(self):
+        response = row("token_usage_record", dict(response_id="nested-response", usage=dict(input_tokens=80, cached_input_tokens=60, output_tokens=7)))
+        self.write([row("session_meta", dict(id="nested", source="exec", originator="codex_exec", model_provider="openai")),
+                    row("turn_context", dict(model="gpt-6.2-astra", auth_mode="chatgpt")), response, response, token_count(80)])
+        self.write([claude_message()], self.claude / "projects/parent.jsonl")
+        self.scan()
+        rows = self.records()
+        self.assertCountEqual([r["provider"] for r in rows], ["codex", "claude"])
+        child = next(r for r in rows if r["provider"] == "codex")
+        self.assertEqual((child["auth"], child["input"], child["cacheRead"], child["output"]), ("oauth", 80, 60, 7))
+
     def test_bad_lines_symlinks_and_retention(self):
         old = token_count(100)
         old["timestamp"] = "2020-01-01T00:00:00Z"

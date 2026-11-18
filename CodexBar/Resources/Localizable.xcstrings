@@ -673,6 +673,22 @@
         }
       }
     },
+    "activity.stage.background-shell" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Background shell running"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台 Shell 运行中"
+          }
+        }
+      }
+    },
     "activity.stage.processing" : {
       "localizations" : {
         "en" : {
