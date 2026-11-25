@@ -143,6 +143,7 @@ nonisolated struct GeminiValuationEvidence: Codable {
     var complete: Bool?
     var generatedAt: Double?
     var scannedAt: Double?
+    var accountKey: String?
     var planTier: String?
     var truncated: Bool?
     var windows: [UsageObservedWindow]

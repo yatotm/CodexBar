@@ -8,9 +8,17 @@ struct UsagePeriodCard<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @State private var isExpanded = false
     @State private var isHovered = false
+    @Environment(\.colorScheme) private var colorScheme
 
-    private var status: String {
+    private var statusTitle: String {
         period.earlyReset ? "提前重置" : period.end > Date() ? "进行中" : "已结束"
+    }
+
+    private var statusColor: Color {
+        if period.earlyReset {
+            return .orange
+        }
+        return period.end > Date() ? ControlCenterPalette.codex : .secondary
     }
 
     private func date(_ value: Date) -> String {
@@ -20,35 +28,7 @@ struct UsagePeriodCard<Content: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             Button { isExpanded.toggle() } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 10, height: 12)
-                    Text(date(period.start) + " – " + date(period.end))
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Text("已用 " + period.usedPercent.formatted(.number.precision(.fractionLength(0))) + "%")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 62, alignment: .trailing)
-                    Text(status)
-                        .foregroundStyle(period.earlyReset ? Color.orange : Color.secondary)
-                        .frame(width: 64)
-                    VStack(alignment: .trailing, spacing: 3) {
-                        Text("预计周限总额≈" + estimate).fontWeight(.semibold)
-                        Text((planTitle.isEmpty ? "" : planTitle + " · ") + (isReference ? "额度参考" : period.logEstimate == nil ? "用量推算" : "设备日志估算"))
-                            .font(.system(size: 10)).foregroundStyle(.secondary)
-                    }
-                    .frame(width: 202, alignment: .trailing)
-                }
-                .font(.system(size: 12))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .padding(.horizontal, 10)
-                .frame(minHeight: 48)
-                .background(isHovered ? Color.accentColor.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 8))
-                .contentShape(Rectangle())
+                rowHeader
             }
             .buttonStyle(.plain)
             .onHover { isHovered = $0 }
@@ -58,18 +38,68 @@ struct UsagePeriodCard<Content: View>: View {
                 content()
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 10))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder(Color.primary.opacity(0.13), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                    }
-                    .padding(.top, 5)
-                    .padding(.bottom, 7)
+                    .usageCenterInset(cornerRadius: 10)
+                    .padding(.top, 6)
+                    .padding(.bottom, 6)
                     .transition(.identity)
             }
         }
         .clipped()
         .animation(.codexStatus, value: isExpanded)
+    }
+
+    private var rowHeader: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 12, height: 12)
+            Text(date(period.start) + " – " + date(period.end))
+                .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            usageProgressPill
+            ControlCenterStatusBadge(title: statusTitle, color: statusColor)
+                .frame(width: 78, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("预计周限 ≈ " + estimate)
+                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                Text((planTitle.isEmpty ? "" : planTitle + " · ") + (isReference ? "额度参考" : period.logEstimate == nil ? "官方账本推算" : "设备日志估算"))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 196, alignment: .trailing)
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .padding(.horizontal, 12)
+        .frame(minHeight: 50)
+        .background(
+            isHovered || isExpanded ? ControlCenterPalette.pillTrack(colorScheme) : .clear,
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
+        .contentShape(Rectangle())
+    }
+
+    private var usageProgressPill: some View {
+        let clamped = min(max(period.usedPercent, 0), 100)
+        return HStack(spacing: 7) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.08))
+                    Capsule()
+                        .fill(ControlCenterPalette.codex.opacity(0.85))
+                        .frame(width: geo.size.width * (clamped / 100.0))
+                }
+            }
+            .frame(width: 48, height: 5)
+            Text(period.usedPercent.formatted(.number.precision(.fractionLength(0))) + "%")
+                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 36, alignment: .trailing)
+        }
     }
 }
 

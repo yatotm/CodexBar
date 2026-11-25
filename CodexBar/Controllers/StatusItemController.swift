@@ -109,6 +109,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var auxiliaryWindowFocusRestoreTask: Task<Void, Never>?
     private var activeStatusItemMenu: NSMenu?
     private var pendingStatusItemMenuAction: (@MainActor () -> Void)?
+    private var lastLeftClickUptime: TimeInterval = 0
 
     init(
         viewModel: CodexStatusViewModel,
@@ -567,10 +568,20 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
 
         if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+            lastLeftClickUptime = 0
             showContextMenu(relativeTo: sender)
-        } else {
-            toggleMenuSurface(relativeTo: sender)
+            return
         }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        let interval = min(max(NSEvent.doubleClickInterval, 0.20), 0.50)
+        if event.clickCount >= 2 || (lastLeftClickUptime > 0 && now - lastLeftClickUptime <= interval) {
+            lastLeftClickUptime = 0
+            openUsageCenter()
+            return
+        }
+        lastLeftClickUptime = now
+        toggleMenuSurface(relativeTo: sender)
     }
 
     // MARK: - 菜单面板开合

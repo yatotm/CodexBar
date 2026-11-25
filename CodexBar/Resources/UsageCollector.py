@@ -189,13 +189,117 @@ def load_gemini_metadata(home):
                 prev = result.get(cid, {})
                 project = workspace_project_name(uris) or prev.get("project", "")
                 subagent = bool(parent_id) or (isinstance(depth, int) and depth > 0) or prev.get("subagent", False)
-                result[cid] = {"project": project, "subagent": subagent}
+                result[cid] = {"project": project, "subagent": subagent, "parent": parent_id if isinstance(parent_id, str) else ""}
         except (OSError, sqlite3.Error, ValueError):
             pass
         finally:
             if connection is not None:
                 connection.close()
     return result
+
+
+def load_gemini_account_context(gemini_home, meta_map=None):
+    home = gemini_home.expanduser()
+    cid_owners = {}
+    session_owners = {}
+    known_accounts = set()
+    active_account = None
+
+    cache_path = home / "cache/statusline_v2_cache.json"
+    if cache_path.is_file() and not cache_path.is_symlink():
+        try:
+            raw_cache = json.loads(cache_path.read_bytes()[:8 * 1024 * 1024])
+            owners = raw_cache.get("owners") if isinstance(raw_cache, dict) else None
+            if isinstance(owners, dict):
+                for cid, raw_email in owners.items():
+                    if isinstance(cid, str) and cid and isinstance(raw_email, str) and raw_email.strip():
+                        acc = digest("gemini-account", raw_email.strip().lower())
+                        cid_owners[cid] = acc
+                        session_owners[digest("gemini-session", cid)] = acc
+                        known_accounts.add(acc)
+        except (OSError, ValueError, TypeError):
+            pass
+
+    live_path = home / "codexbar-usage/live-state.json"
+    if live_path.is_file() and not live_path.is_symlink():
+        try:
+            live_data = json.loads(live_path.read_text())
+            if isinstance(live_data, dict):
+                live_acc = live_data.get("activeAccount")
+                if isinstance(live_acc, str) and re.fullmatch(r"[0-9a-f]{64}", live_acc):
+                    active_account = live_acc
+                    known_accounts.add(live_acc)
+                live_owners = live_data.get("owners")
+                if isinstance(live_owners, dict):
+                    for cid, acc in live_owners.items():
+                        if isinstance(cid, str) and cid and isinstance(acc, str) and re.fullmatch(r"[0-9a-f]{64}", acc):
+                            cid_owners[cid] = acc
+                            session_owners[digest("gemini-session", cid)] = acc
+                            known_accounts.add(acc)
+        except (OSError, ValueError):
+            pass
+
+    signals_dir = home / "codexbar-usage/signals"
+    latest_sig_ts = 0.0
+    latest_sig_acc = None
+    if signals_dir.is_dir() and not signals_dir.is_symlink():
+        for sig_path in sorted(signals_dir.glob("*.jsonl"), reverse=True)[:5]:
+            if sig_path.is_symlink():
+                continue
+            try:
+                with sig_path.open("rb") as stream:
+                    for raw_line in stream:
+                        if len(raw_line) > MAX_LINE or b'"account"' not in raw_line:
+                            continue
+                        obj = json.loads(raw_line)
+                        if not isinstance(obj, dict):
+                            continue
+                        acc = obj.get("account")
+                        if not isinstance(acc, str) or not re.fullmatch(r"[0-9a-f]{64}", acc):
+                            continue
+                        known_accounts.add(acc)
+                        sess = obj.get("session")
+                        if isinstance(sess, str) and len(sess) == 64:
+                            session_owners[sess] = acc
+                        parsed_ts = timestamp(obj.get("timestamp"))
+                        ts_val = parsed_ts.timestamp() if parsed_ts else 0.0
+                        if ts_val >= latest_sig_ts:
+                            latest_sig_ts = ts_val
+                            latest_sig_acc = acc
+            except (OSError, ValueError):
+                continue
+
+    if not active_account and latest_sig_acc:
+        active_account = latest_sig_acc
+
+    if not active_account and cid_owners:
+        best_mtime = 0.0
+        brain_dir = home / "brain"
+        for cid, acc in cid_owners.items():
+            tp = brain_dir / cid / ".system_generated/logs/transcript.jsonl"
+            try:
+                tm = tp.stat().st_mtime
+                if tm > best_mtime:
+                    best_mtime = tm
+                    active_account = acc
+            except OSError:
+                continue
+
+    if isinstance(meta_map, dict):
+        for cid, info in meta_map.items():
+            if cid in cid_owners or not isinstance(info, dict):
+                continue
+            parent = info.get("parent")
+            depth = 0
+            while isinstance(parent, str) and parent and depth < 8:
+                if parent in cid_owners:
+                    cid_owners[cid] = cid_owners[parent]
+                    session_owners[digest("gemini-session", cid)] = cid_owners[parent]
+                    break
+                parent = (meta_map.get(parent) or {}).get("parent")
+                depth += 1
+
+    return active_account, cid_owners, session_owners, known_accounts
 
 
 class Database:
@@ -524,13 +628,21 @@ class Collector:
         auth = row.get("auth") if row.get("auth") in ("oauth", "api") else self.gemini_auth
         state.update(session=session, auth=auth, project=text(row.get("project")) or "未知",
                      model=text(row.get("model")) or "未知")
+        sig_account = row.get("account")
+        active_acc = getattr(self, "gemini_active_account", None)
+        is_foreign_account = (
+            bool(active_acc)
+            and isinstance(sig_account, str)
+            and len(sig_account) == 64
+            and sig_account != active_acc
+        )
         plan = text(row.get("planTier"), 40)
-        if plan:
+        if plan and not is_foreign_account:
             self.db.set("geminiPlan", plan)
         activity_state = row.get("activityState")
         if activity_state in ("running", "waiting", "completed", "ended"):
             self.emit(state, "activity", session, date, state=activity_state)
-        if row.get("event") == "statusline" and isinstance(row.get("rateLimits"), dict):
+        if not is_foreign_account and row.get("event") == "statusline" and isinstance(row.get("rateLimits"), dict):
             self.observe_quota("gemini", row["rateLimits"], date.timestamp())
 
     def scan_file(self, path, provider, cid=""):
@@ -633,6 +745,7 @@ class Collector:
                 self.warnings.add("未找到 Claude 会话目录, 请检查来源路径")
         if "gemini" in self.providers:
             self.gemini_meta = load_gemini_metadata(self.gemini_home)
+            self.gemini_active_account, _, _, _ = load_gemini_account_context(self.gemini_home, self.gemini_meta)
             auth = gemini_authentication_type(self.gemini_home)
             self.gemini_auth = auth if auth != "unknown" else "oauth"
             signal_roots.append((self.gemini_home / "codexbar-usage/signals", "gemini"))
@@ -953,10 +1066,9 @@ class ValuationLedger:
             return rows, True
         return kept, False
 
-    def export(self, rows=None):
+    @classmethod
+    def build_windows(cls, rows):
         groups = []
-        if rows is None:
-            rows = self.connection.execute("SELECT session,reset,at,used FROM samples ORDER BY reset,at,used").fetchall()
         for row in rows:
             if not groups or abs(groups[-1][0][1] - row[1]) > 2:
                 groups.append([])
@@ -965,7 +1077,7 @@ class ValuationLedger:
         for group in groups:
             group.sort(key=lambda row: (row[2], row[3]))
             # 必须在日内首尾压缩前判断, 旧压缩缓存不足以证明中间的恢复过程
-            group, decreased = self.without_transient_declines(group)
+            group, decreased = cls.without_transient_declines(group)
             first, last = group[0], group[-1]
             points = {}
             for _, _, at, used in group:
@@ -981,6 +1093,12 @@ class ValuationLedger:
                             "lastAt": last[2], "lastUsed": last[3], "maxUsed": max(r[3] for r in group),
                             "decreased": decreased,
                             "observations": sorted([p for pair in points.values() for p in pair], key=lambda p: p["at"])})
+        return windows
+
+    def export(self, rows=None):
+        if rows is None:
+            rows = self.connection.execute("SELECT session,reset,at,used FROM samples ORDER BY reset,at,used").fetchall()
+        windows = self.build_windows(rows)
         return {"schema": 1, "complete": self.complete, "generatedAt": time.time(),
                 "accountKey": codex_account_key(self.home), "windows": windows}
 
@@ -1390,7 +1508,7 @@ def format_quota_windows(provider, rate_limits, observed_at):
     return {"provider": provider, "observedAt": observed_at, "windows": windows}
 
 
-def update_live_state_file(bridge_dir, session_hash, entry, latest_quota=None):
+def update_live_state_file(bridge_dir, session_hash, entry, latest_quota=None, active_account=None, raw_cid=""):
     live_path = bridge_dir / "live-state.json"
     lock_path = bridge_dir / "live-state.lock"
     with open(lock_path, "a") as lock:
@@ -1401,6 +1519,15 @@ def update_live_state_file(bridge_dir, session_hash, entry, latest_quota=None):
             data = {}
         tasks = data.get("tasks") if isinstance(data, dict) and isinstance(data.get("tasks"), dict) else {}
         existing_quota = data.get("latestQuota") if isinstance(data, dict) and isinstance(data.get("latestQuota"), dict) else None
+        prev_account = data.get("activeAccount") if isinstance(data, dict) and isinstance(data.get("activeAccount"), str) else None
+        owners = data.get("owners") if isinstance(data, dict) and isinstance(data.get("owners"), dict) else {}
+        if raw_cid and active_account:
+            owners[raw_cid] = active_account
+            if len(owners) > 2000:
+                owners = dict(list(owners.items())[-2000:])
+        account_switched = bool(active_account and prev_account and active_account != prev_account)
+        if account_switched:
+            existing_quota = None
         now_ts = time.time()
         if session_hash and entry:
             tasks = {k: v for k, v in tasks.items() if isinstance(v, dict) and now_ts - float(v.get("updatedAt", 0)) < 86400}
@@ -1416,6 +1543,7 @@ def update_live_state_file(bridge_dir, session_hash, entry, latest_quota=None):
                 entry["stateChangedAt"] = entry["updatedAt"]
             should_append_signal = (
                 prev is None
+                or account_switched
                 or prev.get("state") != entry["state"]
                 or prev.get("quotaFingerprint") != entry.get("quotaFingerprint")
                 or now_ts - float(prev.get("lastSignalAt", 0)) >= 60
@@ -1426,12 +1554,17 @@ def update_live_state_file(bridge_dir, session_hash, entry, latest_quota=None):
                 entry["lastSignalAt"] = prev.get("lastSignalAt", 0)
             tasks[session_hash] = entry
         else:
-            should_append_signal = bool(latest_quota)
+            should_append_signal = bool(latest_quota) or account_switched
         chosen_quota = existing_quota
         if latest_quota:
             if not existing_quota or claude_quota_priority(latest_quota, now_ts) >= claude_quota_priority(existing_quota, now_ts):
                 chosen_quota = latest_quota
         out_payload = {"updatedAt": now_ts, "tasks": tasks}
+        effective_account = active_account or prev_account
+        if effective_account:
+            out_payload["activeAccount"] = effective_account
+        if owners:
+            out_payload["owners"] = owners
         if chosen_quota:
             out_payload["latestQuota"] = chosen_quota
         atomic_write(live_path, encode(out_payload).encode())
@@ -1604,9 +1737,14 @@ def capture_gemini(raw, gemini_home):
                 "tokenUsage": token_usage, "planTier": plan_tier or None,
                 "quotaFingerprint": encode(rate_limits) if rate_limits else ""
             }
-        if entry or latest_gemini_quota:
+        if entry or latest_gemini_quota or account_hash:
             should_write_signal = update_live_state_file(
-                bridge_dir, session_hash if cid else "", entry, latest_quota=latest_gemini_quota
+                bridge_dir,
+                session_hash if cid else "",
+                entry,
+                latest_quota=latest_gemini_quota,
+                active_account=account_hash,
+                raw_cid=cid
             )
     except (OSError, BlockingIOError):
         pass
@@ -1660,7 +1798,7 @@ class GeminiValuationLedger:
                 CREATE TABLE IF NOT EXISTS usage(
                     id TEXT PRIMARY KEY, at REAL NOT NULL, model TEXT NOT NULL,
                     input INTEGER NOT NULL, cached INTEGER NOT NULL, cache_write INTEGER NOT NULL,
-                    output INTEGER NOT NULL, auth TEXT NOT NULL);
+                    output INTEGER NOT NULL, auth TEXT NOT NULL, cid TEXT NOT NULL DEFAULT '');
                 CREATE INDEX IF NOT EXISTS gemini_usage_at ON usage(at);
                 CREATE TABLE IF NOT EXISTS samples(
                     id TEXT PRIMARY KEY, session TEXT NOT NULL, reset REAL NOT NULL,
@@ -1668,6 +1806,11 @@ class GeminiValuationLedger:
                 CREATE INDEX IF NOT EXISTS gemini_samples_reset ON samples(reset, at);
                 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
             """)
+            usage_cols = {r[1] for r in self.connection.execute("PRAGMA table_info(usage)").fetchall()}
+            if "cid" not in usage_cols:
+                self.connection.execute("ALTER TABLE usage ADD COLUMN cid TEXT NOT NULL DEFAULT ''")
+                self.connection.execute("DELETE FROM files")
+                self.connection.commit()
             os.chmod(directory / self.filename, 0o600)
         metadata = dict(self.connection.execute("SELECT key, value FROM meta"))
         self.complete = metadata.get("complete") == "true"
@@ -1826,32 +1969,84 @@ class GeminiValuationLedger:
         step = number(row.get("step_index"))
         rec_id = digest("gemini-value-step", cid, typ, step)
         self.connection.execute(
-            "INSERT OR REPLACE INTO usage VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-            (rec_id, at, model, in_t, cr_t, cw_t, out_t, default_auth)
+            "INSERT OR REPLACE INTO usage VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (rec_id, at, model, in_t, cr_t, cw_t, out_t, default_auth, cid or "")
         )
 
     def export(self):
-        sample_rows = self.connection.execute(
-            "SELECT session, reset, at, used, plan FROM samples ORDER BY reset, at, used"
+        meta_map = load_gemini_metadata(self.home)
+        active_account, cid_owners, session_owners, known_accounts = load_gemini_account_context(self.home, meta_map)
+        all_samples = self.connection.execute(
+            "SELECT session, reset, at, used, plan, account FROM samples ORDER BY reset, at, used"
         ).fetchall()
-        windows = ValuationLedger.export(self, [r[:4] for r in sample_rows])["windows"] if sample_rows else []
+        for sess, _, _, _, _, acc in all_samples:
+            if isinstance(acc, str) and len(acc) == 64:
+                known_accounts.add(acc)
+                if isinstance(sess, str) and len(sess) == 64:
+                    session_owners.setdefault(sess, acc)
+        if not active_account:
+            acct_samples = [r for r in all_samples if isinstance(r[5], str) and len(r[5]) == 64]
+            if acct_samples:
+                active_account = max(acct_samples, key=lambda r: r[2])[5]
+
+        multi_account_strict = len(known_accounts) > 1
+        if active_account:
+            if multi_account_strict:
+                sample_rows = [r[:5] for r in all_samples if r[5] == active_account]
+            else:
+                sample_rows = [r[:5] for r in all_samples if r[5] in (None, "", active_account)]
+        else:
+            sample_rows = [r[:5] for r in all_samples]
+
+        windows = ValuationLedger.build_windows([r[:4] for r in sample_rows]) if sample_rows else []
         plans = []
         for _, reset, at, _, plan in sorted(sample_rows, key=lambda r: r[2]):
             if plan and (not plans or plans[-1]["plan"] != plan or abs(plans[-1]["resetsAt"] - reset) > 2):
                 plans.append({"at": at, "resetsAt": reset, "plan": plan})
-        usage_rows = self.connection.execute(
-            "SELECT id, at, model, input, cached, cache_write, output FROM usage WHERE auth='oauth' AND at>=? ORDER BY at DESC, id LIMIT ?",
-            (self.cutoff, self.max_records + 1)
-        ).fetchall()
-        plan_row = self.connection.execute("SELECT value FROM meta WHERE key='planTier'").fetchone()
+
+        usage_cols = {r[1] for r in self.connection.execute("PRAGMA table_info(usage)").fetchall()}
+        if "cid" in usage_cols:
+            raw_usage_rows = self.connection.execute(
+                "SELECT id, at, model, input, cached, cache_write, output, cid FROM usage WHERE auth='oauth' AND at>=? ORDER BY at DESC, id",
+                (self.cutoff,)
+            ).fetchall()
+        else:
+            raw_usage_rows = [
+                (*r, "") for r in self.connection.execute(
+                    "SELECT id, at, model, input, cached, cache_write, output FROM usage WHERE auth='oauth' AND at>=? ORDER BY at DESC, id",
+                    (self.cutoff,)
+                ).fetchall()
+            ]
+
+        filtered_usage = []
+        for r in raw_usage_rows:
+            cid_val = r[7]
+            owner = None
+            if cid_val:
+                owner = cid_owners.get(cid_val) or session_owners.get(digest("gemini-session", cid_val))
+            if active_account:
+                if multi_account_strict:
+                    if owner != active_account:
+                        continue
+                elif owner and owner != active_account:
+                    continue
+            filtered_usage.append(r)
+            if len(filtered_usage) > self.max_records:
+                break
+
+        latest_plan = plans[-1]["plan"] if plans else None
+        if not latest_plan:
+            plan_row = self.connection.execute("SELECT value FROM meta WHERE key='planTier'").fetchone()
+            latest_plan = plan_row[0] if plan_row else None
         return {
             "schema": 1,
             "ready": True,
             "complete": self.complete,
             "generatedAt": time.time(),
             "scannedAt": self.scanned_at,
-            "planTier": plan_row[0] if plan_row else None,
-            "truncated": len(usage_rows) > self.max_records,
+            "accountKey": active_account,
+            "planTier": latest_plan,
+            "truncated": len(filtered_usage) > self.max_records,
             "windows": windows,
             "plans": plans[-500:],
             "records": [
@@ -1861,7 +2056,7 @@ class GeminiValuationLedger:
                     "model": r[2],
                     "tokens": {"input": r[3], "cached": r[4], "cacheWrite": r[5], "output": r[6]}
                 }
-                for r in usage_rows[:self.max_records]
+                for r in filtered_usage[:self.max_records]
             ]
         }
 
@@ -1920,7 +2115,7 @@ def scan_claude_weekly_windows(claude_home, budget=4):
             except (OSError, ValueError, TypeError):
                 continue
     rows = sorted(samples.values(), key=lambda r: (r[1], r[2], r[3]))
-    windows = ValuationLedger.export(object(), rows)["windows"] if rows else []
+    windows = ValuationLedger.build_windows(rows) if rows else []
     return {"schema": 1, "generatedAt": time.time(), "windows": windows}
 
 

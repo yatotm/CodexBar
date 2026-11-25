@@ -466,12 +466,15 @@ class HubStore:
 
                 gval = payload.get("geminiValuation")
                 if isinstance(gval, dict):
+                    self.conn.execute("DELETE FROM gemini_val_windows WHERE node=?", (node_id,))
                     for win in (gval.get("windows") or [])[:40]:
                         if isinstance(win, dict) and isinstance(win.get("resetsAt"), (int, float)):
                             self.conn.execute(
                                 "INSERT OR REPLACE INTO gemini_val_windows VALUES(?, ?, ?)",
                                 (node_id, float(win["resetsAt"]), encode_json(win))
                             )
+                    if gval.get("complete") is True and not gval.get("truncated"):
+                        self.conn.execute("DELETE FROM gemini_val_usage WHERE node=?", (node_id,))
                     for item in (gval.get("records") or [])[:1000]:
                         if isinstance(item, dict) and isinstance(item.get("id"), str) and re.fullmatch(r"[0-9a-f]{64}", item["id"]) and isinstance(item.get("at"), (int, float)):
                             self.conn.execute(

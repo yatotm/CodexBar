@@ -826,7 +826,10 @@ final class UsageCenterViewModel: ObservableObject {
 
         valuationTask = Task { [weak self] in
             guard let self else { return }
-            let gRecords = await (try? store.valuationUsageRecords(provider: "gemini", localOnly: localOnly)) ?? []
+            let hasAccountScopedGemini = gEvidences.contains { ($0.accountKey?.isEmpty == false) && !$0.records.isEmpty }
+            let gRecords = hasAccountScopedGemini
+                ? []
+                : await (try? store.valuationUsageRecords(provider: "gemini", localOnly: localOnly)) ?? []
             let cRecords = await (try? store.valuationUsageRecords(provider: "claude", localOnly: localOnly)) ?? []
             guard !Task.isCancelled else { return }
             geminiPeriods = GeminiValuationCalculator.computePeriods(

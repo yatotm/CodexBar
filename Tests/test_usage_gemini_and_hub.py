@@ -462,6 +462,87 @@ class GeminiAndHubTests(unittest.TestCase):
         finally:
             db.connection.close()
 
+    def test_gemini_multi_account_isolation_on_account_switch(self):
+        now_ts = time.time()
+        cid_a = "11111111-aaaa-aaaa-aaaa-111111111111"
+        cid_b = "22222222-bbbb-bbbb-bbbb-222222222222"
+        cid_unowned = "33333333-cccc-cccc-cccc-333333333333"
+        self.create_gemini_summary_db(cid_a, "file:///Users/demo/ProjA")
+        self.create_gemini_summary_db(cid_b, "file:///Users/demo/ProjB")
+        self.create_gemini_summary_db(cid_unowned, "file:///Users/demo/ProjUnknown")
+
+        self.write_gemini_transcript(cid_a, [
+            {"step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE",
+             "created_at": dt.datetime.fromtimestamp(now_ts - 600, dt.timezone.utc).isoformat(),
+             "model": "gemini-4-neon-xhigh", "input_tokens": 90000, "cache_read_tokens": 0, "output_tokens": 9000}
+        ])
+        self.write_gemini_transcript(cid_b, [
+            {"step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE",
+             "created_at": dt.datetime.fromtimestamp(now_ts - 120, dt.timezone.utc).isoformat(),
+             "model": "gemini-4-carbon-high", "input_tokens": 12000, "cache_read_tokens": 0, "output_tokens": 1500}
+        ])
+        self.write_gemini_transcript(cid_unowned, [
+            {"step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE",
+             "created_at": dt.datetime.fromtimestamp(now_ts - 90, dt.timezone.utc).isoformat(),
+             "model": "gemini-4-carbon-high", "input_tokens": 50000, "cache_read_tokens": 0, "output_tokens": 5000}
+        ])
+
+        reset_a = int(now_ts) + 3 * 86400
+        reset_b = int(now_ts) + 5 * 86400
+        collector.capture_gemini(json.dumps({
+            "conversation_id": cid_a,
+            "cwd": "/Users/demo/ProjA",
+            "model": {"id": "gemini-4-neon-xhigh"},
+            "plan_tier": "Ultra",
+            "email": "first-user@example.com",
+            "quota": {
+                "gemini-5h": {"remaining_fraction": 0.20, "reset_in_seconds": 3600},
+                "gemini-weekly": {"remaining_fraction": 0.30, "reset_time": dt.datetime.fromtimestamp(reset_a, dt.timezone.utc).isoformat()}
+            }
+        }).encode(), self.gemini)
+
+        # 切换到第二个账号: 即便第二个账号仅上报了 7d 窗口, 也必须立即替换旧账号额度并隔离周限估值样本
+        collector.capture_gemini(json.dumps({
+            "conversation_id": cid_b,
+            "cwd": "/Users/demo/ProjB",
+            "model": {"id": "gemini-4-carbon-high"},
+            "plan_tier": "Pro",
+            "email": "second-user@example.com",
+            "quota": {
+                "gemini-weekly": {"remaining_fraction": 0.85, "reset_time": dt.datetime.fromtimestamp(reset_b, dt.timezone.utc).isoformat()}
+            }
+        }).encode(), self.gemini)
+
+        state_dir = self.root / "multi_acct_state"
+        db = collector.Database(state_dir)
+        try:
+            col = collector.Collector(db, self.codex, self.claude, ["gemini"], budget=10, gemini_home=self.gemini)
+            col.collect()
+            exported = db.export("", 0, 200, ["gemini"])
+        finally:
+            db.connection.close()
+
+        self.assertEqual(exported.get("geminiPlan"), "Pro")
+        win_map = {w["name"]: w for w in exported["quotas"][0]["windows"]}
+        self.assertEqual(set(win_map.keys()), {"7d"})
+        self.assertAlmostEqual(win_map["7d"]["usedPercent"], 15.0, places=1)
+        self.assertAlmostEqual(win_map["7d"]["resetsAt"], reset_b, delta=2)
+
+        ledger = collector.GeminiValuationLedger(state_dir, self.gemini, budget=10)
+        try:
+            ledger.scan()
+            val_export = ledger.export()
+        finally:
+            ledger.connection.close()
+
+        expected_hash = collector.digest("gemini-account", "second-user@example.com")
+        self.assertEqual(val_export["accountKey"], expected_hash)
+        self.assertEqual(val_export["planTier"], "Pro")
+        self.assertEqual(len(val_export["windows"]), 1)
+        self.assertAlmostEqual(val_export["windows"][0]["resetsAt"], reset_b, delta=2)
+        self.assertEqual(len(val_export["records"]), 1)
+        self.assertEqual(val_export["records"][0]["tokens"]["input"], 12000)
+
 
 if __name__ == "__main__":
     unittest.main()

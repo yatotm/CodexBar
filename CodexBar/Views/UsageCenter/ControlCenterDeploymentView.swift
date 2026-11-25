@@ -4,13 +4,13 @@ struct ControlCenterDeploymentView: View {
     @ObservedObject var viewModel: UsageCenterViewModel
     @Binding var editingSource: UsageSource?
     @Binding var deletingSource: UsageSource?
+    @Binding var showAddProbeSheet: Bool
 
     @State private var hubURLDraft = ""
     @State private var readTokenDraft = ""
     @State private var lanPortDraft = "18765"
     @State private var hasSavedToken = false
     @State private var isSavingHub = false
-    @State private var showAddProbeSheet = false
     @State private var previewCommandTitle = ""
     @State private var previewCommandText: String?
     @State private var copiedBadgeID: String?
@@ -19,8 +19,7 @@ struct ControlCenterDeploymentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let error = viewModel.error {
-                    Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
+                    errorBanner(error)
                 }
                 topologySelectorCard
                 if viewModel.topologyMode != .localOnly {
@@ -28,7 +27,8 @@ struct ControlCenterDeploymentView: View {
                 }
                 nodesSectionCard
             }
-            .padding(18)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
         }
         .task { await syncDraftsFromModel() }
         .onChange(of: viewModel.topologyMode) { _, _ in
@@ -54,6 +54,20 @@ struct ControlCenterDeploymentView: View {
         }
     }
 
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            Text(message).font(.system(size: 12)).foregroundStyle(.primary)
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.28), lineWidth: 0.8)
+        }
+    }
+
     private func syncDraftsFromModel() async {
         hubURLDraft = viewModel.remoteHubURL
         lanPortDraft = String(viewModel.lanPort)
@@ -61,16 +75,15 @@ struct ControlCenterDeploymentView: View {
     }
 
     private var topologySelectorCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("部署与数据汇聚架构").font(.headline)
-                Spacer()
-                Text(viewModel.hubStatusText)
-                    .font(.caption)
-                    .foregroundStyle(statusColor)
+        VStack(alignment: .leading, spacing: 14) {
+            ControlCenterSectionHeader(
+                title: "数据汇聚拓扑",
+                subtitle: "外部机器均通过零 Hooks 单向签名探针上报; 切换架构只需重新执行安装命令覆盖配置",
+                symbol: "point.3.connected.trianglepath.dotted",
+                tint: .indigo
+            ) {
+                ControlCenterStatusBadge(title: viewModel.hubStatusText, color: statusColor)
             }
-            Text("按机器网络拓扑选择汇聚方式; 外部节点均采用零 Hooks 单向签名推送探针, 更换中枢地址只需重新复制命令覆盖配置")
-                .font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 ForEach(ControlCenterTopologyMode.allCases) { mode in
                     topologyCardButton(mode)
@@ -82,6 +95,9 @@ struct ControlCenterDeploymentView: View {
     }
 
     private var statusColor: Color {
+        if viewModel.topologyMode == .localOnly {
+            return ControlCenterPalette.codex
+        }
         guard let healthy = viewModel.hubHealthy else { return .secondary }
         return healthy ? .green : .orange
     }
@@ -89,32 +105,43 @@ struct ControlCenterDeploymentView: View {
     private func topologyCardButton(_ mode: ControlCenterTopologyMode) -> some View {
         let selected = viewModel.topologyMode == mode
         return Button {
-            viewModel.topologyMode = mode
+            withAnimation(.easeOut(duration: 0.15)) {
+                viewModel.topologyMode = mode
+            }
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
                     Image(systemName: iconName(for: mode))
-                        .foregroundStyle(selected ? Color.accentColor : .secondary)
-                    Text(mode.title).font(.subheadline.weight(.semibold))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(selected ? .white : .secondary)
+                        .frame(width: 28, height: 28)
+                        .background(
+                            selected ? Color.accentColor : Color.primary.opacity(0.06),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                    Text(mode.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
                     Spacer()
-                    if selected {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor)
-                    }
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(selected ? Color.accentColor : Color.secondary.opacity(0.35))
                 }
                 Text(mode.subtitle)
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 84, alignment: .topLeading)
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
             .background(
-                selected ? Color.accentColor.opacity(0.11) : Color.primary.opacity(0.03),
-                in: RoundedRectangle(cornerRadius: 10)
+                selected ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.025),
+                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
             )
             .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(selected ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.08), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(selected ? Color.accentColor.opacity(0.65) : Color.primary.opacity(0.07), lineWidth: selected ? 1.2 : 0.8)
             }
             .contentShape(Rectangle())
         }
@@ -124,8 +151,8 @@ struct ControlCenterDeploymentView: View {
     private func iconName(for mode: ControlCenterTopologyMode) -> String {
         switch mode {
         case .localOnly: "laptopcomputer"
-        case .lanDirect: "wifi.router"
-        case .remoteHub: "icloud.and.arrow.up"
+        case .lanDirect: "wifi.router.fill"
+        case .remoteHub: "server.rack"
         }
     }
 
@@ -140,16 +167,25 @@ struct ControlCenterDeploymentView: View {
 
     private var lanConfigSection: some View {
         let addresses = HubCrypto.localIPv4Addresses()
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("本机局域网 / 组网接收端").font(.subheadline.weight(.semibold))
+        return VStack(alignment: .leading, spacing: 14) {
+            ControlCenterSectionHeader(
+                title: "本机局域网 / 组网接收服务",
+                subtitle: "Mac 离线或休眠期间探针自动缓存至本地 SQLite, 唤醒后无损补齐增量",
+                symbol: "wifi.router.fill",
+                tint: .teal
+            )
             HStack(spacing: 10) {
-                Text("监听端口").font(.caption).foregroundStyle(.secondary)
+                Text("监听端口")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
                 TextField("18765", text: $lanPortDraft)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 96)
-                Button("应用端口") {
+                Button("保存端口") {
                     Task { await saveHubConfig() }
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
                 .disabled(isSavingHub)
                 Spacer()
                 ForEach(addresses.prefix(3), id: \.self) { ip in
@@ -157,49 +193,53 @@ struct ControlCenterDeploymentView: View {
                     Button {
                         copyText(endpoint, badgeID: "ip:" + ip)
                     } label: {
-                        Label(copiedBadgeID == "ip:" + ip ? "已复制" : endpoint, systemImage: "doc.on.doc")
-                            .font(.caption.monospaced())
+                        Label(copiedBadgeID == "ip:" + ip ? "已复制" : endpoint, systemImage: copiedBadgeID == "ip:" + ip ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 11.5, design: .monospaced))
                     }
-                    .buttonStyle(.bordered).controlSize(.small)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
-            Text("适用于无常驻公网服务器的场景; Mac 休眠或离线期间, 各外部机器探针会将用量缓存在本地 SQLite, 待 Mac 唤醒后自动补齐增量")
-                .font(.caption2).foregroundStyle(.secondary)
         }
         .padding(16)
         .usageCenterCard()
     }
 
     private var remoteHubConfigSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("自建常驻中枢连接配置").font(.subheadline.weight(.semibold))
-                Spacer()
-                Button("生成新读取密钥") {
+        VStack(alignment: .leading, spacing: 14) {
+            ControlCenterSectionHeader(
+                title: "自建常驻中枢连接",
+                subtitle: "控制中心持有只读密钥 (cbr_), 外部探针各自持有独立单写密钥 (cbw_), 权限严格单向隔离",
+                symbol: "lock.shield.fill",
+                tint: ControlCenterPalette.codex
+            ) {
+                Button {
                     let generated = HubCrypto.randomToken(prefix: "cbr_")
                     readTokenDraft = generated
                     copyText(generated, badgeID: "gen-cbr")
+                } label: {
+                    Label(copiedBadgeID == "gen-cbr" ? "已复制新密钥" : "生成新读取密钥", systemImage: "key.fill")
+                        .font(.system(size: 11.5, weight: .medium))
                 }
-                .buttonStyle(.bordered).controlSize(.small)
-                .help("生成 cbr_ 开头的只读拉取密钥并复制到剪贴板")
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
             HStack(spacing: 10) {
                 TextField("中枢 HTTPS 地址 (例如 https://hub.example.com:65120)", text: $hubURLDraft)
                     .textFieldStyle(.roundedBorder)
                 SecureField(
-                    hasSavedToken ? "读取密钥已存钥匙串, 留空保持不变" : "粘贴 HUB_READ_TOKEN (cbr_...)",
+                    hasSavedToken ? "读取密钥已安全保存, 留空保持不变" : "粘贴 HUB_READ_TOKEN (cbr_...)",
                     text: $readTokenDraft
                 )
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 260)
-                Button("保存并连接") {
+                Button("保存并重连") {
                     Task { await saveHubConfig() }
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
                 .disabled(isSavingHub || hubURLDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            Text("权限隔离: Mac 控制中心持有只读密钥 (cbr_), 外部探针各自持有独立单写签名密钥 (cbw_), 探针被盗也无法拉取其他机器数据")
-                .font(.caption2).foregroundStyle(.secondary)
             HubBootstrapGuideView(hubURLDraft: hubURLDraft, readTokenDraft: readTokenDraft)
         }
         .padding(16)
@@ -223,27 +263,27 @@ struct ControlCenterDeploymentView: View {
     }
 
     private var nodesSectionCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("监控节点与渠道管理").font(.subheadline.weight(.semibold))
-                    Text("按机器独立开关 Codex, Claude 与 Gemini 渠道; 若某渠道在全部活跃节点均未开启, 托盘主弹窗将自动隐藏该标签页")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                Spacer()
+        VStack(alignment: .leading, spacing: 14) {
+            ControlCenterSectionHeader(
+                title: "监控节点与渠道控制台",
+                subtitle: "点击胶囊随时开关对应机器的监控渠道; 若某渠道在全部活跃机器上均关闭, 托盘弹窗将自动隐藏该标签页",
+                symbol: "cpu.fill",
+                tint: .green
+            ) {
                 if viewModel.topologyMode != .localOnly {
                     Menu {
-                        Button("添加传统 SSH / HTTPS 来源") { editingSource = UsageSource() }
+                        Button("添加探针节点…") { showAddProbeSheet = true }
+                        Divider()
+                        Button("添加传统 SSH / HTTPS 来源…") { editingSource = UsageSource() }
                     } label: {
                         Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, height: 28)
                     }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 24)
-                    Button {
-                        showAddProbeSheet = true
-                    } label: {
-                        Label("添加探针节点", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .frame(width: 28)
                 }
             }
             VStack(spacing: 10) {
@@ -321,6 +361,8 @@ struct ControlCenterDeploymentView: View {
     }
 }
 
+// MARK: - 节点控制卡片与渠道胶囊开关
+
 private struct NodeConsoleRowView: View {
     @ObservedObject var viewModel: UsageCenterViewModel
     let source: UsageSource
@@ -336,38 +378,49 @@ private struct NodeConsoleRowView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             topRow
-            channelRow
+            Divider().opacity(0.45)
+            channelPillBar
             if let error = status?.error {
-                Text(error).font(.caption2).foregroundStyle(.orange)
+                Label(error, systemImage: "exclamationmark.circle")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.orange)
             }
             ForEach(status?.warnings ?? [], id: \.self) { warning in
-                Text(warning).font(.caption2).foregroundStyle(.orange)
+                Text(warning).font(.system(size: 11.5)).foregroundStyle(.orange)
             }
         }
-        .padding(12)
-        .background(Color.primary.opacity(0.028), in: RoundedRectangle(cornerRadius: 10))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8)
-        }
+        .padding(14)
+        .usageCenterInset(cornerRadius: 11)
     }
 
     private var topRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Image(systemName: symbolName)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(source.isEnabled ? Color.accentColor : .secondary)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
+                .frame(width: 32, height: 32)
+                .background(
+                    (source.isEnabled ? Color.accentColor : Color.secondary).opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
-                    Text(source.name).font(.subheadline.weight(.semibold))
-                    Text(source.id).font(.caption2.monospaced()).foregroundStyle(.secondary)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.primary.opacity(0.06), in: Capsule())
+                    Text(source.name)
+                        .font(.system(size: 13.5, weight: .semibold))
+                    Text(source.id)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Color.primary.opacity(0.055), in: Capsule())
                     onlineBadge
                 }
-                Text(metaSummary).font(.caption2).foregroundStyle(.secondary)
+                Text(metaSummary)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer()
             actionControls
@@ -385,23 +438,17 @@ private struct NodeConsoleRowView: View {
     @ViewBuilder
     private var onlineBadge: some View {
         if !source.isEnabled {
-            badgePill("已停用", color: .secondary)
+            ControlCenterStatusBadge(title: "已停用", color: .secondary)
         } else if source.transport == .local {
-            badgePill("本机直读", color: .green)
+            ControlCenterStatusBadge(title: "本机直读", color: .green)
         } else if source.transport == .probe {
-            badgePill(source.isOnline ? "探针在线" : "离线待连", color: source.isOnline ? .green : .orange)
+            ControlCenterStatusBadge(
+                title: source.isOnline ? "探针在线" : "离线待连",
+                color: source.isOnline ? .green : .orange
+            )
         } else {
-            badgePill(source.transport.rawValue.uppercased(), color: .blue)
+            ControlCenterStatusBadge(title: source.transport.rawValue.uppercased(), color: ControlCenterPalette.codex)
         }
-    }
-
-    private func badgePill(_ label: String, color: Color) -> some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(label).font(.caption2.weight(.medium)).foregroundStyle(color)
-        }
-        .padding(.horizontal, 7).padding(.vertical, 2)
-        .background(color.opacity(0.12), in: Capsule())
     }
 
     private var metaSummary: String {
@@ -410,15 +457,15 @@ private struct NodeConsoleRowView: View {
             parts.append(source.platformName)
         }
         if !source.probeVersion.isEmpty {
-            parts.append("v" + source.probeVersion)
+            parts.append("探针 v" + source.probeVersion)
         }
         if !source.detectedProviders.isEmpty {
-            parts.append("检测到: " + source.detectedProviders.joined(separator: "/"))
+            parts.append("已安装 " + source.detectedProviders.joined(separator: " / "))
         }
         if let seen = source.lastSeenAt {
-            parts.append("心跳 " + Date(timeIntervalSince1970: seen).formatted(date: .abbreviated, time: .shortened))
+            parts.append("最近心跳 " + Date(timeIntervalSince1970: seen).formatted(date: .abbreviated, time: .shortened))
         } else if let last = status?.lastSuccess {
-            parts.append("更新于 " + last.formatted(date: .abbreviated, time: .shortened))
+            parts.append("同步于 " + last.formatted(date: .abbreviated, time: .shortened))
         }
         return parts.isEmpty ? (source.transport == .local ? "本机原生目录与状态栏无感桥接" : "等待首次探针上报") : parts.joined(separator: " · ")
     }
@@ -428,66 +475,131 @@ private struct NodeConsoleRowView: View {
             if source.transport == .probe {
                 Button(action: onCopyCommand) {
                     Label(
-                        copiedBadgeID == "cmd:" + source.id ? "已复制命令" : "复制安装命令",
+                        copiedBadgeID == "cmd:" + source.id ? "已复制" : "安装命令",
                         systemImage: copiedBadgeID == "cmd:" + source.id ? "checkmark" : "terminal"
                     )
+                    .font(.system(size: 11.5, weight: .medium))
                 }
-                .buttonStyle(.bordered).controlSize(.small)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 Menu {
-                    Button("查看完整部署命令", action: onPreviewCommand)
-                    Button("轮换节点写入密钥", action: onRotateKey)
+                    Button("查看完整部署命令…", action: onPreviewCommand)
+                    Button("轮换节点写入密钥…", action: onRotateKey)
                     Divider()
                     Button("移除节点", role: .destructive, action: onDelete)
                 } label: {
                     Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
                 }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 24)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 26)
             } else {
                 Button(action: onEditLegacy) {
                     Label("目录设置", systemImage: "slider.horizontal.3")
+                        .font(.system(size: 11.5, weight: .medium))
                 }
-                .buttonStyle(.bordered).controlSize(.small)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 if source.id != "local" {
                     Button(role: .destructive, action: onDelete) {
                         Image(systemName: "trash")
                     }
-                    .buttonStyle(.borderless).controlSize(.small)
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
                 }
             }
             Toggle("", isOn: Binding(
                 get: { source.isEnabled },
                 set: { enabled in Task { await viewModel.setSourceEnabled(enabled, for: source) } }
             ))
-            .toggleStyle(.switch).controlSize(.small).labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .labelsHidden()
             .help("启用或暂停此节点")
         }
     }
 
-    private var channelRow: some View {
-        HStack(spacing: 14) {
-            Text("监控渠道").font(.caption).foregroundStyle(.secondary)
-            channelToggle("Codex", scope: .codex, isOn: source.includesCodex)
-            channelToggle("Claude", scope: .claude, isOn: source.includesClaude)
-            channelToggle("Gemini (agy)", scope: .gemini, isOn: source.includesGemini)
+    private var channelPillBar: some View {
+        HStack(spacing: 8) {
+            Text("监控渠道")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.trailing, 2)
+            ChannelToggleChip(
+                label: "Codex",
+                tint: ControlCenterPalette.codex,
+                isOn: source.includesCodex,
+                isDisabled: !source.isEnabled
+            ) {
+                Task { await viewModel.setChannel(.codex, enabled: !source.includesCodex, for: source) }
+            }
+            ChannelToggleChip(
+                label: "Claude",
+                tint: ControlCenterPalette.claude,
+                isOn: source.includesClaude,
+                isDisabled: !source.isEnabled
+            ) {
+                Task { await viewModel.setChannel(.claude, enabled: !source.includesClaude, for: source) }
+            }
+            ChannelToggleChip(
+                label: "Gemini (agy)",
+                tint: ControlCenterPalette.gemini,
+                isOn: source.includesGemini,
+                isDisabled: !source.isEnabled
+            ) {
+                Task { await viewModel.setChannel(.gemini, enabled: !source.includesGemini, for: source) }
+            }
             Spacer()
             if source.transport == .local || source.transport == .probe {
-                Toggle("状态栏无感桥接", isOn: Binding(
-                    get: { source.bridgeStatusLine },
-                    set: { enabled in Task { await viewModel.setBridgeStatusLine(enabled, for: source) } }
-                ))
-                .toggleStyle(.checkbox).controlSize(.small).font(.caption)
+                ChannelToggleChip(
+                    label: "状态栏无感桥接",
+                    tint: .teal,
+                    isOn: source.bridgeStatusLine,
+                    isDisabled: !source.isEnabled
+                ) {
+                    Task { await viewModel.setBridgeStatusLine(!source.bridgeStatusLine, for: source) }
+                }
                 .help("自动包装 Claude 与 agy 的 statusLine 以采集官方 5h/7d 额度与实时状态, 不注入生命周期 Hooks")
             }
         }
     }
+}
 
-    private func channelToggle(_ label: String, scope: UsageMenuScope, isOn: Bool) -> some View {
-        Toggle(label, isOn: Binding(
-            get: { isOn },
-            set: { next in Task { await viewModel.setChannel(scope, enabled: next, for: source) } }
-        ))
-        .toggleStyle(.checkbox).controlSize(.small).font(.caption)
-        .disabled(!source.isEnabled)
+private struct ChannelToggleChip: View {
+    let label: String
+    let tint: Color
+    let isOn: Bool
+    let isDisabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isOn ? tint : .secondary.opacity(0.5))
+                Text(label)
+                    .font(.system(size: 11.5, weight: isOn ? .semibold : .regular))
+                    .foregroundStyle(isOn ? .primary : .secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                isOn ? tint.opacity(0.12) : Color.primary.opacity(0.03),
+                in: Capsule(style: .continuous)
+            )
+            .overlay {
+                Capsule(style: .continuous)
+                    .strokeBorder(isOn ? tint.opacity(0.45) : Color.primary.opacity(0.09), lineWidth: 0.8)
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.5 : 1.0)
     }
 }
 
@@ -504,9 +616,9 @@ private struct HubBootstrapGuideView: View {
     private var tokenHashNote: String {
         let trimmed = readTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return "提示: 先点击上方「生成新读取密钥」, 下方命令会自动填入对应 SHA-256 哈希"
+            return "提示: 先点击右上角「生成新读取密钥」, 下方命令会自动填入对应的 SHA-256 校验哈希"
         }
-        return "已根据上方输入的读取密钥自动计算 SHA-256 校验哈希, 服务端仅保存哈希值"
+        return "已根据上方输入的读取密钥自动计算 SHA-256 哈希, 服务端仅保存哈希值"
     }
 
     private var serverCommand: String {
@@ -525,25 +637,31 @@ private struct HubBootstrapGuideView: View {
     }
 
     var body: some View {
-        UsageDisclosure(title: "常驻中枢服务端部署说明 (无需安装 Codex / Claude / agy)") {
+        UsageDisclosure(title: "查看常驻中枢服务端部署说明 (无需安装 Codex / Claude / agy)") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("中枢机仅需 Python 3.9+ 与 Nginx TLS 反向代理 (关闭 /v1/events 的 proxy_buffering 以支持长轮询实时推送)")
-                    .font(.caption2).foregroundStyle(.secondary)
-                Text(tokenHashNote).font(.caption2).foregroundStyle(.secondary)
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                Text(tokenHashNote)
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary)
                 Text(serverCommand)
                     .font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled)
-                    .padding(10)
+                    .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
-                Button(copied ? "已复制启动命令" : "复制启动命令") {
+                    .usageCenterInset(cornerRadius: 8)
+                Button {
                     PasteboardWriter.copy(serverCommand)
                     copied = true
+                } label: {
+                    Label(copied ? "已复制启动命令" : "复制启动命令", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 11.5, weight: .medium))
                 }
-                .buttonStyle(.bordered).controlSize(.small)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
         }
-        .font(.caption)
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(.secondary)
     }
 }
 
@@ -563,7 +681,12 @@ private struct AddProbeNodeSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("添加外部探针节点").font(.title3.bold())
+            ControlCenterSectionHeader(
+                title: "添加外部探针节点",
+                subtitle: "生成独立单写密钥与一键安装命令, 无需配置 SSH 入站权限",
+                symbol: "antenna.radiowaves.left.and.right",
+                tint: .accentColor
+            )
             Form {
                 TextField("显示名称", text: $name, prompt: Text("例如 sk_203 或 局域网主机"))
                     .onChange(of: name) { _, newValue in
@@ -595,7 +718,7 @@ private struct AddProbeNodeSheet: View {
             }
         }
         .padding(22)
-        .frame(width: 500, height: 420)
+        .frame(width: 510, height: 440)
     }
 
     private func sanitizedID(from raw: String) -> String {
@@ -642,17 +765,21 @@ private struct ProbeCommandPreviewSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(title).font(.title3.bold())
-            Text("在目标机器终端执行以下单行命令即可完成探针客户端下载, 鉴权配置写入与后台自启注册; 更换中枢地址时直接重新执行即可覆盖配置, 无需配置 SSH 入站")
-                .font(.caption).foregroundStyle(.secondary)
+            ControlCenterSectionHeader(
+                title: title,
+                subtitle: "在目标机器终端执行以下单行命令即可完成下载, 鉴权配置写入与后台自启注册",
+                symbol: "terminal.fill",
+                tint: .accentColor
+            )
             Text(command)
                 .font(.system(size: 11.5, design: .monospaced))
                 .textSelection(.enabled)
-                .padding(12)
+                .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
-            Text("安全说明: CODEXBAR_TOKEN 通过环境变量传给安装脚本并写入 0600 权限配置文件, 不会出现在 URL 查询参数或后台常驻进程命令行中")
-                .font(.caption2).foregroundStyle(.tertiary)
+                .usageCenterInset(cornerRadius: 10)
+            Text("安全说明: CODEXBAR_TOKEN 通过环境变量传给安装脚本并写入 0600 权限配置文件, 不会出现在 URL 查询参数或常驻进程命令行中")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
             HStack {
                 Button {
                     PasteboardWriter.copy(command)
@@ -666,6 +793,6 @@ private struct ProbeCommandPreviewSheet: View {
             }
         }
         .padding(22)
-        .frame(width: 580)
+        .frame(width: 600)
     }
 }
