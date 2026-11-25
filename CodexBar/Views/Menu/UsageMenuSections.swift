@@ -89,12 +89,13 @@ struct UsageMenuSummaryView: View {
 }
 
 struct ClaudeMenuQuotaView: View {
+    var title = "Claude 额度"
     let observation: UsageQuotaObservation?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Claude 额度").font(.caption.weight(.semibold))
+                Text(title).font(.caption.weight(.semibold))
                 Spacer()
                 Text(observation.map { Date(timeIntervalSince1970: $0.observedAt).formatted(date: .omitted, time: .shortened) + " 记录" } ?? "未记录")
                     .font(.caption2).foregroundStyle(.secondary)
@@ -162,11 +163,11 @@ struct UsageMenuFooter: View {
                     Spacer()
                     Button(action: onOpenDetails) {
                         HStack(spacing: 3) {
-                            Text("用量详情")
+                            Text("控制中心")
                             Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
                         }
                     }
-                    .buttonStyle(.plain).help("打开用量中心")
+                    .buttonStyle(.plain).help("打开控制中心")
                 }
                 .padding(.horizontal, MenuMetrics.panelPadding)
                 .transaction { $0.animation = nil }

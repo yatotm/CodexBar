@@ -284,3 +284,40 @@ nonisolated enum UsageAnalyticsIdentity {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
+
+nonisolated struct GeminiStepTokens: Codable, Equatable {
+    let input: Int64
+    let cached: Int64
+    let cacheWrite: Int64?
+    let output: Int64
+
+    static let zero = GeminiStepTokens(input: 0, cached: 0, cacheWrite: 0, output: 0)
+
+    var cw: Int64 {
+        cacheWrite ?? 0
+    }
+
+    var promptTotal: Int64 {
+        input + cached + cw
+    }
+
+    static func + (lhs: Self, rhs: Self) -> Self {
+        Self(
+            input: lhs.input + rhs.input,
+            cached: lhs.cached + rhs.cached,
+            cacheWrite: lhs.cw + rhs.cw,
+            output: lhs.output + rhs.output
+        )
+    }
+
+    static func += (lhs: inout Self, rhs: Self) {
+        lhs = lhs + rhs
+    }
+}
+
+nonisolated struct GeminiStepUsageRecord: Codable, Identifiable, Equatable {
+    let id: String
+    let at: Double
+    let model: String
+    let tokens: GeminiStepTokens
+}

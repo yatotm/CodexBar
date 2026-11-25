@@ -56,6 +56,7 @@ actor UsageCenterStore {
         }
         database = connection
         sqlite3_busy_timeout(connection, 2000)
+        try migrateSourcesTableIfNeeded(connection: connection, dbPath: path)
         let schema = """
         PRAGMA journal_mode=WAL;
         PRAGMA temp_store=MEMORY;
@@ -63,8 +64,10 @@ actor UsageCenterStore {
         CREATE TABLE IF NOT EXISTS sources (
             id TEXT PRIMARY KEY, payload TEXT NOT NULL, name TEXT NOT NULL, auth TEXT NOT NULL,
             enabled INTEGER NOT NULL, codex INTEGER NOT NULL, claude INTEGER NOT NULL,
+            gemini INTEGER NOT NULL DEFAULT 0, gemini_plan TEXT NOT NULL DEFAULT '',
             epoch TEXT NOT NULL DEFAULT '', cursor INTEGER NOT NULL DEFAULT 0,
             collected REAL NOT NULL DEFAULT 0, warnings TEXT NOT NULL DEFAULT '[]', quotas TEXT NOT NULL DEFAULT '[]');
+        CREATE TABLE IF NOT EXISTS hub_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS records (
             source TEXT NOT NULL, id TEXT NOT NULL, provider TEXT NOT NULL, auth TEXT NOT NULL,
             day TEXT NOT NULL, session TEXT NOT NULL, model TEXT NOT NULL, project TEXT NOT NULL,
@@ -83,6 +86,41 @@ actor UsageCenterStore {
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
         return connection
+    }
+
+    private func migrateSourcesTableIfNeeded(connection: OpaquePointer, dbPath: String) throws {
+        var tableCheck: OpaquePointer?
+        defer { sqlite3_finalize(tableCheck) }
+        guard sqlite3_prepare_v2(
+            connection,
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sources'",
+            -1,
+            &tableCheck,
+            nil
+        ) == SQLITE_OK, sqlite3_step(tableCheck) == SQLITE_ROW else {
+            return
+        }
+        var infoQuery: OpaquePointer?
+        defer { sqlite3_finalize(infoQuery) }
+        guard sqlite3_prepare_v2(connection, "PRAGMA table_info(sources)", -1, &infoQuery, nil) == SQLITE_OK else {
+            return
+        }
+        var columns = Set<String>()
+        while sqlite3_step(infoQuery) == SQLITE_ROW {
+            if let raw = sqlite3_column_text(infoQuery, 1) {
+                columns.insert(String(cString: raw))
+            }
+        }
+        if !columns.contains("gemini") {
+            let backupPath = directory.appendingPathComponent("center-v1.backup.sqlite").path
+            if FileManager.default.fileExists(atPath: dbPath), !FileManager.default.fileExists(atPath: backupPath) {
+                try? FileManager.default.copyItem(atPath: dbPath, toPath: backupPath)
+            }
+            _ = sqlite3_exec(connection, "ALTER TABLE sources ADD COLUMN gemini INTEGER NOT NULL DEFAULT 0;", nil, nil, nil)
+        }
+        if !columns.contains("gemini_plan") {
+            _ = sqlite3_exec(connection, "ALTER TABLE sources ADD COLUMN gemini_plan TEXT NOT NULL DEFAULT '';", nil, nil, nil)
+        }
     }
 
     private func statement(_ sql: String, values: [UsageSQLValue] = []) throws -> OpaquePointer {
@@ -144,9 +182,9 @@ actor UsageCenterStore {
         }
         let payload = try jsonString(source)
         try execute("""
-        INSERT INTO sources(id,payload,name,auth,enabled,codex,claude) VALUES(?,?,?,?,?,?,?)
+        INSERT INTO sources(id,payload,name,auth,enabled,codex,claude,gemini) VALUES(?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,name=excluded.name,auth=excluded.auth,
-        enabled=excluded.enabled,codex=excluded.codex,claude=excluded.claude
+        enabled=excluded.enabled,codex=excluded.codex,claude=excluded.claude,gemini=excluded.gemini
         """, [
             .text(source.id),
             .text(payload),
@@ -154,7 +192,8 @@ actor UsageCenterStore {
             .text(source.codexAuthentication.rawValue),
             .integer(source.isEnabled ? 1 : 0),
             .integer(source.includesCodex ? 1 : 0),
-            .integer(source.includesClaude ? 1 : 0)
+            .integer(source.includesClaude ? 1 : 0),
+            .integer(source.includesGemini ? 1 : 0)
         ])
     }
 
@@ -201,10 +240,15 @@ actor UsageCenterStore {
                     .integer(record.permissions), .integer(record.compactions), .integer(record.subagents), .integer(record.durationMs)
                 ])
             }
-            try execute("UPDATE sources SET epoch=?,cursor=?,collected=?,warnings=?,quotas=? WHERE id=?", [
+            let planValue = envelope.geminiPlan ?? ""
+            try execute("""
+            UPDATE sources SET epoch=?,cursor=?,collected=?,warnings=?,quotas=?,
+            gemini_plan=CASE WHEN ?!='' THEN ? ELSE gemini_plan END WHERE id=?
+            """, [
                 .text(envelope.epoch), .integer(envelope.cursor), .real(envelope.generatedAt),
                 .text(jsonString(envelope.warnings)),
-                .text(jsonString(envelope.quotas)), .text(source.id)
+                .text(jsonString(envelope.quotas)),
+                .text(planValue), .text(planValue), .text(source.id)
             ])
             try execute("DELETE FROM records WHERE day < date('now','-210 days')")
             try execute("COMMIT")
@@ -215,15 +259,129 @@ actor UsageCenterStore {
     }
 
     func status(for source: UsageSource) throws -> UsageSourceStatus {
-        let query = try statement("SELECT collected,warnings,quotas FROM sources WHERE id=?", values: [.text(source.id)])
+        let query = try statement("SELECT collected,warnings,quotas,gemini_plan FROM sources WHERE id=?", values: [.text(source.id)])
         defer { sqlite3_finalize(query) }
         guard try nextRow(query) else { return UsageSourceStatus() }
         let collected = sqlite3_column_double(query, 0)
+        let plan = string(query, 3)
         return try UsageSourceStatus(
             lastSuccess: collected > 0 ? Date(timeIntervalSince1970: collected) : nil,
             warnings: decoder.decode([String].self, from: Data(string(query, 1).utf8)),
-            quotas: decoder.decode([UsageQuotaObservation].self, from: Data(string(query, 2).utf8))
+            quotas: decoder.decode([UsageQuotaObservation].self, from: Data(string(query, 2).utf8)),
+            geminiPlan: plan.isEmpty ? nil : plan
         )
+    }
+
+    func hubCursor() throws -> UsageCursor {
+        let epochQuery = try statement("SELECT value FROM hub_state WHERE key='epoch'")
+        defer { sqlite3_finalize(epochQuery) }
+        let epoch = try nextRow(epochQuery) ? string(epochQuery, 0) : ""
+        let cursorQuery = try statement("SELECT value FROM hub_state WHERE key='cursor'")
+        defer { sqlite3_finalize(cursorQuery) }
+        let rev = try nextRow(cursorQuery) ? (Int64(string(cursorQuery, 0)) ?? 0) : 0
+        return UsageCursor(epoch: epoch, revision: rev)
+    }
+
+    func saveHubValue(_ value: String, forKey key: String) throws {
+        try execute("INSERT OR REPLACE INTO hub_state(key, value) VALUES(?, ?)", [.text(key), .text(value)])
+    }
+
+    func hubValue(forKey key: String) throws -> String? {
+        let query = try statement("SELECT value FROM hub_state WHERE key=?", values: [.text(key)])
+        defer { sqlite3_finalize(query) }
+        return try nextRow(query) ? string(query, 0) : nil
+    }
+
+    func valuationUsageRecords(provider: String, localOnly: Bool) throws -> [GeminiStepUsageRecord] {
+        guard ["claude", "gemini"].contains(provider) else { return [] }
+        let cutoff = Date().timeIntervalSince1970 - 70 * 86400
+        let sql = """
+        WITH dedup AS (
+            SELECT r.id, r.observed, r.model, r.input, r.cacheRead, r.cacheWrite, r.output,
+            ROW_NUMBER() OVER(PARTITION BY r.id ORDER BY (r.input+r.output+r.cacheRead+r.cacheWrite) DESC, r.observed DESC) AS pos
+            FROM records r JOIN sources s ON s.id=r.source
+            WHERE s.enabled=1 AND (?=0 OR s.id='local')
+            AND ((r.provider='claude' AND s.claude=1) OR (r.provider='gemini' AND s.gemini=1))
+            AND r.provider=? AND r.kind='usage' AND r.auth!='api' AND r.observed>=?
+        )
+        SELECT id, observed, model, input, cacheRead, cacheWrite, output FROM dedup WHERE pos=1 ORDER BY observed DESC LIMIT 25000
+        """
+        let query = try statement(sql, values: [.integer(localOnly ? 1 : 0), .text(provider), .real(cutoff)])
+        defer { sqlite3_finalize(query) }
+        var items: [GeminiStepUsageRecord] = []
+        while try nextRow(query) {
+            items.append(GeminiStepUsageRecord(
+                id: string(query, 0),
+                at: sqlite3_column_double(query, 1),
+                model: string(query, 2),
+                tokens: GeminiStepTokens(
+                    input: sqlite3_column_int64(query, 3),
+                    cached: sqlite3_column_int64(query, 4),
+                    cacheWrite: sqlite3_column_int64(query, 5),
+                    output: sqlite3_column_int64(query, 6)
+                )
+            ))
+        }
+        return items
+    }
+
+    func applyHubBatch(
+        epoch: String,
+        cursor: Int64,
+        reset: Bool,
+        generatedAt: Double,
+        nodes: [UsageSource],
+        nodeStatuses: [String: UsageSourceStatus],
+        records: [UsageRecord]
+    ) throws {
+        if reset || !records.isEmpty || !nodes.isEmpty {
+            clearDashboardCache()
+        }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            if reset {
+                try execute("DELETE FROM records WHERE source IN (SELECT id FROM sources WHERE json_extract(payload,'$.transport')='probe')")
+            }
+            for node in nodes {
+                let payload = try jsonString(node)
+                let st = nodeStatuses[node.id] ?? UsageSourceStatus()
+                let collected = node.lastSeenAt ?? st.lastSuccess?.timeIntervalSince1970 ?? generatedAt
+                let plan = st.geminiPlan ?? ""
+                try execute("""
+                INSERT INTO sources(id,payload,name,auth,enabled,codex,claude,gemini,gemini_plan,collected,warnings,quotas)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    payload=excluded.payload,name=excluded.name,enabled=excluded.enabled,
+                    codex=excluded.codex,claude=excluded.claude,gemini=excluded.gemini,
+                    gemini_plan=CASE WHEN excluded.gemini_plan!='' THEN excluded.gemini_plan ELSE sources.gemini_plan END,
+                    collected=CASE WHEN excluded.collected>0 THEN excluded.collected ELSE sources.collected END,
+                    warnings=excluded.warnings,quotas=excluded.quotas
+                """, [
+                    .text(node.id), .text(payload), .text(node.name), .text(node.codexAuthentication.rawValue),
+                    .integer(node.isEnabled ? 1 : 0), .integer(node.includesCodex ? 1 : 0),
+                    .integer(node.includesClaude ? 1 : 0), .integer(node.includesGemini ? 1 : 0),
+                    .text(plan), .real(collected),
+                    .text(jsonString(st.warnings)), .text(jsonString(st.quotas))
+                ])
+            }
+            for record in records where record.isValid {
+                guard let nodeId = record.nodeId, !nodeId.isEmpty else { continue }
+                try execute("INSERT OR REPLACE INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                    .text(nodeId), .text(record.id), .text(record.provider), .text(record.auth), .text(record.day),
+                    .text(record.session), .text(record.model), .text(record.project), .text(record.kind), .text(record.state),
+                    .real(record.observedAt), .integer(record.input), .integer(record.output), .integer(record.cacheRead),
+                    .integer(record.cacheWrite), .integer(record.reasoning), .integer(record.turns), .integer(record.tools),
+                    .integer(record.permissions), .integer(record.compactions), .integer(record.subagents), .integer(record.durationMs)
+                ])
+            }
+            try execute("INSERT OR REPLACE INTO hub_state VALUES('epoch', ?)", [.text(epoch)])
+            try execute("INSERT OR REPLACE INTO hub_state VALUES('cursor', ?)", [.text(String(cursor))])
+            try execute("DELETE FROM records WHERE day < date('now','-210 days')")
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
     }
 
     private func jsonString(_ value: some Encodable) throws -> String {
@@ -234,7 +392,7 @@ actor UsageCenterStore {
     }
 
     private static let metricsSQL = """
-    COALESCE(SUM(input+output+CASE WHEN provider='claude' THEN cacheRead+cacheWrite ELSE 0 END),0),
+    COALESCE(SUM(input+output+CASE WHEN provider IN ('claude','gemini') THEN cacheRead+cacheWrite ELSE 0 END),0),
     COALESCE(SUM(input),0),COALESCE(SUM(output),0),COALESCE(SUM(cacheRead),0),COALESCE(SUM(cacheWrite),0),
     COUNT(DISTINCT CASE WHEN kind!='activity' THEN session END),COALESCE(SUM(turns),0),COALESCE(SUM(tools),0),
     COALESCE(SUM(permissions),0),COALESCE(SUM(compactions),0),COALESCE(SUM(subagents),0),COALESCE(SUM(durationMs),0),
@@ -296,12 +454,13 @@ actor UsageCenterStore {
         WITH candidates AS (
         SELECT r.*,s.name AS machine,CASE WHEN r.auth='unknown' AND r.provider='codex' THEN s.auth ELSE r.auth END AS authGroup,
         ROW_NUMBER() OVER(PARTITION BY r.id ORDER BY (r.input+r.output+r.cacheRead+r.cacheWrite) DESC,r.observed DESC,r.source) AS position
-        FROM records r JOIN sources s ON s.id=r.source WHERE s.enabled=1
-        AND ((r.provider='codex' AND s.codex=1) OR (r.provider='claude' AND s.claude=1))
+        FROM records r JOIN sources s ON s.id=r.source WHERE s.enabled=1 AND (?=0 OR s.id='local')
+        AND ((r.provider='codex' AND s.codex=1) OR (r.provider='claude' AND s.claude=1) OR (r.provider='gemini' AND s.gemini=1))
         AND r.day>=date('now',?) AND (?='' OR r.source=?) AND (?='' OR r.provider=?)),
         chosen AS (SELECT * FROM candidates WHERE position=1 AND (?='' OR authGroup=?))
         """
         let bindings: [UsageSQLValue] = [
+            .integer(filter.localOnly ? 1 : 0),
             .text("-\(max(0, min(209, filter.days - 1))) days"), .text(filter.sourceID), .text(filter.sourceID),
             .text(filter.provider), .text(filter.provider), .text(filter.authentication), .text(filter.authentication)
         ]
@@ -351,7 +510,7 @@ actor UsageCenterStore {
             ))
         }
         let models = try statement(cachedSelection + """
-         SELECT day,model,SUM(input+output+CASE WHEN provider='claude' THEN cacheRead+cacheWrite ELSE 0 END)
+         SELECT day,model,SUM(input+output+CASE WHEN provider IN ('claude','gemini') THEN cacheRead+cacheWrite ELSE 0 END)
          FROM chosen WHERE kind='usage' AND model NOT IN ('','未知') GROUP BY day,model ORDER BY 1,3 DESC,2
         """, values: [])
         defer { sqlite3_finalize(models) }

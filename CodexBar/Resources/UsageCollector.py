@@ -17,13 +17,27 @@ from stat import S_ISREG
 import sys
 import time
 import tempfile
+import urllib.parse
 import uuid
 
 PROTOCOL = 1
 RETENTION_DAYS = 210
 MAX_LINE = 4 * 1024 * 1024
+VALID_PROVIDERS = ("codex", "claude", "gemini")
+GEMINI_SWITCH_RE = re.compile(r"`Model Selection` from (.+?) to ([^.\n<]+)")
 COUNTERS = ("input", "output", "cacheRead", "cacheWrite", "reasoning", "turns",
             "tools", "permissions", "compactions", "subagents", "durationMs")
+
+
+def parse_providers(raw):
+    items = [item.strip() for item in (raw or "").split(",") if item.strip()]
+    if not items or any(item not in VALID_PROVIDERS for item in items):
+        raise ValueError("不支持的统计渠道参数")
+    seen = []
+    for item in items:
+        if item not in seen:
+            seen.append(item)
+    return seen
 
 
 def digest(*parts):
@@ -93,6 +107,96 @@ def codex_authentication_type(home):
     return "unknown"
 
 
+def gemini_authentication_type(home):
+    path = home / "settings.json"
+    if path.is_symlink():
+        return "unknown"
+    try:
+        if path.is_file():
+            with path.open("rb") as stream:
+                data = stream.read(65537)
+            if len(data) <= 65536:
+                value = json.loads(data)
+                if isinstance(value, dict) and value.get("modelProvider") == "gemini":
+                    return "api"
+        if (home / "brain").is_dir() or (home / "installation_id").is_file() or path.is_file():
+            return "oauth"
+    except (OSError, ValueError, AttributeError):
+        pass
+    return "unknown"
+
+
+def workspace_project_name(raw):
+    values = []
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            values = parsed if isinstance(parsed, list) else [raw]
+        except ValueError:
+            values = [raw]
+    elif isinstance(raw, list):
+        values = raw
+    for item in values:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        candidate = item.strip()
+        if candidate.startswith("file://"):
+            candidate = urllib.parse.unquote(urllib.parse.urlsplit(candidate).path)
+        name = text(pathlib.PurePath(candidate.rstrip("/") or "未知").name)
+        if name:
+            return name
+    return ""
+
+
+def load_gemini_metadata(home):
+    result = {}
+    meta_file = home / "cache/conversation_metadata.json"
+    if meta_file.is_file() and not meta_file.is_symlink() and not meta_file.parent.is_symlink():
+        try:
+            with meta_file.open("rb") as stream:
+                data = stream.read(8 * 1024 * 1024 + 1)
+            if len(data) <= 8 * 1024 * 1024:
+                outer = json.loads(data)
+                if isinstance(outer, dict):
+                    for inner in outer.values():
+                        if not isinstance(inner, dict):
+                            continue
+                        for cid, entry in inner.items():
+                            summary = entry.get("summary") if isinstance(entry, dict) else None
+                            if not isinstance(summary, dict):
+                                continue
+                            project = workspace_project_name(summary.get("WorkspaceURIs"))
+                            result[cid] = {
+                                "project": project,
+                                "subagent": bool(entry.get("is_internal")) or bool(summary.get("Internal"))
+                            }
+        except (OSError, ValueError, TypeError):
+            pass
+    db_path = home / "conversation_summaries.db"
+    if db_path.is_file() and not db_path.is_symlink():
+        connection = None
+        try:
+            connection = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.3)
+            connection.execute("PRAGMA query_only=ON")
+            connection.execute("PRAGMA trusted_schema=OFF")
+            rows = connection.execute(
+                "SELECT conversation_id, workspace_uris, parent_conversation_id, nesting_depth FROM conversation_summaries LIMIT 20000"
+            ).fetchall()
+            for cid, uris, parent_id, depth in rows:
+                if not isinstance(cid, str) or not cid:
+                    continue
+                prev = result.get(cid, {})
+                project = workspace_project_name(uris) or prev.get("project", "")
+                subagent = bool(parent_id) or (isinstance(depth, int) and depth > 0) or prev.get("subagent", False)
+                result[cid] = {"project": project, "subagent": subagent}
+        except (OSError, sqlite3.Error, ValueError):
+            pass
+        finally:
+            if connection is not None:
+                connection.close()
+    return result
+
+
 class Database:
     def __init__(self, directory, writable=True):
         self.directory = directory
@@ -150,12 +254,15 @@ class Database:
         self.connection.execute("INSERT OR REPLACE INTO records VALUES (?, ?, ?, ?)",
                                 (record["id"], record["day"], revision, encode(record)))
 
-    def export(self, epoch, cursor, limit, providers=("codex", "claude")):
+    def export(self, epoch, cursor, limit, providers=("codex", "claude", "gemini")):
         self.connection.execute("BEGIN")
         try:
             result = self._export(epoch, cursor, limit)
             result["records"] = [r for r in result["records"] if r["provider"] in providers]
             result["quotas"] = [q for q in result["quotas"] if q["provider"] in providers]
+            plan = self.get("geminiPlan", "")
+            if plan and "gemini" in providers:
+                result["geminiPlan"] = plan
             return result
         finally:
             self.connection.rollback()
@@ -181,16 +288,21 @@ class Database:
 
 
 class Collector:
-    def __init__(self, database, codex_home, claude_home, providers, budget=20):
+    def __init__(self, database, codex_home, claude_home, providers, budget=20, gemini_home=None):
         self.db = database
         self.codex_home = codex_home
         self.claude_home = claude_home
+        self.gemini_home = gemini_home or pathlib.Path(
+            os.environ.get("GEMINI_CLI_HOME", str(pathlib.Path.home() / ".gemini/antigravity-cli"))
+        )
         self.providers = providers
         self.deadline = time.monotonic() + budget
         self.cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=RETENTION_DAYS)
         self.warnings = set()
         self.scan_complete = True
         self.quotas = {q["provider"]: q for q in json.loads(database.get("quotas", "[]"))}
+        self.gemini_meta = {}
+        self.gemini_auth = "oauth"
 
     def emit(self, context, kind, identity, date, **values):
         if not date or date < self.cutoff:
@@ -227,7 +339,7 @@ class Collector:
             return
         observation = {"provider": provider, "observedAt": observed_at, "windows": sanitized}
         previous = self.quotas.get(provider, {})
-        if provider == "claude":
+        if provider in ("claude", "gemini"):
             # 有效的 5h 完整快照优先, 用量与时间始终保留在同一份观察中
             now = time.time()
             replace = claude_quota_priority(observation, now) >= claude_quota_priority(previous, now)
@@ -348,7 +460,79 @@ class Collector:
         if event == "statusline" and isinstance(row.get("rateLimits"), dict):
             self.observe_quota("claude", row["rateLimits"], date.timestamp())
 
-    def scan_file(self, path, provider):
+    def gemini(self, row, state, date):
+        if row.get("type") == "codexbar_signal":
+            self.gemini_signal(row, state, date)
+            return
+        cid = state.get("cid", "")
+        meta = self.gemini_meta.get(cid, {})
+        if cid:
+            state["session"] = digest("gemini-session", cid)
+        state["auth"] = state.get("auth") or self.gemini_auth
+        if meta.get("project"):
+            state["project"] = meta["project"]
+        if meta.get("subagent") and not state.get("subagentEmitted") and date:
+            state["subagentEmitted"] = True
+            self.emit(state, "subagent", state["session"], date, subagents=1)
+        typ = row.get("type")
+        step = number(row.get("step_index"))
+        if typ == "USER_INPUT":
+            content = row.get("content")
+            if isinstance(content, str) and "<USER_SETTINGS_CHANGE>" in content and "Model Selection" in content:
+                matched = GEMINI_SWITCH_RE.search(content)
+                if matched:
+                    state["model"] = text(matched.group(2).strip(), 120) or state.get("model", "未知")
+            if row.get("source") == "USER_EXPLICIT" and date:
+                self.emit(state, "turn", [cid or state["session"], step], date, turns=1)
+                state["turnStep"] = step
+                state["turnStart"] = date.timestamp()
+        elif typ == "PLANNER_RESPONSE":
+            model = text(row.get("model"), 120) or state.get("model", "未知")
+            state["model"] = model
+            in_t = number(row.get("input_tokens"))
+            cr_t = number(row.get("cache_read_tokens"))
+            cw_t = number(row.get("cache_creation_tokens"))
+            out_t = number(row.get("output_tokens"))
+            if date and (in_t or cr_t or cw_t or out_t):
+                self.emit(state, "usage", [cid or state["session"], step], date,
+                          input=in_t, output=out_t, cacheRead=cr_t, cacheWrite=cw_t)
+            tool_calls = row.get("tool_calls")
+            if date and isinstance(tool_calls, list):
+                for idx, item in enumerate(tool_calls[:200]):
+                    call_id = item.get("id") if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id") else idx
+                    self.emit(state, "tool", [cid or state["session"], step, call_id], date, tools=1)
+            started = state.get("turnStart")
+            if date and isinstance(started, (int, float)) and date.timestamp() >= started:
+                duration_ms = int((date.timestamp() - started) * 1000)
+                if 0 < duration_ms <= 86400 * 1000:
+                    self.emit(state, "duration", [cid or state["session"], state.get("turnStep", 0)], date, durationMs=duration_ms)
+        elif typ == "CHECKPOINT" and date:
+            self.emit(state, "compaction", [cid or state["session"], step], date, compactions=1)
+            in_t = number(row.get("input_tokens"))
+            cr_t = number(row.get("cache_read_tokens"))
+            cw_t = number(row.get("cache_creation_tokens"))
+            out_t = number(row.get("output_tokens"))
+            if in_t or cr_t or cw_t or out_t:
+                self.emit(state, "usage", [cid or state["session"], "checkpoint", step], date,
+                          input=in_t, output=out_t, cacheRead=cr_t, cacheWrite=cw_t)
+
+    def gemini_signal(self, row, state, date):
+        session = row.get("session", "")
+        if not isinstance(session, str) or len(session) != 64 or not date:
+            return
+        auth = row.get("auth") if row.get("auth") in ("oauth", "api") else self.gemini_auth
+        state.update(session=session, auth=auth, project=text(row.get("project")) or "未知",
+                     model=text(row.get("model")) or "未知")
+        plan = text(row.get("planTier"), 40)
+        if plan:
+            self.db.set("geminiPlan", plan)
+        activity_state = row.get("activityState")
+        if activity_state in ("running", "waiting", "completed", "ended"):
+            self.emit(state, "activity", session, date, state=activity_state)
+        if row.get("event") == "statusline" and isinstance(row.get("rateLimits"), dict):
+            self.observe_quota("gemini", row["rateLimits"], date.timestamp())
+
+    def scan_file(self, path, provider, cid=""):
         identity = digest(str(path))
         try:
             stat = path.lstat()
@@ -364,6 +548,8 @@ class Collector:
                 continuing = saved and saved[0] == inode and saved[1] < stat.st_size and saved[2] == prefix
                 offset = saved[1] if continuing else 0
                 state = previous_state if continuing else {"provider": provider, "session": identity, "file": digest(provider, path.stem), "model": "未知"}
+                if cid:
+                    state["cid"] = cid
                 stream.seek(offset)
                 while time.monotonic() < self.deadline:
                     position = stream.tell()
@@ -385,11 +571,13 @@ class Collector:
                         row = json.loads(line)
                         if not isinstance(row, dict):
                             continue
-                        date = timestamp(row.get("timestamp"))
+                        date = timestamp(row.get("timestamp") or row.get("created_at"))
                         if provider == "codex":
                             self.codex(row, state, date)
-                        else:
+                        elif provider == "claude":
                             self.claude(row, state, date)
+                        else:
+                            self.gemini(row, state, date)
                     except (ValueError, TypeError, AttributeError, OverflowError):
                         self.warnings.add("部分日志记录无法解析, 未计入统计")
                 offset = stream.tell()
@@ -414,12 +602,19 @@ class Collector:
             roots.append((self.claude_home / "projects", "claude"))
             if not (self.claude_home / "projects").exists():
                 self.warnings.add("未找到 Claude 会话目录, 请检查来源路径")
+        if "gemini" in self.providers:
+            self.gemini_meta = load_gemini_metadata(self.gemini_home)
+            auth = gemini_authentication_type(self.gemini_home)
+            self.gemini_auth = auth if auth != "unknown" else "oauth"
+            roots.append((self.gemini_home / "codexbar-usage/signals", "gemini"))
+            if not (self.gemini_home / "brain").exists() and not (self.gemini_home / "codexbar-usage/signals").exists():
+                self.warnings.add("未找到 Gemini (agy) 会话目录, 请检查来源路径")
         try:
             self.db.connection.execute("BEGIN IMMEDIATE")
             if "claude" in self.providers:
                 self.read_claude_quota_cache()
             for root, provider in roots:
-                if not root.exists():
+                if not root.exists() or root.is_symlink():
                     continue
                 def directory_error(error):
                     self.warnings.add("部分日志目录无法访问, 统计可能不完整")
@@ -434,6 +629,8 @@ class Collector:
                             break
                         if name.endswith(".jsonl"):
                             self.scan_file(pathlib.Path(directory, name), provider)
+            if "gemini" in self.providers:
+                self.collect_gemini_brains()
             if "codex" in self.providers:
                 self.read_shared_codex_events()
             self.db.connection.execute("DELETE FROM records WHERE day<?", (self.cutoff.strftime("%Y-%m-%d"),))
@@ -442,14 +639,37 @@ class Collector:
             self.db.set("scanComplete", "true" if self.scan_complete else "false")
             self.db.set("collectedAt", time.time())
             self.db.connection.commit()
-            signals = self.claude_home / "codexbar-usage/signals"
-            if "claude" in self.providers and signals.is_dir():
-                for path in signals.glob("????-??-??.jsonl"):
-                    if path.stem < self.cutoff.strftime("%Y-%m-%d") and not path.is_symlink():
-                        path.unlink(missing_ok=True)
+            for provider_name, home in (("claude", self.claude_home), ("gemini", self.gemini_home)):
+                signals = home / "codexbar-usage/signals"
+                if provider_name in self.providers and signals.is_dir() and not signals.is_symlink():
+                    for path in signals.glob("????-??-??.jsonl"):
+                        if path.stem < self.cutoff.strftime("%Y-%m-%d") and not path.is_symlink():
+                            path.unlink(missing_ok=True)
         except Exception:
             self.db.connection.rollback()
             raise
+
+    def collect_gemini_brains(self):
+        brain_root = self.gemini_home / "brain"
+        if not brain_root.is_dir() or brain_root.is_symlink():
+            return
+        try:
+            entries = [e for e in os.scandir(brain_root) if e.is_dir(follow_symlinks=False)]
+        except OSError:
+            self.warnings.add("部分日志目录无法访问, 统计可能不完整")
+            return
+        entries.sort(key=lambda e: e.name, reverse=True)
+        for entry in entries:
+            if time.monotonic() >= self.deadline:
+                self.scan_complete = False
+                self.warnings.add("首次或增量扫描尚未完成, 下次刷新继续")
+                break
+            sys_dir = pathlib.Path(entry.path) / ".system_generated"
+            logs_dir = sys_dir / "logs"
+            transcript = logs_dir / "transcript.jsonl"
+            if sys_dir.is_symlink() or logs_dir.is_symlink() or not transcript.exists() or transcript.is_symlink():
+                continue
+            self.scan_file(transcript, "gemini", cid=entry.name)
 
     def read_shared_codex_events(self, directory=None):
         root = directory or pathlib.Path.home() / ".local/state/codexbar-shared-codex"
@@ -967,7 +1187,7 @@ def atomic_write(path, data):
             os.unlink(temporary)
 
 
-def configure_claude(claude_home, uninstall=False):
+def configure_claude(claude_home, uninstall=False, include_hooks=True):
     claude_home = claude_home.expanduser()
     settings_path = claude_home / "settings.json"
     if settings_path.is_symlink():
@@ -987,42 +1207,61 @@ def configure_claude(claude_home, uninstall=False):
         if uninstall:
             if not journal:
                 return
-            if settings.get("statusLine") != journal["installedStatusLine"]:
+            current_sl = settings.get("statusLine")
+            expected_cmd = (journal.get("installedStatusLine") or {}).get("command")
+            if current_sl != journal["installedStatusLine"] and (not isinstance(current_sl, dict) or current_sl.get("command") != expected_cmd):
                 raise BridgeConfigurationError("状态栏已被其他程序修改, 请手动检查, 已保留现有配置")
             if journal["originalStatusLine"] is None:
                 settings.pop("statusLine", None)
             else:
                 settings["statusLine"] = journal["originalStatusLine"]
             hooks = settings.get("hooks", {})
-            for event in BRIDGE_EVENTS:
-                if isinstance(hooks.get(event), list):
-                    hooks[event] = [group for group in hooks[event] if group != journal["hookGroup"]]
-                    if not hooks[event]:
-                        hooks.pop(event)
-            if not hooks and not journal.get("hadHooks", True):
-                settings.pop("hooks", None)
+            if journal.get("hookGroup") and isinstance(hooks, dict):
+                for event in BRIDGE_EVENTS:
+                    if isinstance(hooks.get(event), list):
+                        hooks[event] = [group for group in hooks[event] if group != journal["hookGroup"]]
+                        if not hooks[event]:
+                            hooks.pop(event)
+                if not hooks and not journal.get("hadHooks", True):
+                    settings.pop("hooks", None)
         else:
             if journal:
-                if settings.get("statusLine") not in (journal["installedStatusLine"], journal["originalStatusLine"]):
+                current_sl = settings.get("statusLine")
+                expected_cmd = (journal.get("installedStatusLine") or {}).get("command")
+                orig_sl = journal.get("originalStatusLine")
+                if current_sl not in (journal["installedStatusLine"], orig_sl) and (
+                    not isinstance(current_sl, dict) or current_sl.get("command") != expected_cmd
+                ):
                     raise BridgeConfigurationError("状态栏配置已经变化, 请先检查现有接入")
             previous = journal["originalStatusLine"] if journal else settings.get("statusLine")
-            if previous is not None and (not isinstance(previous, dict) or previous.get("type") != "command" or not isinstance(previous.get("command"), str)):
+            if previous is not None and (not isinstance(previous, dict) or previous.get("type") not in (None, "command") or not isinstance(previous.get("command"), str)):
                 raise BridgeConfigurationError("当前状态栏不是 command 类型, 请手动接入")
             script_path = bridge / "collector.py"
             atomic_write(script_path, bridge_script_source())
             command = shlex.join([sys.executable, str(script_path), "claude-statusline", "--claude-home", str(claude_home)])
             installed = dict(previous or {})
             installed.update(type="command", command=command)
-            hook_command = shlex.join([sys.executable, str(script_path), "claude-hook", "--claude-home", str(claude_home)])
-            group = {"hooks": [{"type": "command", "command": hook_command, "timeout": 2}]}
             had_hooks = journal.get("hadHooks", True) if journal else "hooks" in settings
-            hooks = settings.setdefault("hooks", {})
-            if not isinstance(hooks, dict) or any(not isinstance(hooks.get(event, []), list) for event in BRIDGE_EVENTS):
-                raise BridgeConfigurationError("Claude Hook 设置格式无效")
-            for event in BRIDGE_EVENTS:
-                if journal and event in hooks:
-                    hooks[event] = [g for g in hooks[event] if g != journal["hookGroup"]]
-                hooks.setdefault(event, []).append(group)
+            group = None
+            if include_hooks:
+                hook_command = shlex.join([sys.executable, str(script_path), "claude-hook", "--claude-home", str(claude_home)])
+                group = {"hooks": [{"type": "command", "command": hook_command, "timeout": 2}]}
+                hooks = settings.setdefault("hooks", {})
+                if not isinstance(hooks, dict) or any(not isinstance(hooks.get(event, []), list) for event in BRIDGE_EVENTS):
+                    raise BridgeConfigurationError("Claude Hook 设置格式无效")
+                for event in BRIDGE_EVENTS:
+                    if journal and journal.get("hookGroup") and event in hooks:
+                        hooks[event] = [g for g in hooks[event] if g != journal["hookGroup"]]
+                    hooks.setdefault(event, []).append(group)
+            elif journal and journal.get("hookGroup") and isinstance(settings.get("hooks"), dict):
+                hooks = settings["hooks"]
+                for event in BRIDGE_EVENTS:
+                    if isinstance(hooks.get(event), list):
+                        hooks[event] = [g for g in hooks[event] if g != journal["hookGroup"]]
+                        if not hooks[event]:
+                            hooks.pop(event)
+                if not hooks and not had_hooks:
+                    settings.pop("hooks", None)
             settings["statusLine"] = installed
             journal = {"originalStatusLine": previous, "installedStatusLine": installed, "hookGroup": group, "hadHooks": had_hooks}
             atomic_write(journal_path, encode(journal).encode())
@@ -1036,6 +1275,112 @@ def configure_claude(claude_home, uninstall=False):
         lock.close()
 
 
+def configure_gemini(gemini_home, uninstall=False):
+    gemini_home = gemini_home.expanduser()
+    settings_path = gemini_home / "settings.json"
+    if settings_path.is_symlink():
+        raise BridgeConfigurationError("Gemini (agy) 设置是符号链接, 请手动接入")
+    bridge = gemini_home / "codexbar-usage"
+    bridge.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (bridge / "signals").mkdir(exist_ok=True, mode=0o700)
+    journal_path = bridge / "installation.json"
+    lock = open(bridge / "installation.lock", "a")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        original = settings_path.read_bytes() if settings_path.exists() else b"{}"
+        settings = json.loads(original) if original.strip() else {}
+        if not isinstance(settings, dict):
+            raise BridgeConfigurationError("Gemini (agy) 设置格式无效")
+        journal = json.loads(journal_path.read_text()) if journal_path.exists() else None
+        if uninstall:
+            if not journal:
+                return
+            current_sl = settings.get("statusLine")
+            expected_cmd = journal.get("installedCommand")
+            if isinstance(current_sl, dict) and current_sl.get("command") != expected_cmd:
+                raise BridgeConfigurationError("Gemini 状态栏已被其他程序修改, 已保留现有配置")
+            if journal.get("originalStatusLine") is None:
+                settings.pop("statusLine", None)
+            else:
+                settings["statusLine"] = journal["originalStatusLine"]
+        else:
+            current_sl = settings.get("statusLine")
+            if journal:
+                expected_cmd = journal.get("installedCommand")
+                orig_sl = journal.get("originalStatusLine")
+                orig_cmd = orig_sl.get("command") if isinstance(orig_sl, dict) else None
+                cur_cmd = current_sl.get("command") if isinstance(current_sl, dict) else None
+                if current_sl is not None and cur_cmd not in (expected_cmd, orig_cmd):
+                    raise BridgeConfigurationError("Gemini 状态栏配置已经变化, 请先检查现有接入")
+                previous = orig_sl
+            else:
+                previous = current_sl
+            if previous is not None:
+                if isinstance(previous, bool):
+                    previous = None
+                elif not isinstance(previous, dict) or previous.get("type") not in (None, "command") or not isinstance(previous.get("command"), str):
+                    raise BridgeConfigurationError("当前 Gemini 状态栏不是 command 类型, 请手动接入")
+            script_path = bridge / "collector.py"
+            atomic_write(script_path, bridge_script_source())
+            command = shlex.join([sys.executable, str(script_path), "gemini-statusline", "--gemini-home", str(gemini_home)])
+            if previous is None:
+                # 保留 agy 官方默认内置状态栏, 探针脚本静默采集不额外输出空行
+                installed = {"type": "command", "command": command, "stack_with_default": True}
+            else:
+                installed = dict(previous)
+                installed.update(type="command", command=command)
+            settings["statusLine"] = installed
+            journal = {"originalStatusLine": previous, "installedCommand": command, "installedStatusLine": installed}
+            atomic_write(journal_path, encode(journal).encode())
+        current = settings_path.read_bytes() if settings_path.exists() else b"{}"
+        if current != original:
+            raise BridgeConfigurationError("Gemini 设置同时发生变化, 请重试")
+        settings_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        atomic_write(settings_path, (json.dumps(settings, ensure_ascii=False, indent=2) + "\n").encode())
+        os.chmod(settings_path, 0o600)
+        if uninstall:
+            journal_path.unlink(missing_ok=True)
+    finally:
+        lock.close()
+
+
+def update_live_state_file(bridge_dir, session_hash, entry):
+    live_path = bridge_dir / "live-state.json"
+    lock_path = bridge_dir / "live-state.lock"
+    with open(lock_path, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            data = json.loads(live_path.read_text()) if live_path.is_file() else {}
+        except (OSError, ValueError):
+            data = {}
+        tasks = data.get("tasks") if isinstance(data, dict) and isinstance(data.get("tasks"), dict) else {}
+        now_ts = time.time()
+        tasks = {k: v for k, v in tasks.items() if isinstance(v, dict) and now_ts - float(v.get("updatedAt", 0)) < 86400}
+        prev = tasks.get(session_hash)
+        if prev:
+            entry["startedAt"] = prev.get("startedAt", entry["updatedAt"])
+            if prev.get("state") == entry["state"]:
+                entry["stateChangedAt"] = prev.get("stateChangedAt", entry["updatedAt"])
+            else:
+                entry["stateChangedAt"] = entry["updatedAt"]
+        else:
+            entry["startedAt"] = entry["updatedAt"]
+            entry["stateChangedAt"] = entry["updatedAt"]
+        should_append_signal = (
+            prev is None
+            or prev.get("state") != entry["state"]
+            or prev.get("quotaFingerprint") != entry.get("quotaFingerprint")
+            or now_ts - float(prev.get("lastSignalAt", 0)) >= 60
+        )
+        if should_append_signal:
+            entry["lastSignalAt"] = now_ts
+        elif prev:
+            entry["lastSignalAt"] = prev.get("lastSignalAt", 0)
+        tasks[session_hash] = entry
+        atomic_write(live_path, encode({"updatedAt": now_ts, "tasks": tasks}).encode())
+        return should_append_signal
+
+
 def capture_claude(raw, claude_home, statusline=False):
     payload = json.loads(raw)
     if not isinstance(payload, dict) or not isinstance(payload.get("session_id"), str):
@@ -1044,22 +1389,57 @@ def capture_claude(raw, claude_home, statusline=False):
     if event not in BRIDGE_EVENTS and event != "statusline":
         return
     now = dt.datetime.now(dt.timezone.utc)
+    now_ts = now.timestamp()
     model = payload.get("model")
     if isinstance(model, dict):
         model = model.get("id")
+    session_hash = digest("claude-session", payload["session_id"])
+    project_name = text(pathlib.PurePath(payload.get("cwd") or "未知").name)
+    model_name = text(model)
     record = {"type": "codexbar_signal", "timestamp": now.isoformat(), "event": event,
-              "id": str(uuid.uuid4()), "session": digest("claude-session", payload["session_id"]),
-              "project": text(pathlib.PurePath(payload.get("cwd") or "未知").name), "model": text(model)}
+              "id": str(uuid.uuid4()), "session": session_hash,
+              "project": project_name, "model": model_name}
     limits = payload.get("rate_limits")
+    rate_limits = {}
     if statusline and isinstance(limits, dict):
-        record["rateLimits"] = {}
         for name in ("five_hour", "seven_day"):
             window = limits.get(name)
             if isinstance(window, dict):
                 used = window.get("used_percentage")
                 if isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used) and 0 <= used <= 100:
-                    record["rateLimits"][name] = {"used_percentage": used, "resets_at": number(window.get("resets_at")) or None}
-    directory = claude_home.expanduser() / "codexbar-usage/signals"
+                    rate_limits[name] = {"used_percentage": used, "resets_at": number(window.get("resets_at")) or None}
+        if rate_limits:
+            record["rateLimits"] = rate_limits
+    bridge_dir = claude_home.expanduser() / "codexbar-usage"
+    bridge_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if statusline:
+        ctx = payload.get("context_window") or {}
+        cur = ctx.get("current_usage") if isinstance(ctx, dict) else None
+        token_usage = None
+        if isinstance(cur, dict):
+            in_t = number(cur.get("input_tokens"))
+            cr_t = number(cur.get("cache_read_input_tokens"))
+            cw_t = number(cur.get("cache_creation_input_tokens"))
+            out_t = number(ctx.get("total_output_tokens") or cur.get("output_tokens"))
+            if in_t + cr_t + cw_t + out_t > 0:
+                total_in = in_t + cr_t + cw_t
+                token_usage = {
+                    "input_tokens": total_in,
+                    "cached_input_tokens": cr_t,
+                    "cache_write_input_tokens": cw_t,
+                    "output_tokens": out_t,
+                    "total_tokens": total_in + out_t
+                }
+        try:
+            update_live_state_file(bridge_dir, session_hash, {
+                "id": session_hash, "provider": "claude", "state": "running",
+                "project": project_name or "未知", "modelName": model_name or None,
+                "updatedAt": now_ts, "tokenUsage": token_usage,
+                "quotaFingerprint": encode(rate_limits) if rate_limits else ""
+            })
+        except (OSError, BlockingIOError):
+            pass
+    directory = bridge_dir / "signals"
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = directory / (now.strftime("%Y-%m-%d") + ".jsonl")
     descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -1070,16 +1450,425 @@ def capture_claude(raw, claude_home, statusline=False):
         os.close(descriptor)
 
 
+def capture_gemini(raw, gemini_home):
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        return
+    cid = payload.get("conversation_id") or payload.get("session_id") or ""
+    if not isinstance(cid, str):
+        cid = ""
+    now = dt.datetime.now(dt.timezone.utc)
+    now_ts = now.timestamp()
+    session_hash = digest("gemini-session", cid) if cid else digest("gemini-session", "idle")
+    ws = payload.get("workspace") if isinstance(payload.get("workspace"), dict) else {}
+    cwd = ws.get("current_dir") or ws.get("project_dir") or payload.get("cwd") or ""
+    project_name = text(pathlib.PurePath(cwd.rstrip("/") or "未知").name) if isinstance(cwd, str) and cwd else "未知"
+    model_obj = payload.get("model") if isinstance(payload.get("model"), dict) else {}
+    raw_model = text(model_obj.get("id") or model_obj.get("display_name") or "")
+    effort = text((model_obj.get("effort") or model_obj.get("effort_level") or "").strip().lower(), 40)
+    if not effort and raw_model:
+        matched = re.search(r"\((Low|Medium|High|XHigh|Max)\)", raw_model, flags=re.I) or re.search(r"-(low|medium|high|xhigh|max)$", raw_model, flags=re.I)
+        if matched:
+            effort = matched.group(1).lower()
+    quota = payload.get("quota") if isinstance(payload.get("quota"), dict) else {}
+    rate_limits = {}
+    for bucket_key, target_name in (("gemini-5h", "five_hour"), ("gemini-weekly", "seven_day")):
+        bucket = quota.get(bucket_key)
+        if not isinstance(bucket, dict) or bucket.get("remaining_fraction") is None:
+            continue
+        rem = bucket.get("remaining_fraction")
+        if isinstance(rem, bool) or not isinstance(rem, (int, float)) or not math.isfinite(rem):
+            continue
+        used = round(max(0.0, min(100.0, (1.0 - float(rem)) * 100.0)), 2)
+        reset_at = None
+        if isinstance(bucket.get("reset_time"), str):
+            parsed = timestamp(bucket["reset_time"])
+            reset_at = int(parsed.timestamp()) if parsed else None
+        if not reset_at and isinstance(bucket.get("reset_in_seconds"), (int, float)) and not isinstance(bucket.get("reset_in_seconds"), bool):
+            secs = float(bucket["reset_in_seconds"])
+            if math.isfinite(secs) and secs > 0:
+                reset_at = int(now_ts + secs)
+        rate_limits[target_name] = {"used_percentage": used, "resets_at": reset_at}
+    agent_state = (payload.get("agent_state") or "").strip().lower() if isinstance(payload.get("agent_state"), str) else ""
+    waiting = bool(payload.get("tool_confirmation_pending")) or agent_state == "reviewing"
+    if waiting:
+        task_state, stage, event_name = "waiting", "waiting-approval", "PermissionRequest"
+    elif agent_state in ("working", "tool_use", "initializing", "authenticating"):
+        task_state = "running"
+        stage = "tool" if agent_state == "tool_use" else "thinking"
+        event_name = "PreToolUse" if agent_state == "tool_use" else "UserPromptSubmit"
+    elif agent_state == "error":
+        task_state, stage, event_name = "ended", None, "StopFailure"
+    else:
+        task_state, stage, event_name = "completed", None, "Stop"
+    subagents = payload.get("subagents") if isinstance(payload.get("subagents"), list) else []
+    active_subs = sum(1 for item in subagents if isinstance(item, dict) and item.get("status") == "running")
+    ctx = payload.get("context_window") if isinstance(payload.get("context_window"), dict) else {}
+    cur = ctx.get("current_usage") if isinstance(ctx.get("current_usage"), dict) else {}
+    token_usage = None
+    in_t = number(cur.get("input_tokens") or ctx.get("total_input_tokens"))
+    cr_t = number(cur.get("cache_read_input_tokens"))
+    cw_t = number(cur.get("cache_creation_input_tokens"))
+    out_t = number(ctx.get("total_output_tokens") or cur.get("output_tokens"))
+    if in_t + cr_t + cw_t + out_t > 0:
+        total_in = in_t + cr_t + cw_t
+        token_usage = {
+            "input_tokens": total_in,
+            "cached_input_tokens": cr_t,
+            "cache_write_input_tokens": cw_t,
+            "output_tokens": out_t,
+            "total_tokens": total_in + out_t
+        }
+    plan_tier = text(payload.get("plan_tier"), 40)
+    email = payload.get("email")
+    account_hash = digest("gemini-account", email.strip().lower()) if isinstance(email, str) and email.strip() else None
+    auth_mode = gemini_authentication_type(gemini_home.expanduser())
+    if auth_mode == "unknown":
+        auth_mode = "oauth"
+    bridge_dir = gemini_home.expanduser() / "codexbar-usage"
+    bridge_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    should_write_signal = True
+    if cid:
+        try:
+            should_write_signal = update_live_state_file(bridge_dir, session_hash, {
+                "id": session_hash, "provider": "gemini", "state": task_state,
+                "project": project_name or "未知", "modelName": raw_model or None,
+                "effort": effort or None, "stage": stage, "eventName": event_name,
+                "activeSubagentCount": active_subs, "pendingInputCount": number(payload.get("pending_input_count")),
+                "hasBlockingInputRequest": waiting, "updatedAt": now_ts,
+                "tokenUsage": token_usage, "planTier": plan_tier or None,
+                "quotaFingerprint": encode(rate_limits) if rate_limits else ""
+            })
+        except (OSError, BlockingIOError):
+            pass
+    if not should_write_signal and not rate_limits:
+        return
+    record = {"type": "codexbar_signal", "timestamp": now.isoformat(), "event": "statusline",
+              "id": str(uuid.uuid4()), "session": session_hash, "auth": auth_mode,
+              "project": project_name, "model": raw_model}
+    if cid:
+        record["activityState"] = task_state
+    if plan_tier:
+        record["planTier"] = plan_tier
+    if account_hash:
+        record["account"] = account_hash
+    if rate_limits:
+        record["rateLimits"] = rate_limits
+    directory = bridge_dir / "signals"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = directory / (now.strftime("%Y-%m-%d") + ".jsonl")
+    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.write(descriptor, (encode(record) + "\n").encode())
+    finally:
+        os.close(descriptor)
+
+
+class GeminiValuationLedger:
+    """增量记录 Gemini 周限窗口与逐轮 Token, 支持单机与多节点汇总估值"""
+
+    filename = "gemini-valuation-v1.sqlite"
+    max_records = 25000
+
+    def __init__(self, directory, gemini_home, budget, read_only=False):
+        self.home = gemini_home.expanduser()
+        self.deadline = time.monotonic() + budget
+        self.cutoff = time.time() - 70 * 86400
+        if not read_only:
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        uri = (directory / self.filename).resolve().as_uri() + "?mode=ro"
+        self.connection = sqlite3.connect(uri, uri=True, timeout=2) if read_only else sqlite3.connect(str(directory / self.filename), timeout=2)
+        version = self.connection.execute("PRAGMA user_version").fetchone()[0]
+        if version not in (0, 1):
+            self.connection.close()
+            raise ValueError("不支持的 Gemini 价值统计缓存")
+        if not read_only:
+            self.connection.executescript("""
+                PRAGMA journal_mode=WAL;
+                PRAGMA user_version=1;
+                CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, inode TEXT, offset INTEGER, state TEXT);
+                CREATE TABLE IF NOT EXISTS usage(
+                    id TEXT PRIMARY KEY, at REAL NOT NULL, model TEXT NOT NULL,
+                    input INTEGER NOT NULL, cached INTEGER NOT NULL, cache_write INTEGER NOT NULL,
+                    output INTEGER NOT NULL, auth TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS gemini_usage_at ON usage(at);
+                CREATE TABLE IF NOT EXISTS samples(
+                    id TEXT PRIMARY KEY, session TEXT NOT NULL, reset REAL NOT NULL,
+                    at REAL NOT NULL, used REAL NOT NULL, plan TEXT, account TEXT);
+                CREATE INDEX IF NOT EXISTS gemini_samples_reset ON samples(reset, at);
+                CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            """)
+            os.chmod(directory / self.filename, 0o600)
+        metadata = dict(self.connection.execute("SELECT key, value FROM meta"))
+        self.complete = metadata.get("complete") == "true"
+        self.scanned_at = float(metadata.get("scannedAt", "0"))
+
+    def scan(self):
+        self.complete = True
+        auth = gemini_authentication_type(self.home)
+        if auth == "unknown":
+            auth = "oauth"
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            signals = self.home / "codexbar-usage/signals"
+            if signals.is_dir() and not signals.is_symlink():
+                for path in sorted(signals.glob("*.jsonl"), reverse=True):
+                    if time.monotonic() >= self.deadline:
+                        self.complete = False
+                        break
+                    self._scan_file(path, "signal", auth)
+            brain_root = self.home / "brain"
+            if brain_root.is_dir() and not brain_root.is_symlink():
+                entries = [e for e in os.scandir(brain_root) if e.is_dir(follow_symlinks=False)]
+                entries.sort(key=lambda e: e.name, reverse=True)
+                for entry in entries:
+                    if time.monotonic() >= self.deadline:
+                        self.complete = False
+                        break
+                    transcript = pathlib.Path(entry.path) / ".system_generated/logs/transcript.jsonl"
+                    if transcript.is_file() and not transcript.is_symlink():
+                        self._scan_file(transcript, "transcript", auth, cid=entry.name)
+            self.connection.execute("DELETE FROM usage WHERE at<?", (self.cutoff,))
+            self.connection.execute("DELETE FROM samples WHERE at<?", (self.cutoff,))
+            self.scanned_at = time.time()
+            self.connection.executemany(
+                "INSERT OR REPLACE INTO meta VALUES(?, ?)",
+                [("complete", encode(self.complete)), ("scannedAt", str(self.scanned_at))]
+            )
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def _scan_file(self, path, mode, default_auth, cid=""):
+        try:
+            stat = path.lstat()
+            if not S_ISREG(stat.st_mode) or stat.st_mtime < self.cutoff:
+                return
+            key = digest(str(path))
+            inode = f"{stat.st_dev}:{stat.st_ino}"
+            saved = self.connection.execute("SELECT inode, offset, state FROM files WHERE path=?", (key,)).fetchone()
+            previous = json.loads(saved[2]) if saved else {}
+            if saved and saved[0] == inode and saved[1] == stat.st_size and previous.get("mtime") == stat.st_mtime_ns:
+                return
+            with path.open("rb") as stream:
+                prefix = hashlib.sha256(stream.read(min(256, saved[1] if saved else 256))).hexdigest()
+                continuing = saved and saved[0] == inode and saved[1] < stat.st_size and previous.get("prefix") == prefix
+                offset = saved[1] if continuing else 0
+                state = previous if continuing else {"model": "gemini-4-carbon"}
+                stream.seek(offset)
+                while time.monotonic() < self.deadline:
+                    pos = stream.tell()
+                    line = stream.readline(MAX_LINE + 1)
+                    if not line:
+                        break
+                    if len(line) > MAX_LINE:
+                        while line and not line.endswith(b"\n") and time.monotonic() < self.deadline:
+                            line = stream.readline(MAX_LINE + 1)
+                        if not line or not line.endswith(b"\n"):
+                            stream.seek(pos)
+                            self.complete = False
+                            break
+                        continue
+                    if not line.endswith(b"\n"):
+                        stream.seek(pos)
+                        break
+                    try:
+                        row = json.loads(line)
+                        if isinstance(row, dict):
+                            if mode == "signal":
+                                self._observe_signal(row)
+                            else:
+                                self._observe_transcript(row, state, cid, default_auth)
+                    except (ValueError, TypeError, AttributeError):
+                        continue
+                if stream.tell() < stat.st_size:
+                    self.complete = False
+                end_off = stream.tell()
+                state["mtime"] = stat.st_mtime_ns
+                stream.seek(0)
+                state["prefix"] = hashlib.sha256(stream.read(min(256, end_off))).hexdigest()
+                self.connection.execute("INSERT OR REPLACE INTO files VALUES(?, ?, ?, ?)", (key, inode, end_off, encode(state)))
+        except OSError:
+            self.complete = False
+
+    def _observe_signal(self, row):
+        if row.get("type") != "codexbar_signal" or row.get("event") != "statusline":
+            return
+        parsed = timestamp(row.get("timestamp"))
+        if not parsed:
+            return
+        at = parsed.timestamp()
+        if at < self.cutoff or at > time.time() + 60:
+            return
+        plan = text(row.get("planTier"), 40) or None
+        if plan:
+            self.connection.execute("INSERT OR REPLACE INTO meta VALUES('planTier', ?)", (plan,))
+        limits = row.get("rateLimits")
+        if not isinstance(limits, dict):
+            return
+        weekly = limits.get("seven_day")
+        if not isinstance(weekly, dict):
+            return
+        reset = number(weekly.get("resets_at"))
+        used = weekly.get("used_percentage")
+        if not reset or isinstance(used, bool) or not isinstance(used, (int, float)) or not 0 <= used <= 100:
+            return
+        if not at - 60 <= reset <= at + 8 * 86400:
+            return
+        session = row.get("session") if isinstance(row.get("session"), str) and len(row.get("session")) == 64 else digest("gemini-session", "signal")
+        account = row.get("account") if isinstance(row.get("account"), str) and len(row.get("account")) == 64 else None
+        sample_id = digest("gemini-weekly-sample", session, at, reset, used)
+        self.connection.execute(
+            "INSERT OR IGNORE INTO samples VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (sample_id, session, float(reset), at, float(used), plan, account)
+        )
+
+    def _observe_transcript(self, row, state, cid, default_auth):
+        parsed = timestamp(row.get("created_at") or row.get("timestamp"))
+        if not parsed:
+            return
+        at = parsed.timestamp()
+        if at < self.cutoff or at > time.time() + 60:
+            return
+        typ = row.get("type")
+        if typ == "USER_INPUT":
+            content = row.get("content")
+            if isinstance(content, str) and "<USER_SETTINGS_CHANGE>" in content and "Model Selection" in content:
+                matched = GEMINI_SWITCH_RE.search(content)
+                if matched:
+                    state["model"] = text(matched.group(2).strip(), 120) or state.get("model", "gemini-4-carbon")
+            return
+        if typ not in ("PLANNER_RESPONSE", "CHECKPOINT"):
+            return
+        model = text(row.get("model"), 120) or state.get("model", "gemini-4-carbon")
+        state["model"] = model
+        # 仅统计属于 Gemini 共享池的模型请求, 排除第三方 Claude/GPT 独立池
+        low = model.lower()
+        if any(token in low for token in ("claude", "opus", "sonnet", "haiku", "fable", "mythos", "gpt")):
+            return
+        in_t = number(row.get("input_tokens"))
+        cr_t = number(row.get("cache_read_tokens"))
+        cw_t = number(row.get("cache_creation_tokens"))
+        out_t = number(row.get("output_tokens"))
+        if in_t + cr_t + cw_t + out_t <= 0:
+            return
+        step = number(row.get("step_index"))
+        rec_id = digest("gemini-value-step", cid, typ, step)
+        self.connection.execute(
+            "INSERT OR REPLACE INTO usage VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+            (rec_id, at, model, in_t, cr_t, cw_t, out_t, default_auth)
+        )
+
+    def export(self):
+        sample_rows = self.connection.execute(
+            "SELECT session, reset, at, used, plan FROM samples ORDER BY reset, at, used"
+        ).fetchall()
+        windows = ValuationLedger.export(self, [r[:4] for r in sample_rows])["windows"] if sample_rows else []
+        plans = []
+        for _, reset, at, _, plan in sorted(sample_rows, key=lambda r: r[2]):
+            if plan and (not plans or plans[-1]["plan"] != plan or abs(plans[-1]["resetsAt"] - reset) > 2):
+                plans.append({"at": at, "resetsAt": reset, "plan": plan})
+        usage_rows = self.connection.execute(
+            "SELECT id, at, model, input, cached, cache_write, output FROM usage WHERE auth='oauth' AND at>=? ORDER BY at DESC, id LIMIT ?",
+            (self.cutoff, self.max_records + 1)
+        ).fetchall()
+        plan_row = self.connection.execute("SELECT value FROM meta WHERE key='planTier'").fetchone()
+        return {
+            "schema": 1,
+            "ready": True,
+            "complete": self.complete,
+            "generatedAt": time.time(),
+            "scannedAt": self.scanned_at,
+            "planTier": plan_row[0] if plan_row else None,
+            "truncated": len(usage_rows) > self.max_records,
+            "windows": windows,
+            "plans": plans[-500:],
+            "records": [
+                {
+                    "id": r[0],
+                    "at": r[1],
+                    "model": r[2],
+                    "tokens": {"input": r[3], "cached": r[4], "cacheWrite": r[5], "output": r[6]}
+                }
+                for r in usage_rows[:self.max_records]
+            ]
+        }
+
+
+def scan_claude_weekly_windows(claude_home, budget=4):
+    claude_home = claude_home.expanduser()
+    cutoff = time.time() - 70 * 86400
+    deadline = time.monotonic() + budget
+    samples = {}
+    cache_path = claude_home / "ccline/.api_usage_cache.json"
+    if cache_path.is_file() and not cache_path.is_symlink() and not cache_path.parent.is_symlink():
+        try:
+            value = json.loads(cache_path.read_bytes()[:65536])
+            obs = timestamp(value.get("cached_at"))
+            rst_raw = value.get("seven_day_resets_at", value.get("resets_at"))
+            rst = timestamp(rst_raw).timestamp() if isinstance(rst_raw, str) and timestamp(rst_raw) else number(rst_raw)
+            used = value.get("seven_day_utilization")
+            if obs and rst and isinstance(used, (int, float)) and not isinstance(used, bool) and 0 <= used <= 100:
+                at = obs.timestamp()
+                if cutoff <= at <= time.time() + 60 and at - 60 <= rst <= at + 8 * 86400:
+                    sid = digest("claude-ccline-cache", at, rst, used)
+                    samples[sid] = ("ccline", float(rst), at, float(used))
+        except (OSError, ValueError, TypeError):
+            pass
+    signals = claude_home / "codexbar-usage/signals"
+    if signals.is_dir() and not signals.is_symlink():
+        for path in sorted(signals.glob("*.jsonl"), reverse=True):
+            if time.monotonic() >= deadline:
+                break
+            try:
+                if path.is_symlink() or path.stat().st_mtime < cutoff:
+                    continue
+                with path.open("rb") as stream:
+                    for raw in stream:
+                        if time.monotonic() >= deadline:
+                            break
+                        if len(raw) > MAX_LINE:
+                            continue
+                        row = json.loads(raw)
+                        if not isinstance(row, dict) or row.get("event") != "statusline":
+                            continue
+                        obs = timestamp(row.get("timestamp"))
+                        weekly = (row.get("rateLimits") or {}).get("seven_day") if isinstance(row.get("rateLimits"), dict) else None
+                        if not obs or not isinstance(weekly, dict):
+                            continue
+                        at = obs.timestamp()
+                        rst = number(weekly.get("resets_at"))
+                        used = weekly.get("used_percentage")
+                        if at < cutoff or at > time.time() + 60 or not rst or isinstance(used, bool) or not isinstance(used, (int, float)) or not 0 <= used <= 100:
+                            continue
+                        if not at - 60 <= rst <= at + 8 * 86400:
+                            continue
+                        sess = row.get("session") if isinstance(row.get("session"), str) else "claude"
+                        sid = digest("claude-weekly-sample", sess, at, rst, used)
+                        samples[sid] = (sess, float(rst), at, float(used))
+            except (OSError, ValueError, TypeError):
+                continue
+    rows = sorted(samples.values(), key=lambda r: (r[1], r[2], r[3]))
+    windows = ValuationLedger.export(object(), rows)["windows"] if rows else []
+    return {"schema": 1, "generatedAt": time.time(), "windows": windows}
+
+
 def bridge_input(args):
     raw = sys.stdin.buffer.read(MAX_LINE + 1)
     try:
         if len(raw) <= MAX_LINE:
-            capture_claude(raw, args.claude_home, args.command == "claude-statusline")
+            if args.command == "gemini-statusline":
+                capture_gemini(raw, args.gemini_home)
+            else:
+                capture_claude(raw, args.claude_home, args.command == "claude-statusline")
     except (OSError, ValueError, TypeError):
         pass
-    if args.command != "claude-statusline":
+    if args.command not in ("claude-statusline", "gemini-statusline"):
         return
-    journal = args.claude_home.expanduser() / "codexbar-usage/installation.json"
+    home = args.gemini_home if args.command == "gemini-statusline" else args.claude_home
+    journal = home.expanduser() / "codexbar-usage/installation.json"
     try:
         previous = json.loads(journal.read_text()).get("originalStatusLine")
     except (OSError, ValueError):
@@ -1092,42 +1881,87 @@ def bridge_input(args):
             stream.seek(0)
             os.dup2(stream.fileno(), sys.stdin.fileno())
             os.execl("/bin/sh", "sh", "-c", previous["command"])
-    else:
+    elif args.command == "claude-statusline":
         print("Claude Code")
 
 
 def parser():
     result = argparse.ArgumentParser(description="CodexBar 本地日志统计, 不导出登录凭据")
-    result.add_argument("command", choices=("collect", "valuation", "quota-history", "token-history", "install-claude", "uninstall-claude", "claude-statusline", "claude-hook"))
+    result.add_argument(
+        "command",
+        choices=(
+            "collect", "valuation", "quota-history", "token-history", "gemini-valuation", "claude-valuation",
+            "install-claude", "uninstall-claude", "claude-statusline", "claude-hook",
+            "install-gemini", "uninstall-gemini", "gemini-statusline"
+        )
+    )
     result.add_argument("--state-dir", type=pathlib.Path)
     result.add_argument("--codex-home", type=pathlib.Path, default=pathlib.Path(os.environ.get("CODEX_HOME", str(pathlib.Path.home() / ".codex"))))
     result.add_argument("--claude-home", type=pathlib.Path, default=pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", str(pathlib.Path.home() / ".claude"))))
-    result.add_argument("--providers", choices=("codex", "claude", "codex,claude"), default="codex,claude")
+    result.add_argument("--gemini-home", type=pathlib.Path, default=pathlib.Path(os.environ.get("GEMINI_CLI_HOME", str(pathlib.Path.home() / ".gemini/antigravity-cli"))))
+    result.add_argument("--providers", default="codex,claude")
     result.add_argument("--epoch", default="")
     result.add_argument("--cursor", type=int, default=0)
     result.add_argument("--limit", type=int, default=1500)
     result.add_argument("--budget", type=float, default=20)
     result.add_argument("--skip-scan", action="store_true")
+    result.add_argument("--no-hooks", action="store_true", help="仅桥接状态栏, 不注入生命周期 Hook")
     result.add_argument("--quiet", action="store_true", help="只更新本地统计, 不向标准输出导出数据")
     result.add_argument("--account-key", default="")
     result.add_argument("--include-auth-type", action="store_true", help="附带当前 Codex 凭据类型, 不输出凭据内容")
     return result
 
 
+def default_source_state_dir(codex_home, claude_home, gemini_home):
+    default_gemini = (pathlib.Path.home() / ".gemini/antigravity-cli").resolve()
+    resolved_gemini = gemini_home.expanduser().resolve()
+    if resolved_gemini == default_gemini:
+        # 默认 Gemini 路径保持原有目录哈希, 避免已有本机与远端统计缓存重置
+        return state_directory() / "sources" / digest(str(codex_home.expanduser().resolve()), str(claude_home.expanduser().resolve()))
+    return state_directory() / "sources" / digest(
+        str(codex_home.expanduser().resolve()),
+        str(claude_home.expanduser().resolve()),
+        str(resolved_gemini)
+    )
+
+
 def main():
     os.umask(0o077)
     args = parser().parse_args()
-    if args.command in ("claude-statusline", "claude-hook"):
+    if args.command in ("claude-statusline", "claude-hook", "gemini-statusline"):
         bridge_input(args)
         return
     if args.command in ("install-claude", "uninstall-claude"):
-        configure_claude(args.claude_home, uninstall=args.command == "uninstall-claude")
+        configure_claude(args.claude_home, uninstall=args.command == "uninstall-claude", include_hooks=not args.no_hooks)
         print(encode({"ok": True}))
         return
+    if args.command in ("install-gemini", "uninstall-gemini"):
+        configure_gemini(args.gemini_home, uninstall=args.command == "uninstall-gemini")
+        print(encode({"ok": True}))
+        return
+    providers = parse_providers(args.providers)
     if not 1 <= args.limit <= 3000 or not 0 < args.budget <= 60:
         raise ValueError("采集参数超出范围")
-    directory = args.state_dir.expanduser() if args.state_dir else state_directory() / "sources" / digest(
-        str(args.codex_home.expanduser().resolve()), str(args.claude_home.expanduser().resolve()))
+    directory = args.state_dir.expanduser() if args.state_dir else default_source_state_dir(args.codex_home, args.claude_home, args.gemini_home)
+    if args.command == "claude-valuation":
+        if not args.quiet:
+            print(encode(scan_claude_weekly_windows(args.claude_home, budget=min(8.0, args.budget))))
+        return
+    if args.command == "gemini-valuation":
+        if args.skip_scan and not (directory / GeminiValuationLedger.filename).exists():
+            if not args.quiet:
+                print(encode({"schema": 1, "ready": False, "complete": False, "generatedAt": time.time(),
+                              "scannedAt": 0, "planTier": None, "truncated": False, "windows": [], "plans": [], "records": []}))
+            return
+        ledger = GeminiValuationLedger(directory, args.gemini_home, args.budget, read_only=args.skip_scan)
+        try:
+            if not args.skip_scan:
+                ledger.scan()
+            if not args.quiet:
+                print(encode(ledger.export()))
+        finally:
+            ledger.connection.close()
+        return
     if args.command == "token-history":
         if not re.fullmatch("[0-9a-f]{64}", args.account_key):
             raise ValueError("账号摘要格式无效")
@@ -1173,18 +2007,18 @@ def main():
     started = time.monotonic()
     database = Database(directory, writable=not args.skip_scan)
     try:
-        collector = Collector(database, args.codex_home.expanduser(), args.claude_home.expanduser(), args.providers.split(","), args.budget)
+        collector = Collector(database, args.codex_home.expanduser(), args.claude_home.expanduser(), providers, args.budget, gemini_home=args.gemini_home.expanduser())
         if not args.skip_scan:
             collector.collect()
         if not args.quiet:
-            output = database.export(args.epoch, args.cursor, args.limit, args.providers.split(","))
-            if args.include_auth_type and "codex" in args.providers.split(","):
+            output = database.export(args.epoch, args.cursor, args.limit, providers)
+            if args.include_auth_type and "codex" in providers:
                 output["currentCodexAuthentication"] = codex_authentication_type(args.codex_home.expanduser())
             print(encode(output))
     finally:
         database.connection.close()
     remaining = min(10, args.budget - (time.monotonic() - started))
-    if not args.skip_scan and "codex" in args.providers.split(",") and remaining > 0.1:
+    if not args.skip_scan and "codex" in providers and remaining > 0.1:
         try:
             ledger = SourceQuotaHistory(directory, args.codex_home.expanduser(), remaining)
             try:
@@ -1193,6 +2027,16 @@ def main():
                 ledger.connection.close()
         except (OSError, ValueError, sqlite3.Error):
             print("CodexBar: 额度历史缓存更新失败, 日志统计已保存", file=sys.stderr)
+    remaining = min(8, args.budget - (time.monotonic() - started))
+    if not args.skip_scan and "gemini" in providers and remaining > 0.1:
+        try:
+            ledger = GeminiValuationLedger(directory, args.gemini_home, remaining)
+            try:
+                ledger.scan()
+            finally:
+                ledger.connection.close()
+        except (OSError, ValueError, sqlite3.Error):
+            print("CodexBar: Gemini 价值缓存更新失败, 日志统计已保存", file=sys.stderr)
 
 
 if __name__ == "__main__":
@@ -1202,7 +2046,7 @@ if __name__ == "__main__":
         print("CodexBar: " + str(error), file=sys.stderr)
         sys.exit(1)
     except (OSError, ValueError, sqlite3.Error):
-        if len(sys.argv) > 1 and sys.argv[1] in ("claude-statusline", "claude-hook"):
+        if len(sys.argv) > 1 and sys.argv[1] in ("claude-statusline", "claude-hook", "gemini-statusline"):
             sys.exit(0)
         print("统计采集失败, 请检查目录权限与数据库状态", file=sys.stderr)
         sys.exit(1)

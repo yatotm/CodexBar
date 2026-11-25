@@ -725,10 +725,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
 
         menu.addItem(menuItem(
-            title: "用量中心",
+            title: "控制中心",
             action: #selector(openUsageCenter),
             keyEquivalent: "u",
-            symbolName: "chart.bar.xaxis"
+            symbolName: "slider.horizontal.2.square"
         ))
 
         menu.addItem(menuItem(
@@ -951,7 +951,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func updateServiceStatusAvailability() {
         let enabled = menuSurfaceVisibility.isVisible && !viewModel.isRefreshSuspended
-            && mainPanelSettings.layout.isVisible(.serviceStatus) && usageCenterViewModel.menuScope != .claude
+            && mainPanelSettings.layout.isVisible(.serviceStatus)
+            && (usageCenterViewModel.menuScope == .codex || usageCenterViewModel.menuScope == .all)
+            && usageCenterViewModel.isProviderEnabledAnywhere(.codex)
         serviceStatusMonitor.setEnabled(enabled)
         if enabled {
             Task { await serviceStatusMonitor.refresh() }

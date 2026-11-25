@@ -33,9 +33,13 @@ def units(config):
     command = ["/usr/bin/python3", config["script"], "collect", "--quiet", "--budget", "60",
                "--state-dir", state, "--codex-home", config["codexHome"],
                "--claude-home", config["claudeHome"], "--providers", config["providers"]]
+    if config.get("geminiHome"):
+        command += ["--gemini-home", config["geminiHome"]]
     write_paths = quote(state)
     if "claude" in config["providers"].split(","):
         write_paths += " " + quote("-" + config["claudeHome"] + "/codexbar-usage/signals")
+    if "gemini" in config["providers"].split(",") and config.get("geminiHome"):
+        write_paths += " " + quote("-" + config["geminiHome"] + "/codexbar-usage/signals")
     hidden = [config["home"] + "/.ssh", config["codexHome"] + "/auth.json",
               config["claudeHome"] + "/.credentials.json"]
     service = MARKER + "\n".join([
@@ -89,12 +93,18 @@ def ensure_managed(paths):
 def main():
     parser = argparse.ArgumentParser(description="安装或移除 CodexBar 五分钟定时任务")
     parser.add_argument("--user", default=os.environ.get("SUDO_USER") or pwd.getpwuid(os.getuid()).pw_name)
-    parser.add_argument("--providers", choices=("codex", "claude", "codex,claude"), default="codex")
+    parser.add_argument("--providers", default="codex")
     parser.add_argument("--codex-home")
     parser.add_argument("--claude-home")
+    parser.add_argument("--gemini-home")
     parser.add_argument("--state-dir")
     parser.add_argument("--uninstall", action="store_true")
     args = parser.parse_args()
+    valid_providers = {"codex", "claude", "gemini"}
+    requested = [item.strip() for item in args.providers.split(",") if item.strip()]
+    if not requested or any(item not in valid_providers for item in requested):
+        raise ValueError("不支持的统计渠道参数")
+    args.providers = ",".join(dict.fromkeys(requested))
     if sys.platform != "linux" or os.geteuid() != 0:
         raise ValueError("安装系统定时任务需要在 Linux 上以 root 执行, 可用 --user 指定日志拥有者")
     account = pwd.getpwnam(args.user)
@@ -118,10 +128,12 @@ def main():
     script = code_dir / "collector.py"
     codex = configured_path(args.codex_home, home, ".codex")
     claude = configured_path(args.claude_home, home, ".claude")
+    gemini = configured_path(args.gemini_home, home, ".gemini/antigravity-cli")
     default_state = home / ".local/state/codexbar-usage/sources" / collector.digest(str(codex), str(claude))
     state = configured_path(args.state_dir, home, str(default_state))
     config = {"user": account.pw_name, "home": str(home), "providers": args.providers,
-              "codexHome": str(codex), "claudeHome": str(claude), "stateDirectory": str(state), "script": str(script)}
+              "codexHome": str(codex), "claudeHome": str(claude), "geminiHome": str(gemini),
+              "stateDirectory": str(state), "script": str(script)}
     if script.is_symlink() or (script.exists() and not manifest_path.exists()):
         raise ValueError("已有同名采集器不属于此安装器, 已保留原文件")
     if manifest_path.exists():

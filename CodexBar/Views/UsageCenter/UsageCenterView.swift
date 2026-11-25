@@ -7,42 +7,24 @@ struct UsageCenterView: View {
     @State private var deletingSource: UsageSource?
 
     var body: some View {
-        HSplitView {
-            sourceList.frame(width: 215)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    header
-                    filters
-                    if let error = viewModel.error {
-                        Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
-                    }
-                    if viewModel.dashboardFilter == viewModel.filter {
-                        totals
-                        UsageDailyChart(days: viewModel.dashboard.days).padding(14).usageCenterCard()
-                        UsageBreakdownView(groups: viewModel.dashboard.groups, grouping: $viewModel.filter.grouping).padding(14).usageCenterCard()
-                        if viewModel.filter.provider != "claude", viewModel.filter.authentication != "api" {
-                            UsageAnalyticsView(model: viewModel.analytics)
-                        }
-                        UsageDisclosure(title: "额度记录") { quotaSnapshots.padding(.top, 8) }
-                            .padding(14).usageCenterCard()
-                        UsageDisclosure(title: "最近任务") { activity.padding(.top, 8) }
-                            .padding(14).usageCenterCard()
-                    } else if viewModel.error == nil {
-                        ProgressView("正在查询统计…").frame(maxWidth: .infinity, minHeight: 180)
-                    }
-                    Text("UTC · 已采集日志 · 跨设备去重")
-                        .help("只统计保留的日志, 不代表订阅账单; 不与 Codex 账号全时累计相加")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .padding(16)
+        VStack(spacing: 0) {
+            topWorkspaceBar
+            Divider()
+            if viewModel.activeSection == .deployment {
+                ControlCenterDeploymentView(
+                    viewModel: viewModel,
+                    editingSource: $editingSource,
+                    deletingSource: $deletingSource
+                )
+            } else {
+                usageWorkspace
             }
-            .frame(minWidth: 640)
         }
         .liquidGlassSurface(cornerRadius: 12, isOuterSurface: true)
         .sheet(item: $editingSource) { source in
             UsageSourceEditor(viewModel: viewModel, source: source)
         }
-        .alert("移除统计来源?", isPresented: Binding(
+        .alert("移除监控节点?", isPresented: Binding(
             get: { deletingSource != nil }, set: {
                 if !$0 {
                     deletingSource = nil
@@ -57,34 +39,159 @@ struct UsageCenterView: View {
                 deletingSource = nil
             }
         } message: {
-            Text("移除此来源在本机的统计缓存和服务令牌。")
+            Text("移除此节点在本机的统计缓存和关联密钥")
+        }
+    }
+
+    private var topWorkspaceBar: some View {
+        HStack(spacing: 14) {
+            Picker("工作区", selection: $viewModel.activeSection) {
+                ForEach(ControlCenterSection.allCases) { section in
+                    Text(section.title).tag(section)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 220)
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(hubIndicatorColor)
+                    .frame(width: 7, height: 7)
+                Text(viewModel.topologyMode.title + " · " + viewModel.hubStatusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Menu {
+                Toggle("每 5 分钟自动刷新", isOn: $viewModel.automaticRefresh)
+            } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 25).help("刷新设置")
+            if viewModel.isRefreshing {
+                ProgressView().controlSize(.small)
+                Button("停止") { viewModel.cancelRefresh() }.controlSize(.small)
+            } else {
+                Button { viewModel.refresh() } label: { Image(systemName: "arrow.clockwise") }
+                    .keyboardShortcut("r", modifiers: .command).help("刷新统计")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var hubIndicatorColor: Color {
+        if viewModel.topologyMode == .localOnly {
+            return .blue
+        }
+        guard let healthy = viewModel.hubHealthy else { return .secondary }
+        return healthy ? .green : .orange
+    }
+
+    private var usageWorkspace: some View {
+        HSplitView {
+            sourceList.frame(width: 215)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    providerHeader
+                    filters
+                    if let error = viewModel.error {
+                        Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                    }
+                    if viewModel.dashboardFilter == viewModel.filter {
+                        totals
+                        UsageDailyChart(days: viewModel.dashboard.days).padding(14).usageCenterCard()
+                        UsageBreakdownView(groups: viewModel.dashboard.groups, grouping: $viewModel.filter.grouping)
+                            .padding(14).usageCenterCard()
+                        valuationSections
+                        UsageDisclosure(title: "额度记录") { quotaSnapshots.padding(.top, 8) }
+                            .padding(14).usageCenterCard()
+                        UsageDisclosure(title: "最近任务") { activity.padding(.top, 8) }
+                            .padding(14).usageCenterCard()
+                    } else if viewModel.error == nil {
+                        ProgressView("正在查询统计…").frame(maxWidth: .infinity, minHeight: 180)
+                    }
+                    Text("UTC · 已采集日志 · 跨设备去重")
+                        .help("只统计保留的日志, 不代表订阅账单; 不与账号全时累计相加")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(16)
+            }
+            .frame(minWidth: 640)
+        }
+    }
+
+    @ViewBuilder
+    private var valuationSections: some View {
+        if viewModel.filter.authentication != "api" {
+            let selected = viewModel.filter.provider
+            if selected.isEmpty || selected == "codex", viewModel.isProviderEnabledAnywhere(.codex) {
+                UsageAnalyticsView(model: viewModel.analytics)
+            }
+            if selected.isEmpty || selected == "claude", viewModel.isProviderEnabledAnywhere(.claude) {
+                ProviderValuationView(
+                    provider: "claude",
+                    title: "Claude 订阅区间价值",
+                    subtitle: "跨节点会话去重 · Claude 7d 额度锚定 · API 标准单价外推",
+                    pricingURL: URL(string: viewModel.geminiPriceBook.claudeApiSource ?? "https://docs.anthropic.com/en/docs/about-claude/pricing")!,
+                    periods: viewModel.claudePeriods,
+                    priceBook: viewModel.geminiPriceBook,
+                    hasOfflineNodes: viewModel.hasOfflineClaudeNodes,
+                    isRefreshing: viewModel.isRefreshing,
+                    onRefresh: { viewModel.refresh() }
+                )
+            }
+            if selected.isEmpty || selected == "gemini", viewModel.isProviderEnabledAnywhere(.gemini) {
+                ProviderValuationView(
+                    provider: "gemini",
+                    title: "Gemini 订阅区间价值",
+                    subtitle: "跨节点会话去重 · Gemini 7d 额度锚定 · API 标准单价外推",
+                    pricingURL: URL(string: viewModel.geminiPriceBook.geminiApiSource ?? "https://ai.google.dev/gemini-api/docs/pricing")!,
+                    periods: viewModel.geminiPeriods,
+                    priceBook: viewModel.geminiPriceBook,
+                    hasOfflineNodes: viewModel.hasOfflineGeminiNodes,
+                    isRefreshing: viewModel.isRefreshing,
+                    onRefresh: { viewModel.refresh() }
+                )
+            }
         }
     }
 
     private var sourceList: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("设备").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.top, 18)
+            Text("节点").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.top, 14)
             List {
                 UsageSourceRow(
-                    title: "全部机器",
+                    title: "全部节点",
                     symbol: "desktopcomputer.and.macbook",
                     isSelected: viewModel.filter.sourceID.isEmpty,
                     select: { viewModel.filter.sourceID = "" }, status: { EmptyView() }
                 )
-                ForEach(viewModel.sources) { source in
+                ForEach(viewModel.effectiveSources) { source in
                     UsageSourceRow(
                         title: source.name,
-                        symbol: source.transport == .local ? "laptopcomputer" : "server.rack",
+                        symbol: symbolName(for: source),
                         isSelected: viewModel.filter.sourceID == source.id,
                         canEdit: !viewModel.isRefreshing,
                         select: { viewModel.filter.sourceID = source.id },
-                        edit: { editingSource = source }, status: { sourceState(source) }
+                        edit: {
+                            if source.transport == .probe {
+                                viewModel.activeSection = .deployment
+                            } else {
+                                editingSource = source
+                            }
+                        },
+                        status: { sourceState(source) }
                     )
                     .contextMenu {
-                        Button("编辑来源") { editingSource = source }
-                            .disabled(viewModel.isRefreshing)
+                        if source.transport == .probe {
+                            Button("前往节点与部署管理") { viewModel.activeSection = .deployment }
+                        } else {
+                            Button("编辑节点") { editingSource = source }
+                                .disabled(viewModel.isRefreshing)
+                        }
                         if source.id != "local" {
-                            Button("移除来源", role: .destructive) { deletingSource = source }.disabled(viewModel.isRefreshing)
+                            Button("移除节点", role: .destructive) { deletingSource = source }
+                                .disabled(viewModel.isRefreshing)
                         }
                     }
                 }
@@ -92,11 +199,22 @@ struct UsageCenterView: View {
             .listStyle(.sidebar)
             .environment(\.defaultMinListRowHeight, 40)
             .scrollContentBackground(.hidden)
-            Button { editingSource = UsageSource() } label: {
-                Label("添加来源", systemImage: "plus")
-            }.disabled(viewModel.isRefreshing).padding(14)
+            Button {
+                viewModel.activeSection = .deployment
+            } label: {
+                Label("节点与探针管理", systemImage: "antenna.radiowaves.left.and.right")
+            }
+            .padding(14)
         }
         .background(.ultraThinMaterial)
+    }
+
+    private func symbolName(for source: UsageSource) -> String {
+        switch source.transport {
+        case .local: "laptopcomputer"
+        case .probe: "antenna.radiowaves.left.and.right"
+        case .ssh, .https: "server.rack"
+        }
     }
 
     @ViewBuilder private func sourceState(_ source: UsageSource) -> some View {
@@ -104,6 +222,10 @@ struct UsageCenterView: View {
         ActivityConnectionStatus(controller: viewModel.remoteActivity, sourceID: source.id)
         if !source.isEnabled {
             Text("已暂停").foregroundStyle(.secondary).font(.caption)
+        } else if source.transport == .probe {
+            Text(source.isOnline ? "探针在线" : "离线待连")
+                .foregroundStyle(source.isOnline ? Color.secondary : Color.orange)
+                .font(.caption)
         } else if let error = status?.error {
             Text(error).foregroundStyle(.orange).font(.caption)
         } else if let date = status?.lastSuccess {
@@ -116,30 +238,32 @@ struct UsageCenterView: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 16) {
-            Picker("工具", selection: $viewModel.filter.provider) {
-                ForEach(UsageMenuScope.allCases) { Text($0.title).tag($0.rawValue) }
-            }
-            .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 330)
-            Spacer()
-            Menu {
-                Toggle("每 5 分钟刷新", isOn: $viewModel.automaticRefresh)
-            } label: { Image(systemName: "ellipsis.circle") }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 25).help("刷新设置")
-            if viewModel.isRefreshing {
-                ProgressView().controlSize(.small)
-                Button("停止") { viewModel.cancelRefresh() }
-            } else {
-                Button { viewModel.refresh() } label: { Image(systemName: "arrow.clockwise") }
-                    .keyboardShortcut("r", modifiers: .command).help("刷新统计")
+    private var availableFilterScopes: [UsageMenuScope] {
+        let providers = viewModel.activeProviders
+        if providers.count <= 1 {
+            return providers.isEmpty ? [.codex] : providers
+        }
+        return [.all] + providers
+    }
+
+    @ViewBuilder
+    private var providerHeader: some View {
+        let scopes = availableFilterScopes
+        if scopes.count > 1 {
+            HStack(spacing: 16) {
+                Picker("工具", selection: $viewModel.filter.provider) {
+                    ForEach(scopes) { Text($0.title).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented).labelsHidden()
+                .frame(maxWidth: scopes.count >= 4 ? 360 : 280)
+                Spacer()
             }
         }
     }
 
     private var filters: some View {
         HStack(spacing: 12) {
-            Text(viewModel.sources.first { $0.id == viewModel.filter.sourceID }?.name ?? "全部设备")
+            Text(viewModel.effectiveSources.first { $0.id == viewModel.filter.sourceID }?.name ?? "全部节点")
                 .font(.headline)
             Spacer()
             Picker("登录", selection: $viewModel.filter.authentication) {
@@ -196,6 +320,7 @@ struct UsageCenterView: View {
         switch name {
         case "codex": "Codex"
         case "claude": "Claude Code"
+        case "gemini": "Gemini (agy)"
         case "oauth": "OAuth"
         case "api": "API"
         case "unknown", "": "未知"
@@ -206,7 +331,7 @@ struct UsageCenterView: View {
     private var quotaSnapshots: some View {
         VStack(alignment: .leading, spacing: 12) {
             let entries = visibleQuotas
-            Text("当前采用的额度记录置顶, 其他记录以灰色显示; Claude 优先显示有效且带 5h 重置时间的完整记录, 额度不相加")
+            Text("当前采用的额度记录置顶, 其他记录以灰色显示; Claude 与 Gemini 优先显示有效且带完整 5h/7d 重置时间的记录, 跨机器额度不相加")
                 .font(.caption).foregroundStyle(.secondary)
             ForEach(entries) { entry in
                 let latest = entries.first(where: { $0.quota.provider == entry.quota.provider })?.id == entry.id
@@ -218,11 +343,16 @@ struct UsageCenterView: View {
 
     private var visibleQuotas: [QuotaEntry] {
         var entries: [QuotaEntry] = []
-        for source in viewModel.sources where source.isEnabled {
+        for source in viewModel.effectiveSources where source.isEnabled {
             guard viewModel.filter.sourceID.isEmpty || viewModel.filter.sourceID == source.id else { continue }
             for quota in viewModel.statuses[source.id]?.quotas ?? [] {
                 guard viewModel.filter.provider.isEmpty || viewModel.filter.provider == quota.provider else { continue }
-                let included = quota.provider == "codex" ? source.includesCodex : source.includesClaude
+                let included: Bool = switch quota.provider {
+                case "codex": source.includesCodex
+                case "claude": source.includesClaude
+                case "gemini": source.includesGemini
+                default: false
+                }
                 if included {
                     entries.append(QuotaEntry(source: source, quota: quota))
                 }
@@ -280,7 +410,7 @@ struct UsageCenterView: View {
                     Text(activityState(task)).foregroundStyle(.secondary)
                 }.font(.caption)
             }
-            Text("超过 5 分钟没有进展的运行状态显示为待确认。远程记录和 Claude 记录不参与本机 Codex 的防睡眠判定。")
+            Text("超过 5 分钟没有进展的运行状态显示为待确认; 远程节点与 Claude / Gemini 任务不参与本机 Codex 的防睡眠判定")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -350,8 +480,8 @@ private struct UsageSourceRow<Status: View>: View {
                 .buttonStyle(.plain)
                 .disabled(!canEdit)
                 .onHover { isEditHovered = $0 }
-                .help("编辑 " + title)
-                .accessibilityLabel("编辑 " + title)
+                .help("配置 " + title)
+                .accessibilityLabel("配置 " + title)
                 .padding(.top, 7)
                 .padding(.trailing, 6)
             }

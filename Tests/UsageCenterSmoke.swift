@@ -46,6 +46,32 @@ struct UsageCenterSmoke {
         try await store.apply(envelope(provider: "claude", output: 2, reset: false), source: local)
         dashboard = try await store.dashboard(filter: UsageFilter())
         precondition(dashboard.totals.tokens == 34, "Codex 缓存不重复加总, Claude 缓存单独计入")
+        var withGemini = local
+        withGemini.includesGemini = true
+        try await store.save(withGemini)
+        let geminiEnvelope = try JSONDecoder().decode(
+            UsageEnvelope.self,
+            from: JSONSerialization.data(withJSONObject: [
+                "protocol": 1, "epoch": epoch, "cursor": 3, "reset": false, "hasMore": false,
+                "generatedAt": now, "warnings": [], "quotas": [], "retentionDays": 210, "geminiPlan": "Pro",
+                "records": [[
+                    "id": String(repeating: "g", count: 64), "session": String(repeating: "h", count: 64),
+                    "provider": "gemini", "auth": "oauth", "day": day,
+                    "model": "gemini-4-neon-xhigh", "project": "project", "kind": "usage", "state": "", "observedAt": now,
+                    "input": 10, "output": 5, "cacheRead": 20, "cacheWrite": 0, "reasoning": 0,
+                    "turns": 0, "tools": 0, "permissions": 0, "compactions": 0, "subagents": 0, "durationMs": 0
+                ]]
+            ])
+        )
+        try await store.apply(geminiEnvelope, source: withGemini)
+        let geminiDash = try await store.dashboard(filter: UsageFilter(provider: "gemini"))
+        precondition(geminiDash.totals.tokens == 35, "Gemini 未缓存输入与缓存读取必须分别累加")
+        let savedStatus = try await store.status(for: withGemini)
+        precondition(savedStatus.geminiPlan == "Pro", "Gemini 套餐档位应随状态持久化")
+        withGemini.includesGemini = false
+        try await store.save(withGemini)
+        dashboard = try await store.dashboard(filter: UsageFilter())
+        precondition(dashboard.totals.tokens == 34, "关闭 Gemini 渠道后不应混入统计")
         precondition(dashboard.days.first?.metrics?.tokens == 34, "每日详情应使用与总量相同的去重规则")
         precondition(dashboard.days.first?.topModel == "test", "每日主要模型从已有 usage 记录计算")
         precondition(dashboard.days.first?.modelTokens["test"] == 34, "周模型汇总复用与每日总量一致的完整模型计数")

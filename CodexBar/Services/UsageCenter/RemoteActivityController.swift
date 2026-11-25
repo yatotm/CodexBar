@@ -61,7 +61,7 @@ nonisolated struct RemoteActivityFrame: Decodable, Sendable {
             && (backend?.count ?? 0) <= 40 && (sourceReason?.count ?? 0) <= 80 && (serverVersion?.count ?? 0) <= 100
             && Set(tasks.map(\.id)).count == tasks.count
             && tasks.allSatisfy {
-                $0.id.count == 64 && ["codex", "claude"].contains($0.provider)
+                $0.id.count == 64 && ["codex", "claude", "gemini"].contains($0.provider)
                     && ["running", "waiting", "completed", "ended", "unknown"].contains($0.state)
                     && $0.project.count <= 100 && $0.startedAt.isFinite && $0.updatedAt.isFinite
                     && ($0.modelName?.count ?? 0) <= 100 && ($0.eventName?.count ?? 0) <= 50
@@ -303,6 +303,8 @@ final class RemoteActivityController: ObservableObject {
     private var connections: [String: Task<Void, Never>] = [:]
     private var generations: [String: UUID] = [:]
     private var backendTasks: [String: [RemoteActivityTask]] = [:]
+    private var probeTasks: [String: [RemoteActivityTask]] = [:]
+    private var probeConnected: Set<String> = []
     private var preparedBackends: Set<String> = []
     private var reconciledBackends: Set<String> = []
     private var canConnect = false
@@ -346,7 +348,67 @@ final class RemoteActivityController: ObservableObject {
     func stop() {
         canConnect = false
         canReadLocal = false
+        probeConnected.removeAll()
         reconcile()
+    }
+
+    func clearProbeSnapshots(keeping validSourceIDs: Set<String>) {
+        for key in Array(probeTasks.keys) where key != "local" && !validSourceIDs.contains(key) {
+            probeTasks[key] = nil
+            probeConnected.remove(key)
+            tasks[key] = nil
+            states[key] = nil
+        }
+    }
+
+    func applyProbeSnapshot(
+        sourceID: String,
+        tasks incoming: [RemoteActivityTask],
+        isOnline: Bool,
+        emitLiveNotifications: Bool
+    ) {
+        let now = Date().timeIntervalSince1970
+        let frame = RemoteActivityFrame(
+            schema: 1,
+            epoch: String(repeating: "0", count: 32),
+            revision: 1,
+            sentAt: now,
+            tasks: incoming
+        )
+        let previous = probeTasks[sourceID] ?? []
+        let canNotify = emitLiveNotifications && isOnline && probeConnected.contains(sourceID)
+        if canNotify {
+            for task in Self.liveTransitions(previous: previous, frame: frame, wasConnected: true) {
+                onTransition?(sourceID, task)
+            }
+            for task in Self.liveTerminals(previous: previous, frame: frame, wasConnected: true) {
+                terminalSubject.send((sourceID, task))
+            }
+        }
+        probeTasks[sourceID] = incoming
+        if isOnline {
+            probeConnected.insert(sourceID)
+        } else {
+            probeConnected.remove(sourceID)
+        }
+        if sourceID == "local" {
+            for provider in ["claude", "gemini"] {
+                states[Self.connectionKey("local", provider: provider)] = isOnline ? "实时连接" : "已暂停"
+            }
+        } else {
+            states[sourceID] = isOnline ? "实时连接" : "状态待确认"
+        }
+        publishMergedTasks(for: sourceID)
+    }
+
+    private func publishMergedTasks(for sourceID: String) {
+        let streamItems = ActivityBackend.allCases.flatMap { backendTasks[Self.connectionKey(sourceID, provider: $0.provider)] ?? [] }
+        let streamIDs = Set(streamItems.map(\.id))
+        let probeItems = (probeTasks[sourceID] ?? []).filter { !streamIDs.contains($0.id) }
+        let merged = streamItems + probeItems
+        if tasks[sourceID] != merged {
+            tasks[sourceID] = merged
+        }
     }
 
     nonisolated static func connectionKey(_ sourceID: String, provider: String) -> String {
@@ -387,7 +449,8 @@ final class RemoteActivityController: ObservableObject {
                 let includesProvider = backend == .sharedCodex ? source.includesCodex : source.includesClaude
                 let enabled = enabledSourceIDs.contains(source.id) || (source.transport == .local && backend == .sharedCodex)
                 let desired = includesProvider && enabled && source.isEnabled && source.validationError == nil
-                    && source.transport != .https && (source.transport == .local ? canReadLocal : canConnect)
+                    && (source.transport == .local || source.transport == .ssh)
+                    && (source.transport == .local ? canReadLocal : canConnect)
                 if desired, connections[key] == nil {
                     connect(source: source, backend: backend)
                 } else if !desired, connections[key] != nil {
@@ -474,10 +537,7 @@ final class RemoteActivityController: ObservableObject {
             }
         }
         backendTasks[key] = frame.tasks
-        let merged = ActivityBackend.allCases.flatMap { backendTasks[Self.connectionKey(sourceID, provider: $0.provider)] ?? [] }
-        if tasks[sourceID] != merged {
-            tasks[sourceID] = merged
-        }
+        publishMergedTasks(for: sourceID)
         let state = switch (available, frame.sourceReason) {
         case (true, _): "实时连接"
         case (false, "unsupported-server-version"): "需升级 Codex 至 0.162.0"

@@ -16,14 +16,14 @@ import urllib.parse
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "CodexBar/Resources"))
-from UsageCollector import Collector, Database, encode
+from UsageCollector import Collector, Database, encode, parse_providers
 
 
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     request_queue_size = 16
 
-    def __init__(self, address, directory, token, providers=("codex", "claude")):
+    def __init__(self, address, directory, token, providers=("codex", "claude", "gemini")):
         self.directory = directory
         self.token = token
         self.providers = providers
@@ -117,12 +117,14 @@ def run():
     parser.add_argument("--state-dir", type=pathlib.Path, default=pathlib.Path("/data"))
     parser.add_argument("--codex-home", type=pathlib.Path, default=pathlib.Path("/logs/codex"))
     parser.add_argument("--claude-home", type=pathlib.Path, default=pathlib.Path("/logs/claude"))
-    parser.add_argument("--providers", choices=("codex", "claude", "codex,claude"), default="codex")
+    parser.add_argument("--gemini-home", type=pathlib.Path, default=pathlib.Path("/logs/gemini"))
+    parser.add_argument("--providers", default="codex")
     parser.add_argument("--token-file", type=pathlib.Path, required=True)
     parser.add_argument("--listen", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--interval", type=int, default=300)
     args = parser.parse_args()
+    providers = parse_providers(args.providers)
     token = args.token_file.read_bytes().strip()
     if len(token) < 32 or len(token) > 512 or any(c <= 32 or c >= 127 for c in token):
         raise ValueError("服务令牌格式无效")
@@ -130,7 +132,7 @@ def run():
         raise ValueError("服务参数无效")
     os.umask(0o077)
     Database(args.state_dir).connection.close()
-    server = Server((args.listen, args.port), args.state_dir, token, args.providers.split(","))
+    server = Server((args.listen, args.port), args.state_dir, token, providers)
     stopped = threading.Event()
 
     def collect():
@@ -139,7 +141,7 @@ def run():
             try:
                 database = Database(args.state_dir)
                 try:
-                    collector = Collector(database, args.codex_home, args.claude_home, args.providers.split(","), 10)
+                    collector = Collector(database, args.codex_home, args.claude_home, providers, 10, gemini_home=args.gemini_home)
                     collector.collect()
                     if not collector.scan_complete:
                         delay = 2

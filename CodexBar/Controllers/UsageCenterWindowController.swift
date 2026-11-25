@@ -13,10 +13,10 @@ final class UsageCenterWindowController: HostingWindowController {
     override func makeWindow() -> NSWindow {
         let controller = NSHostingController(rootView: UsageCenterView(viewModel: viewModel))
         let window = AuxiliaryHostingWindow(contentViewController: controller)
-        window.title = "用量中心"
+        window.title = "控制中心"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.contentMinSize = NSSize(width: 900, height: 600)
-        window.setContentSize(NSSize(width: 1040, height: 720))
+        window.contentMinSize = NSSize(width: 940, height: 640)
+        window.setContentSize(NSSize(width: 1080, height: 740))
         return window
     }
 }

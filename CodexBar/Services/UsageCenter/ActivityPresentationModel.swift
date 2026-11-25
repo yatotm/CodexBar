@@ -67,7 +67,11 @@ final class ActivityPresentationModel: ObservableObject {
         let now = Date()
         let hasSource = sources.contains { source in
             source.isEnabled && source.validationError == nil && source.transport != .https
-                && ((source.transport == .local && source.includesCodex) || enabled.contains(source.id))
+                && (
+                    (source.transport == .local && (source.includesCodex || source.includesClaude || source.includesGemini))
+                        || source.transport == .probe
+                        || enabled.contains(source.id)
+                )
         }
         if hasActivitySource != hasSource {
             hasActivitySource = hasSource
@@ -110,7 +114,7 @@ final class ActivityPresentationModel: ObservableObject {
     ) -> CodexActivitySnapshot {
         var waiting = [CodexActivityTaskSnapshot](), running = [CodexActivityTaskSnapshot](), unknown = [CodexActivityTaskSnapshot]()
         var completions = [CodexActivityCompletion](), terminations = [CodexActivityTermination]()
-        if scope != .claude {
+        if scope == .all || scope == .codex {
             waiting = local.waitingTasks.map { var task = $0
                 task.machineName = "本机"
                 return task
@@ -132,13 +136,14 @@ final class ActivityPresentationModel: ObservableObject {
                 return task
             }
         }
-        for source in sources where source.isEnabled && enabled.contains(source.id) {
+        for source in sources where source.isEnabled
+            && (enabled.contains(source.id) || source.transport == .probe || (source.transport == .local && tasks[source.id]?.isEmpty == false)) {
             for task in tasks[source.id] ?? [] where scope == .all || scope.rawValue == task.provider {
-                guard task.provider == "codex" ? source.includesCodex : source.includesClaude else { continue }
+                guard source.includesProvider(task.provider) else { continue }
                 guard task.provider != "codex" || source.transport != .local else { continue }
-                guard task.updatedAt > now.timeIntervalSince1970 - CodexActivityRetention.window else { continue }
+                guard now.timeIntervalSince1970 - task.updatedAt < CodexActivityRetention.window else { continue }
                 if task.state == "completed" || task.state == "ended" {
-                    guard task.updatedAt > now.timeIntervalSince1970 - CodexActivityRetention.recentHistory else { continue }
+                    guard now.timeIntervalSince1970 - task.updatedAt < CodexActivityRetention.recentHistory else { continue }
                     // 旧采集器的孤立 SessionEnd 没有任务起点, 仅在展示层过滤
                     guard task.state != "ended" || task.updatedAt > task.startedAt else { continue }
                 }

@@ -11,7 +11,7 @@ struct UsageSourceEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("统计来源").font(.title2.bold())
+            Text(source.id == "local" ? "本机目录与高级设置" : "传统统计来源设置").font(.title2.bold())
             Form {
                 TextField("名称", text: $source.name)
                 if source.id != "local" {
@@ -22,28 +22,22 @@ struct UsageSourceEditor: View {
                 }
                 if source.transport == .ssh {
                     TextField("SSH 主机别名", text: $source.address, prompt: Text("例如 dev-a"))
-                    Text("使用系统 SSH 配置和已有密钥。首次连接请先在终端完成主机身份校验。")
+                    Text("使用系统 SSH 配置和已有密钥; 外部多机推荐使用「节点与部署」中的单向探针模式")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if source.transport == .https {
                     TextField("服务地址", text: $source.address, prompt: Text("https://stats.example.com:8443"))
                     SecureField("统计服务令牌", text: $token, prompt: Text("留空保留原令牌"))
-                    Text("填写自己统计端的令牌, 保存在 macOS 钥匙串。")
+                    Text("填写自己统计端的令牌, 保存在 macOS 钥匙串")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Toggle("启用此来源", isOn: $source.isEnabled)
+                Toggle("启用此节点", isOn: $source.isEnabled)
                 Toggle("采集 Codex", isOn: $source.includesCodex)
                 Toggle("采集 Claude Code", isOn: $source.includesClaude)
-                if source.transport == .ssh || (source.transport == .local && source.includesClaude) {
-                    HStack {
-                        Text(source.transport == .local ? "Claude 实时任务" : "实时任务")
-                        Spacer()
-                        Button("接入") { configureActivity(install: true) }
-                        Button("移除") { configureActivity(install: false) }
-                    }.disabled(isSaving || source.validationError != nil)
-                    Text(source.transport == .ssh
-                        ? "Codex 连接此机器的共享后台, Claude 使用本地 Hook。任务变化经 SSH 实时同步; 合盖且无工作显示器或系统睡眠时暂停, 恢复后重连。"
-                        : "本机 Codex 自动连接共享后台; 此处仅接入 Claude 实时任务, 保留其他应用的 Hook。")
+                Toggle("采集 Gemini (agy)", isOn: $source.includesGemini)
+                if source.transport == .local {
+                    Toggle("启用状态栏无感桥接 (Claude / agy 额度与实时状态)", isOn: $source.bridgeStatusLine)
+                    Text("自动包装本机 Claude 与 agy 的 statusLine, 保留原有自定义状态栏显示, 不注入生命周期 Hooks")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if source.includesCodex {
@@ -52,29 +46,26 @@ struct UsageSourceEditor: View {
                         Picker("缺失身份的补充标签", selection: $source.codexAuthentication) {
                             ForEach(UsageAuthentication.allCases) { Text($0.title).tag($0) }
                         }
-                        Text("当前类型随刷新自动识别。此标签仅补充没有身份字段的旧日志, 不修改日志明确记录的登录方式。")
+                        Text("当前类型随刷新自动识别; 此标签仅补充没有身份字段的旧日志, 不修改日志明确记录的登录方式")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                if source.includesClaude {
-                    Text("历史会话和已有额度缓存会自动读取. 启用补充记录后, 可被动接收 Claude 原生 5h 和 7d 额度与重置时间, 并记录权限事件; 保留现有状态栏输出, CodexBar 不请求 Anthropic 接口")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if source.transport != .https {
-                        HStack {
-                            Button("启用补充记录") { bridgeAction = true }
-                            Button("移除接入") { bridgeAction = false }
-                        }.disabled(isSaving || source.validationError != nil)
-                    }
+                if source.includesClaude, source.transport == .ssh {
+                    HStack {
+                        Button("启用状态栏桥接") { bridgeAction = true }
+                        Button("移除状态栏桥接") { bridgeAction = false }
+                    }.disabled(isSaving || source.validationError != nil)
                 }
                 if source.transport != .https {
                     TextField("Codex 数据目录", text: $source.codexHome, prompt: Text("默认 CODEX_HOME 或 ~/.codex"))
                     TextField("Claude 数据目录", text: $source.claudeHome, prompt: Text("默认 CLAUDE_CONFIG_DIR 或 ~/.claude"))
-                    TextField("远端统计缓存目录", text: Binding(
-                        get: { source.collectorCacheDirectory ?? "" },
-                        set: { source.collectorCacheDirectory = $0.isEmpty ? nil : $0 }
-                    ), prompt: Text("可选, 如 /srv/codexbar/data"))
-                    Text("填写缓存目录时读取定时采集器或统计服务的数据库, 不再次扫描日志。")
-                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("Gemini 数据目录", text: $source.geminiHome, prompt: Text("默认 ~/.gemini/antigravity-cli"))
+                    if source.transport == .ssh {
+                        TextField("远端统计缓存目录", text: Binding(
+                            get: { source.collectorCacheDirectory ?? "" },
+                            set: { source.collectorCacheDirectory = $0.isEmpty ? nil : $0 }
+                        ), prompt: Text("可选, 如 /srv/codexbar/data"))
+                    }
                 }
             }.formStyle(.grouped)
             if let validation = source.validationError {
@@ -100,8 +91,8 @@ struct UsageSourceEditor: View {
                 }.keyboardShortcut(.defaultAction)
                     .disabled(source.validationError != nil || isSaving)
             }
-        }.padding(24).frame(width: 570, height: 660)
-            .confirmationDialog("调整此机器的 Claude 配置?", isPresented: Binding(
+        }.padding(24).frame(width: 570, height: 680)
+            .confirmationDialog("调整此机器的 Claude 状态栏配置?", isPresented: Binding(
                 get: { bridgeAction != nil }, set: {
                     if !$0 {
                         bridgeAction = nil
@@ -114,32 +105,13 @@ struct UsageSourceEditor: View {
                     isSaving = true
                     Task {
                         if await viewModel.configureClaude(source: source, install: install) {
-                            bridgeMessage = install ? "已接入, 下一次 Claude 官方事件到达后开始记录" : "已移除接入"
+                            bridgeMessage = install ? "已接入状态栏无感桥接, 下一次刷新开始记录" : "已移除接入"
                         }
                         isSaving = false
                     }
                 }
             } message: {
-                Text("接入会包装现有 statusLine 命令并追加只记录元数据的 Hook。原命令继续接收原始输入并显示原输出。移除时只恢复本程序管理的配置。")
+                Text("接入仅包装现有 statusLine 命令, 不安装生命周期 Hooks; 原命令继续接收原始输入并显示原输出")
             }
-    }
-
-    private func configureActivity(install: Bool) {
-        isSaving = true
-        Task {
-            defer { isSaving = false }
-            do {
-                guard await viewModel.save(source, token: token) else { return }
-                if source.transport == .local {
-                    try await ActivityStreamClient.configure(source: source, backend: .claudeHooks, install: install)
-                } else {
-                    try await ActivityStreamClient.configure(source: source, install: install)
-                }
-                viewModel.remoteActivity.setEnabled(install, sourceID: source.id)
-                bridgeMessage = install ? "已接入实时任务; Codex 会话无需重启, Claude 从后续 Hook 事件更新" : "已移除所选实时接入, 历史统计保持可用"
-            } catch {
-                viewModel.error = error.localizedDescription
-            }
-        }
     }
 }

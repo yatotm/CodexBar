@@ -4,6 +4,7 @@ nonisolated enum UsageMenuScope: String, CaseIterable, Identifiable {
     case all = ""
     case codex
     case claude
+    case gemini
 
     var id: String {
         rawValue
@@ -14,21 +15,66 @@ nonisolated enum UsageMenuScope: String, CaseIterable, Identifiable {
         case .all: "全部"
         case .codex: "Codex"
         case .claude: "Claude"
+        case .gemini: "Gemini"
         }
     }
 
     func includes(_ source: UsageSource) -> Bool {
         guard source.isEnabled else { return false }
         return switch self {
-        case .all: source.includesCodex || source.includesClaude
+        case .all: source.includesCodex || source.includesClaude || source.includesGemini
         case .codex: source.includesCodex
         case .claude: source.includesClaude
+        case .gemini: source.includesGemini
+        }
+    }
+}
+
+nonisolated enum ControlCenterTopologyMode: String, Codable, CaseIterable, Identifiable {
+    case localOnly
+    case lanDirect
+    case remoteHub
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .localOnly: "仅本机模式"
+        case .lanDirect: "局域网 / 组网直连"
+        case .remoteHub: "自建常驻中枢"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .localOnly: "仅采集当前 Mac, 不开启任何监听端口或外部同步"
+        case .lanDirect: "Mac 开启内置局域网接收端; 休眠时各探针本地缓存, 唤醒后自动断点补推"
+        case .remoteHub: "所有外部机器单向推送至 24h 常驻中枢, Mac 在线实时同步, 离线唤醒后增量拉取"
+        }
+    }
+}
+
+nonisolated enum ControlCenterSection: String, CaseIterable, Identifiable {
+    case usage
+    case deployment
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .usage: "用量统计"
+        case .deployment: "节点与部署"
         }
     }
 }
 
 nonisolated enum UsageTransport: String, Codable, CaseIterable, Identifiable {
     case local
+    case probe
     case ssh
     case https
 
@@ -39,6 +85,7 @@ nonisolated enum UsageTransport: String, Codable, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .local: "本机"
+        case .probe: "通用探针"
         case .ssh: "SSH"
         case .https: "HTTPS"
         }
@@ -71,19 +118,120 @@ nonisolated struct UsageSource: Codable, Equatable, Identifiable {
     var codexAuthentication = UsageAuthentication.unknown
     var includesCodex = true
     var includesClaude = false
+    var includesGemini = false
     var isEnabled = true
     var codexHome = ""
     var claudeHome = ""
+    var geminiHome = ""
     var collectorCacheDirectory: String?
+    var bridgeStatusLine = true
+    var detectedProviders: [String] = []
+    var probeVersion = ""
+    var platformName = ""
+    var lastSeenAt: Double?
+    var isOnline = false
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, transport, address, codexAuthentication
+        case includesCodex, includesClaude, includesGemini, isEnabled
+        case codexHome, claudeHome, geminiHome, collectorCacheDirectory
+        case bridgeStatusLine, detectedProviders, probeVersion, platformName, lastSeenAt, isOnline
+    }
+
+    init(
+        id: String = UUID().uuidString,
+        name: String = "",
+        transport: UsageTransport = .ssh,
+        address: String = "",
+        codexAuthentication: UsageAuthentication = .unknown,
+        includesCodex: Bool = true,
+        includesClaude: Bool = false,
+        includesGemini: Bool = false,
+        isEnabled: Bool = true,
+        codexHome: String = "",
+        claudeHome: String = "",
+        geminiHome: String = "",
+        collectorCacheDirectory: String? = nil,
+        bridgeStatusLine: Bool = true,
+        detectedProviders: [String] = [],
+        probeVersion: String = "",
+        platformName: String = "",
+        lastSeenAt: Double? = nil,
+        isOnline: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.transport = transport
+        self.address = address
+        self.codexAuthentication = codexAuthentication
+        self.includesCodex = includesCodex
+        self.includesClaude = includesClaude
+        self.includesGemini = includesGemini
+        self.isEnabled = isEnabled
+        self.codexHome = codexHome
+        self.claudeHome = claudeHome
+        self.geminiHome = geminiHome
+        self.collectorCacheDirectory = collectorCacheDirectory
+        self.bridgeStatusLine = bridgeStatusLine
+        self.detectedProviders = detectedProviders
+        self.probeVersion = probeVersion
+        self.platformName = platformName
+        self.lastSeenAt = lastSeenAt
+        self.isOnline = isOnline
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        transport = try container.decodeIfPresent(UsageTransport.self, forKey: .transport) ?? .ssh
+        address = try container.decodeIfPresent(String.self, forKey: .address) ?? ""
+        codexAuthentication = try container.decodeIfPresent(UsageAuthentication.self, forKey: .codexAuthentication) ?? .unknown
+        includesCodex = try container.decodeIfPresent(Bool.self, forKey: .includesCodex) ?? true
+        includesClaude = try container.decodeIfPresent(Bool.self, forKey: .includesClaude) ?? false
+        includesGemini = try container.decodeIfPresent(Bool.self, forKey: .includesGemini) ?? false
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        codexHome = try container.decodeIfPresent(String.self, forKey: .codexHome) ?? ""
+        claudeHome = try container.decodeIfPresent(String.self, forKey: .claudeHome) ?? ""
+        geminiHome = try container.decodeIfPresent(String.self, forKey: .geminiHome) ?? ""
+        collectorCacheDirectory = try container.decodeIfPresent(String.self, forKey: .collectorCacheDirectory)
+        bridgeStatusLine = try container.decodeIfPresent(Bool.self, forKey: .bridgeStatusLine) ?? true
+        detectedProviders = try container.decodeIfPresent([String].self, forKey: .detectedProviders) ?? []
+        probeVersion = try container.decodeIfPresent(String.self, forKey: .probeVersion) ?? ""
+        platformName = try container.decodeIfPresent(String.self, forKey: .platformName) ?? ""
+        lastSeenAt = try container.decodeIfPresent(Double.self, forKey: .lastSeenAt)
+        isOnline = try container.decodeIfPresent(Bool.self, forKey: .isOnline) ?? false
+    }
 
     static let local = UsageSource(id: "local", name: "本机 Mac", transport: .local, includesClaude: true)
 
+    var enabledProviderNames: [String] {
+        [
+            includesCodex ? "codex" : nil,
+            includesClaude ? "claude" : nil,
+            includesGemini ? "gemini" : nil
+        ].compactMap(\.self)
+    }
+
+    func includesProvider(_ provider: String) -> Bool {
+        switch provider {
+        case "codex": includesCodex
+        case "claude": includesClaude
+        case "gemini": includesGemini
+        default: false
+        }
+    }
+
     var validationError: String? {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.count > 80 {
-            return "请输入不超过 80 个字符的来源名称"
+            return "请输入不超过 80 个字符的节点名称"
         }
-        if !includesCodex, !includesClaude {
-            return "至少选择一种工具"
+        if transport != .probe, !includesCodex, !includesClaude, !includesGemini {
+            return "至少启用一个监控渠道"
+        }
+        if transport == .probe,
+           id.range(of: "^[A-Za-z0-9_.-]{1,80}$", options: .regularExpression) == nil {
+            return "探针节点标识只允许字母, 数字, 点, 下划线与连字符"
         }
         if transport == .ssh,
            address.range(of: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$", options: .regularExpression) == nil {
@@ -96,7 +244,7 @@ nonisolated struct UsageSource: Codable, Equatable, Identifiable {
                 return "请填写 HTTPS 服务根地址, 如 https://stats.example.com:8443"
             }
         }
-        for path in [codexHome, claudeHome, collectorCacheDirectory ?? ""] where !path.isEmpty {
+        for path in [codexHome, claudeHome, geminiHome, collectorCacheDirectory ?? ""] where !path.isEmpty {
             if !path.hasPrefix("/"), !path.hasPrefix("~/") {
                 return "数据目录需要使用绝对路径或 ~/ 开头的路径"
             }
@@ -130,11 +278,12 @@ nonisolated struct UsageRecord: Codable {
     let compactions: Int64
     let subagents: Int64
     let durationMs: Int64
+    var nodeId: String?
 
     var isValid: Bool {
         let counters = [input, output, cacheRead, cacheWrite, reasoning, turns, tools, permissions, compactions, subagents, durationMs]
         return id.count == 64 && session.count == 64
-            && ["codex", "claude"].contains(provider)
+            && ["codex", "claude", "gemini"].contains(provider)
             && UsageAuthentication(rawValue: auth) != nil
             && day.range(of: "^20[0-9]{2}-[01][0-9]-[0-3][0-9]$", options: .regularExpression) != nil
             && model.count <= 120 && project.count <= 120 && kind.count <= 30 && state.count <= 30
@@ -143,12 +292,12 @@ nonisolated struct UsageRecord: Codable {
     }
 
     var totalTokens: Int64 {
-        input + output + (provider == "claude" ? cacheRead + cacheWrite : 0)
+        input + output + (["claude", "gemini"].contains(provider) ? cacheRead + cacheWrite : 0)
     }
 }
 
-nonisolated struct UsageQuotaObservation: Codable, Identifiable {
-    struct Window: Codable, Identifiable {
+nonisolated struct UsageQuotaObservation: Codable, Identifiable, Equatable {
+    struct Window: Codable, Identifiable, Equatable {
         let name: String
         let usedPercent: Double
         let resetsAt: Double?
@@ -165,7 +314,7 @@ nonisolated struct UsageQuotaObservation: Codable, Identifiable {
     }
 
     var isValid: Bool {
-        ["codex", "claude"].contains(provider) && observedAt.isFinite && observedAt > 0
+        ["codex", "claude", "gemini"].contains(provider) && observedAt.isFinite && observedAt > 0
             && windows.count <= 10 && windows.allSatisfy {
                 $0.name.count <= 40 && $0.usedPercent.isFinite && (0 ... 100).contains($0.usedPercent)
                     && ($0.resetsAt == nil || ($0.resetsAt?.isFinite == true && $0.resetsAt! > 0))
@@ -173,7 +322,7 @@ nonisolated struct UsageQuotaObservation: Codable, Identifiable {
     }
 
     func isPreferred(over other: UsageQuotaObservation, at now: Double) -> Bool {
-        if provider == "claude", other.provider == "claude" {
+        if ["claude", "gemini"].contains(provider), other.provider == provider {
             let complete = hasCurrentFiveHourReset(at: now)
             let otherComplete = other.hasCurrentFiveHourReset(at: now)
             if complete != otherComplete {
@@ -223,12 +372,14 @@ nonisolated struct UsageEnvelope: Decodable {
     let retentionDays: Int
     let scanComplete: Bool?
     let currentCodexAuthentication: UsageAuthentication?
+    let geminiPlan: String?
 
     var isValid: Bool {
         `protocol` == 1 && UUID(uuidString: epoch) != nil && cursor >= 0 && records.count <= 3000
             && generatedAt.isFinite && generatedAt >= 0 && retentionDays == 210
-            && records.allSatisfy(\.isValid) && quotas.count <= 2 && quotas.allSatisfy(\.isValid)
+            && records.allSatisfy(\.isValid) && quotas.count <= 3 && quotas.allSatisfy(\.isValid)
             && warnings.count <= 30 && warnings.allSatisfy { $0.count <= 300 }
+            && (geminiPlan == nil || (geminiPlan?.count ?? 0) <= 40)
     }
 }
 
@@ -255,6 +406,7 @@ nonisolated struct UsageFilter: Hashable {
     var authentication = ""
     var days = 30
     var grouping = UsageGrouping.model
+    var localOnly = false
 }
 
 nonisolated struct UsageMetrics: Equatable {
@@ -352,4 +504,5 @@ nonisolated struct UsageSourceStatus {
     var warnings: [String] = []
     var quotas: [UsageQuotaObservation] = []
     var currentCodexAuthentication: UsageAuthentication?
+    var geminiPlan: String?
 }

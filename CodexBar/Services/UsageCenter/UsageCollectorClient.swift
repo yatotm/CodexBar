@@ -214,6 +214,8 @@ actor UsageCollectorClient {
             try await fetchHTTPS(source: source, cursor: cursor)
         case .local, .ssh:
             try await fetchProcess(source: source, cursor: cursor, scan: scan)
+        case .probe:
+            throw UsageCenterError(message: "探针节点由汇聚中枢统一同步")
         }
         try Task.checkCancellation()
         guard let result = try? JSONDecoder().decode(UsageEnvelope.self, from: data), result.isValid else {
@@ -230,12 +232,19 @@ actor UsageCollectorClient {
         if let directory = source.collectorCacheDirectory, !directory.isEmpty {
             arguments += ["--state-dir", directory]
         }
-        let providers = [source.includesCodex ? "codex" : nil, source.includesClaude ? "claude" : nil].compactMap(\.self).joined(separator: ",")
+        let providers = source.enabledProviderNames.joined(separator: ",")
+        guard !providers.isEmpty else {
+            throw UsageCenterError(message: "至少启用一个监控渠道")
+        }
         arguments += ["--providers", providers]
         if source.includesCodex {
             arguments.append("--include-auth-type")
         }
-        for (flag, path) in [("--codex-home", source.codexHome), ("--claude-home", source.claudeHome)] where !path.isEmpty {
+        for (flag, path) in [
+            ("--codex-home", source.codexHome),
+            ("--claude-home", source.claudeHome),
+            ("--gemini-home", source.geminiHome)
+        ] where !path.isEmpty {
             arguments += [flag, path]
         }
         return try await runCollector(source: source, arguments: arguments)
@@ -283,15 +292,96 @@ actor UsageCollectorClient {
         return value
     }
 
-    func configureClaude(source: UsageSource, install: Bool) async throws {
-        guard source.transport != .https, source.includesClaude, source.validationError == nil else {
+    func configureClaude(source: UsageSource, install: Bool, includeHooks: Bool = false) async throws {
+        guard source.transport == .local || source.transport == .ssh, source.validationError == nil else {
             throw UsageCenterError(message: "请通过本机或 SSH 在 Claude 所在机器接入")
         }
         var arguments = [install ? "install-claude" : "uninstall-claude"]
+        if !includeHooks {
+            arguments.append("--no-hooks")
+        }
         if !source.claudeHome.isEmpty {
             arguments += ["--claude-home", source.claudeHome]
         }
         _ = try await runCollector(source: source, arguments: arguments)
+    }
+
+    func configureGemini(source: UsageSource, install: Bool) async throws {
+        guard source.transport == .local || source.transport == .ssh, source.validationError == nil else {
+            throw UsageCenterError(message: "请通过本机或 SSH 在 Gemini 所在机器接入")
+        }
+        var arguments = [install ? "install-gemini" : "uninstall-gemini"]
+        if !source.geminiHome.isEmpty {
+            arguments += ["--gemini-home", source.geminiHome]
+        }
+        _ = try await runCollector(source: source, arguments: arguments)
+    }
+
+    func fetchLocalGeminiValuation(source: UsageSource, scan: Bool) async throws -> GeminiValuationEvidence {
+        guard source.transport == .local else {
+            throw UsageCenterError(message: "仅用于读取本机 Gemini 价值缓存")
+        }
+        var arguments = ["gemini-valuation", "--budget", "8", "--providers", "gemini"]
+        if !scan {
+            arguments.append("--skip-scan")
+        }
+        if !source.geminiHome.isEmpty {
+            arguments += ["--gemini-home", source.geminiHome]
+        }
+        if let directory = source.collectorCacheDirectory, !directory.isEmpty {
+            arguments += ["--state-dir", directory]
+        }
+        let data = try await runCollector(source: source, arguments: arguments)
+        return try JSONDecoder().decode(GeminiValuationEvidence.self, from: data)
+    }
+
+    func fetchLocalClaudeValuation(source: UsageSource) async throws -> GeminiValuationEvidence {
+        guard source.transport == .local else {
+            throw UsageCenterError(message: "仅用于读取本机 Claude 价值窗口")
+        }
+        var arguments = ["claude-valuation", "--budget", "6", "--providers", "claude"]
+        if !source.claudeHome.isEmpty {
+            arguments += ["--claude-home", source.claudeHome]
+        }
+        let data = try await runCollector(source: source, arguments: arguments)
+        return try JSONDecoder().decode(GeminiValuationEvidence.self, from: data)
+    }
+
+    func fetchLocalZeroHookLiveTasks(source: UsageSource) async throws -> [RemoteActivityTask] {
+        guard source.transport == .local,
+              let probeURL = Bundle.main.url(forResource: "CodexBarProbe", withExtension: "py") else {
+            return []
+        }
+        let candidates = (CodexCLIResolver.environment["PATH"] ?? "").split(separator: ":").map { "\($0)/python3" }
+            + ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+        guard let python = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            return []
+        }
+        let snippet = """
+        import importlib.util, json, pathlib, sys, time
+        p = pathlib.Path(sys.argv[1])
+        spec = importlib.util.spec_from_file_location("probe", p)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        col = mod.load_collector_module()
+        homes = mod.default_homes()
+        if sys.argv[2]: homes["claude"] = pathlib.Path(sys.argv[2]).expanduser()
+        if sys.argv[3]: homes["gemini"] = pathlib.Path(sys.argv[3]).expanduser()
+        enabled = set(sys.argv[4].split(",")) if sys.argv[4] else set()
+        now = time.time()
+        out = []
+        if "claude" in enabled: out.extend(mod.read_claude_live_tasks(homes["claude"], col, now))
+        if "gemini" in enabled: out.extend(mod.read_gemini_live_tasks(homes["gemini"], col, now))
+        print(json.dumps(out))
+        """
+        let wanted = [source.includesClaude ? "claude" : nil, source.includesGemini ? "gemini" : nil].compactMap(\.self).joined(separator: ",")
+        guard !wanted.isEmpty else { return [] }
+        let data = try await UsageCommandRunner.run(
+            executable: python,
+            arguments: ["-c", snippet, probeURL.path, source.claudeHome, source.geminiHome, wanted],
+            timeout: 4
+        )
+        return (try? JSONDecoder().decode([RemoteActivityTask].self, from: data)) ?? []
     }
 
     func fetchTokenHistory(source: UsageSource, account: String, scan: Bool) async throws -> UsageSourceTokenEvidence {

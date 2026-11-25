@@ -6,6 +6,8 @@ cd "$usage_root"
 usage_tmp="$(mktemp -d /tmp/codexbar-usage-check.XXXXXXXX)"
 trap 'rm -rf "$usage_tmp"' EXIT
 export LLVM_PROFILE_FILE="${LLVM_PROFILE_FILE:-$usage_tmp/coverage-%p.profraw}"
+export NO_PROXY="${NO_PROXY:+${NO_PROXY},}127.0.0.1,localhost"
+export no_proxy="${no_proxy:+${no_proxy},}127.0.0.1,localhost"
 
 python3 -B -m unittest discover -s Tests -p 'test_usage_*.py' -v
 usage_compiler="${CODEXBAR_SWIFTC:-swiftc}"
@@ -27,6 +29,10 @@ fi
     CodexBar/Models/UsageCenterModels.swift \
     CodexBar/Models/UsageValuationModels.swift \
     CodexBar/Models/UsageTokenHistoryModels.swift \
+    CodexBar/Services/UsageCenter/UsageAnalyticsValuation.swift \
+    CodexBar/Services/UsageCenter/UsageModelAllocation.swift \
+    CodexBar/Services/UsageCenter/UsageLogValuation.swift \
+    CodexBar/Services/UsageCenter/GeminiValuation.swift \
     CodexBar/Services/UsageCenter/UsageCenterStore.swift \
     CodexBar/Services/UsageCenter/UsageCollectorClient.swift \
     CodexBar/Services/UsageCenter/RemoteActivityController.swift \
@@ -57,6 +63,7 @@ fi
     CodexBar/Services/UsageCenter/UsageAnalyticsValuation.swift \
     CodexBar/Services/UsageCenter/UsageLogValuation.swift \
     CodexBar/Services/UsageCenter/UsageModelAllocation.swift \
+    CodexBar/Services/UsageCenter/GeminiValuation.swift \
     Tests/UsageLogValuationSmoke.swift \
     Tests/UsageAnalyticsSmoke.swift -o "$usage_tmp/analytics-tests"
 "$usage_tmp/analytics-tests"

@@ -1,0 +1,198 @@
+{
+  "schema": 1,
+  "asOf": "2026-11-25",
+  "geminiApiSource": "https://ai.google.dev/gemini-api/docs/pricing",
+  "claudeApiSource": "https://docs.anthropic.com/en/docs/about-claude/pricing",
+  "rates": [
+    {
+      "id": "gemini-4-neon",
+      "provider": "gemini",
+      "match": ["neon"],
+      "input": 3.0,
+      "cachedInput": 0.15,
+      "cacheWrite": 3.0,
+      "output": 15.0,
+      "longThreshold": null
+    },
+    {
+      "id": "gemini-4-hydrogen",
+      "provider": "gemini",
+      "match": ["hydrogen"],
+      "input": 1.5,
+      "cachedInput": 0.075,
+      "cacheWrite": 1.5,
+      "output": 7.5,
+      "longThreshold": null
+    },
+    {
+      "id": "gemini-4-carbon",
+      "provider": "gemini",
+      "match": ["carbon", "argon", "orchestrator"],
+      "input": 4.0,
+      "cachedInput": 0.2,
+      "cacheWrite": 4.0,
+      "output": 20.0,
+      "longThreshold": null,
+      "promo": {
+        "endExclusive": 1796083200,
+        "input": 2.0,
+        "cachedInput": 0.1,
+        "cacheWrite": 2.0,
+        "output": 10.0
+      }
+    },
+    {
+      "id": "gemini-3.8-flash-lite",
+      "provider": "gemini",
+      "match": ["flash-lite", "flash_lite"],
+      "input": 0.1,
+      "cachedInput": 0.01,
+      "cacheWrite": 0.1,
+      "output": 0.4,
+      "longThreshold": null
+    },
+    {
+      "id": "gemini-3.8-flash",
+      "provider": "gemini",
+      "match": ["flash"],
+      "input": 1.5,
+      "cachedInput": 0.15,
+      "cacheWrite": 1.5,
+      "output": 7.5,
+      "longThreshold": null,
+      "promo": {
+        "endExclusive": 1798761600,
+        "input": 0.75,
+        "cachedInput": 0.075,
+        "cacheWrite": 0.75,
+        "output": 3.75
+      }
+    },
+    {
+      "id": "gemini-3.1-pro",
+      "provider": "gemini",
+      "match": ["3.1", "3-pro", "2.5-pro"],
+      "input": 2.0,
+      "cachedInput": 0.2,
+      "cacheWrite": 2.5,
+      "output": 12.0,
+      "longThreshold": 200000,
+      "longInput": 4.0,
+      "longCachedInput": 0.4,
+      "longCacheWrite": 5.0,
+      "longOutput": 18.0
+    },
+    {
+      "id": "claude-mythos-5.1",
+      "provider": "claude",
+      "match": ["fable-5-1", "fable-5.1", "mythos-5-1", "mythos-5.1"],
+      "input": 10.0,
+      "cachedInput": 0.25,
+      "cacheWrite": 12.5,
+      "output": 50.0,
+      "longThreshold": null
+    },
+    {
+      "id": "claude-mythos-5",
+      "provider": "claude",
+      "match": ["fable", "mythos"],
+      "input": 8.0,
+      "cachedInput": 0.2,
+      "cacheWrite": 10.0,
+      "output": 40.0,
+      "longThreshold": null
+    },
+    {
+      "id": "claude-opus-5.5",
+      "provider": "claude",
+      "match": ["opus-5-5", "opus-5.5", "opus-5", "opus 5"],
+      "input": 4.0,
+      "cachedInput": 0.2,
+      "cacheWrite": 5.0,
+      "output": 20.0,
+      "longThreshold": null
+    },
+    {
+      "id": "claude-opus-4.6",
+      "provider": "claude",
+      "match": ["opus-4-6", "opus-4.6"],
+      "input": 5.0,
+      "cachedInput": 0.5,
+      "cacheWrite": 6.25,
+      "output": 25.0,
+      "longThreshold": null
+    },
+    {
+      "id": "claude-opus-legacy",
+      "provider": "claude",
+      "match": ["opus"],
+      "input": 5.0,
+      "cachedInput": 0.5,
+      "cacheWrite": 6.25,
+      "output": 25.0,
+      "longThreshold": 200000,
+      "longInput": 10.0,
+      "longCachedInput": 1.0,
+      "longCacheWrite": 12.5,
+      "longOutput": 37.5
+    },
+    {
+      "id": "claude-sonnet-5.5",
+      "provider": "claude",
+      "match": ["sonnet-5-5", "sonnet-5.5", "sonnet-5", "sonnet 5"],
+      "input": 2.0,
+      "cachedInput": 0.1,
+      "cacheWrite": 2.5,
+      "output": 10.0,
+      "longThreshold": null
+    },
+    {
+      "id": "claude-sonnet-4.6",
+      "provider": "claude",
+      "match": ["sonnet-4-6", "sonnet-4.6"],
+      "input": 3.0,
+      "cachedInput": 0.3,
+      "cacheWrite": 3.75,
+      "output": 15.0,
+      "longThreshold": null
+    },
+    {
+      "id": "claude-sonnet-legacy",
+      "provider": "claude",
+      "match": ["sonnet"],
+      "input": 3.0,
+      "cachedInput": 0.3,
+      "cacheWrite": 3.75,
+      "output": 15.0,
+      "longThreshold": 200000,
+      "longInput": 6.0,
+      "longCachedInput": 0.6,
+      "longCacheWrite": 7.5,
+      "longOutput": 22.5
+    },
+    {
+      "id": "claude-haiku-5.5",
+      "provider": "claude",
+      "match": ["haiku-5-5", "haiku-5.5", "haiku-5", "haiku 5"],
+      "input": 0.1,
+      "cachedInput": 0.01,
+      "cacheWrite": 0.125,
+      "output": 0.5,
+      "longThreshold": 100000,
+      "longInput": 0.5,
+      "longCachedInput": 0.05,
+      "longCacheWrite": 0.625,
+      "longOutput": 2.5
+    },
+    {
+      "id": "claude-haiku-legacy",
+      "provider": "claude",
+      "match": ["haiku"],
+      "input": 1.0,
+      "cachedInput": 0.1,
+      "cacheWrite": 1.25,
+      "output": 5.0,
+      "longThreshold": null
+    }
+  ]
+}

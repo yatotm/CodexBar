@@ -185,7 +185,7 @@ struct SharedActivityTests {
         defer { preferences.remove() }
         let monitor = try makeMonitor(directory, preferences)
         defer { monitor.stop() }
-        let endedAt = Date()
+        let endedAt = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
         let terminal = task(at: endedAt, state: state)
         var source = UsageSource.local
         source.transport = .ssh

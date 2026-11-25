@@ -204,6 +204,7 @@ struct UsageBreakdownView: View {
         switch name {
         case "codex": "Codex"
         case "claude": "Claude"
+        case "gemini": "Gemini"
         case "oauth": "OAuth"
         case "api": "API"
         case "unknown", "": "未知"

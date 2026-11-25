@@ -53,14 +53,17 @@ struct CodexStatusMenuView: View {
     @EnvironmentObject private var appUpdater: AppUpdater
 
     var body: some View {
+        let scopes = usageCenterViewModel.visibleMenuScopes
         VStack(alignment: .leading, spacing: Metrics.verticalSpacing) {
-            Picker("统计范围", selection: $usageCenterViewModel.menuScope) {
-                ForEach(UsageMenuScope.allCases) { scope in
-                    Text(scope.title).tag(scope)
+            if scopes.count > 1 {
+                Picker("统计范围", selection: $usageCenterViewModel.menuScope) {
+                    ForEach(scopes) { scope in
+                        Text(scope.title).tag(scope)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             content
             UsageMenuFooter(viewModel: usageCenterViewModel, onOpenDetails: onOpenUsageDetails)
                 .id(usageCenterViewModel.menuScope)
@@ -92,7 +95,9 @@ struct CodexStatusMenuView: View {
 
 private extension CodexStatusMenuView {
     var isCodexLoading: Bool {
-        usageCenterViewModel.menuScope != .claude && viewModel.loadState == .loading && viewModel.snapshot == nil
+        (usageCenterViewModel.menuScope == .codex || usageCenterViewModel.menuScope == .all)
+            && usageCenterViewModel.isProviderEnabledAnywhere(.codex)
+            && viewModel.loadState == .loading && viewModel.snapshot == nil
     }
 
     enum Metrics {
@@ -126,24 +131,11 @@ private extension CodexStatusMenuView {
     ) -> some View {
         switch section {
         case .account:
-            if usageCenterViewModel.menuScope == .claude {
-                AccountCard(title: "Claude Code", isEmail: false, plan: "OAuth", isRefreshing: usageCenterViewModel.isRefreshing, usesCodexIcon: false) {
-                    usageCenterViewModel.refresh()
-                }
-            } else {
-                accountSection
-            }
+            scopedAccountSection
         case .activity:
             activitySection
         case .quota:
-            if usageCenterViewModel.menuScope != .claude {
-                quotaSection(dataPlaceholderSection: dataPlaceholderSection)
-            }
-            if usageCenterViewModel.menuScope != .codex {
-                ClaudeMenuQuotaView(observation: usageCenterViewModel.latestClaudeQuota)
-                    .id(usageCenterViewModel.menuScope)
-                    .id(menuSurfaceVisibility.presentationGeneration)
-            }
+            scopedQuotaSection(dataPlaceholderSection: dataPlaceholderSection)
         case .usage:
             if usageCenterViewModel.menuScope == .codex {
                 usageSection(dataPlaceholderSection: dataPlaceholderSection)
@@ -161,9 +153,60 @@ private extension CodexStatusMenuView {
                 statusSection
             }
         case .serviceStatus:
-            if usageCenterViewModel.menuScope != .claude {
+            if usageCenterViewModel.menuScope == .codex || usageCenterViewModel.menuScope == .all,
+               usageCenterViewModel.isProviderEnabledAnywhere(.codex) {
                 CodexServiceStatusRow(monitor: serviceStatusMonitor)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var scopedAccountSection: some View {
+        switch usageCenterViewModel.menuScope {
+        case .claude:
+            externalAccountCard(title: "Claude Code", plan: "OAuth")
+        case .gemini:
+            externalAccountCard(title: "Gemini (agy)", plan: usageCenterViewModel.latestGeminiPlan ?? "OAuth")
+        case .all, .codex:
+            if usageCenterViewModel.isProviderEnabledAnywhere(.codex) {
+                accountSection
+            } else if usageCenterViewModel.isProviderEnabledAnywhere(.gemini) {
+                externalAccountCard(title: "Gemini (agy)", plan: usageCenterViewModel.latestGeminiPlan ?? "OAuth")
+            } else {
+                externalAccountCard(title: "Claude Code", plan: "OAuth")
+            }
+        }
+    }
+
+    private func externalAccountCard(title: String, plan: String) -> some View {
+        AccountCard(
+            title: title,
+            isEmail: false,
+            plan: plan,
+            isRefreshing: usageCenterViewModel.isRefreshing,
+            usesCodexIcon: false
+        ) {
+            usageCenterViewModel.refresh()
+        }
+    }
+
+    @ViewBuilder
+    private func scopedQuotaSection(dataPlaceholderSection: MainPanelSection?) -> some View {
+        if usageCenterViewModel.menuScope == .codex || usageCenterViewModel.menuScope == .all,
+           usageCenterViewModel.isProviderEnabledAnywhere(.codex) {
+            quotaSection(dataPlaceholderSection: dataPlaceholderSection)
+        }
+        if usageCenterViewModel.menuScope == .claude || usageCenterViewModel.menuScope == .all,
+           usageCenterViewModel.isProviderEnabledAnywhere(.claude) {
+            ClaudeMenuQuotaView(title: "Claude 额度", observation: usageCenterViewModel.latestClaudeQuota)
+                .id("claude-\(usageCenterViewModel.menuScope.rawValue)")
+                .id(menuSurfaceVisibility.presentationGeneration)
+        }
+        if usageCenterViewModel.menuScope == .gemini || usageCenterViewModel.menuScope == .all,
+           usageCenterViewModel.isProviderEnabledAnywhere(.gemini) {
+            ClaudeMenuQuotaView(title: "Gemini 额度", observation: usageCenterViewModel.latestGeminiQuota)
+                .id("gemini-\(usageCenterViewModel.menuScope.rawValue)")
+                .id(menuSurfaceVisibility.presentationGeneration)
         }
     }
 
@@ -296,7 +339,8 @@ private extension CodexStatusMenuView {
             case .status:
                 viewModel.snapshot != nil
             case .serviceStatus:
-                usageCenterViewModel.menuScope != .claude
+                (usageCenterViewModel.menuScope == .codex || usageCenterViewModel.menuScope == .all)
+                    && usageCenterViewModel.isProviderEnabledAnywhere(.codex)
             }
         }
     }
