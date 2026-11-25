@@ -182,6 +182,70 @@ def read_codex_live_tasks(codex_home, collector_mod, now_ts):
     return []
 
 
+def read_live_quota(home_dir, provider):
+    live_path = home_dir / "codexbar-usage/live-state.json"
+    if not live_path.is_file() or live_path.is_symlink():
+        return None
+    try:
+        raw = json.loads(live_path.read_text())
+        q = raw.get("latestQuota") if isinstance(raw, dict) else None
+        if isinstance(q, dict) and q.get("provider") == provider and isinstance(q.get("windows"), list) and q["windows"]:
+            return q
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def merge_quotas_with_live(exported_quotas, homes, enabled, collector_mod, now_ts):
+    by_provider = {q["provider"]: q for q in (exported_quotas or []) if isinstance(q, dict) and q.get("provider")}
+    for provider in ("claude", "gemini"):
+        if provider not in enabled:
+            continue
+        live_q = read_live_quota(homes[provider], provider)
+        if not live_q:
+            continue
+        prev_q = by_provider.get(provider, {})
+        if not prev_q or collector_mod.claude_quota_priority(live_q, now_ts) >= collector_mod.claude_quota_priority(prev_q, now_ts):
+            by_provider[provider] = live_q
+    return list(by_provider.values())
+
+
+def read_claude_transcript_model(claude_home, raw_sid, collector_mod):
+    projects = claude_home / "projects"
+    if not raw_sid or not projects.is_dir() or projects.is_symlink():
+        return None
+    target_name = f"{raw_sid}.jsonl"
+    try:
+        for proj_entry in os.scandir(projects):
+            if not proj_entry.is_dir(follow_symlinks=False):
+                continue
+            cand = pathlib.Path(proj_entry.path) / target_name
+            if not cand.is_file() or cand.is_symlink():
+                continue
+            size = cand.stat().st_size
+            with cand.open("rb") as f:
+                if size > 49152:
+                    f.seek(size - 49152)
+                    f.readline()
+                model = None
+                for raw_line in f:
+                    if b'"model"' not in raw_line:
+                        continue
+                    try:
+                        obj = json.loads(raw_line)
+                    except ValueError:
+                        continue
+                    msg = obj.get("message") if isinstance(obj, dict) else None
+                    m_val = (msg.get("model") if isinstance(msg, dict) else None) or (obj.get("model") if isinstance(obj, dict) else None)
+                    if isinstance(m_val, str) and m_val and not m_val.startswith("<"):
+                        model = collector_mod.text(m_val, 100)
+                if model:
+                    return model
+    except OSError:
+        pass
+    return None
+
+
 def read_claude_live_tasks(claude_home, collector_mod, now_ts):
     tasks_by_id = {}
     live_path = claude_home / "codexbar-usage/live-state.json"
@@ -212,16 +276,30 @@ def read_claude_live_tasks(claude_home, collector_mod, now_ts):
                 if not isinstance(sid_raw, str) or not sid_raw or not pid_alive(pid):
                     continue
                 sid = collector_mod.digest("claude-session", sid_raw)
-                active_sessions[sid] = status
+                cwd = info.get("cwd")
+                proj = pathlib.PurePath(cwd.rstrip("/")).name if isinstance(cwd, str) and cwd.strip() else ""
+                raw_started = info.get("startedAt")
+                started_sec = None
+                if isinstance(raw_started, (int, float)) and not isinstance(raw_started, bool) and raw_started > 0:
+                    started_sec = float(raw_started) / 1000.0 if raw_started > 1e11 else float(raw_started)
+                active_sessions[sid] = {
+                    "status": status,
+                    "rawSid": sid_raw,
+                    "project": collector_mod.text(proj, 100),
+                    "startedAt": started_sec
+                }
         except OSError:
             pass
     result = []
     seen = set(tasks_by_id) | set(active_sessions)
     for sid in seen:
         base = tasks_by_id.get(sid, {})
-        proc_status = active_sessions.get(sid)
+        proc_info = active_sessions.get(sid)
+        proc_status = proc_info["status"] if proc_info else None
         updated = float(base.get("updatedAt", now_ts))
-        started = float(base.get("startedAt", max(1.0, updated - 1)))
+        started = float(base.get("startedAt") or (proc_info["startedAt"] if proc_info and proc_info["startedAt"] else max(1.0, updated - 1)))
+        if started > 1e11:
+            started = started / 1000.0
         if proc_status == "shell":
             state, stage, event_name = "running", "background-shell", "BackgroundShell"
             updated = now_ts
@@ -238,15 +316,24 @@ def read_claude_live_tasks(claude_home, collector_mod, now_ts):
                 state, stage, event_name = "completed", None, "Stop"
             else:
                 continue
+        base_proj = collector_mod.text(base.get("project") or "", 100)
+        proc_proj = proc_info["project"] if proc_info else ""
+        if proc_proj and (not base_proj or base_proj in ("未知", "tmp", "Claude")):
+            chosen_proj = proc_proj
+        else:
+            chosen_proj = base_proj or proc_proj or "Claude"
+        model_name = collector_mod.text(base.get("modelName") or "", 100) or None
+        if not model_name and proc_info:
+            model_name = read_claude_transcript_model(claude_home, proc_info["rawSid"], collector_mod)
         row = {
             "id": sid,
             "provider": "claude",
             "state": state,
-            "project": collector_mod.text(base.get("project") or "Claude", 100),
+            "project": chosen_proj,
             "startedAt": min(started, updated),
             "updatedAt": max(started, updated),
             "stateChangedAt": float(base.get("stateChangedAt", min(started, updated))),
-            "modelName": collector_mod.text(base.get("modelName") or "", 100) or None
+            "modelName": model_name
         }
         if stage:
             row["stage"] = stage
@@ -256,6 +343,107 @@ def read_claude_live_tasks(claude_home, collector_mod, now_ts):
             row["tokenUsage"] = base["tokenUsage"]
         result.append(row)
     return result[:120]
+
+
+def read_gemini_default_model(gemini_home, collector_mod):
+    settings_path = gemini_home / "settings.json"
+    if settings_path.is_file() and not settings_path.is_symlink():
+        try:
+            data = json.loads(settings_path.read_text())
+            if isinstance(data, dict) and isinstance(data.get("model"), str) and data["model"].strip():
+                return collector_mod.text(data["model"].strip(), 100)
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def parse_gemini_effort(model_text):
+    if not model_text:
+        return None
+    m = re.search(r"\((Low|Medium|High|XHigh|Max)\)", model_text, flags=re.I) or re.search(r"-(low|medium|high|xhigh|max)$", model_text, flags=re.I)
+    return m.group(1).lower() if m else None
+
+
+def read_gemini_transcript_tail(gemini_home, cid, collector_mod):
+    if not cid:
+        return None
+    candidates = [
+        gemini_home / "brain" / cid / ".system_generated/logs/transcript.jsonl",
+        pathlib.Path.home() / ".gemini/antigravity/brain" / cid / ".system_generated/logs/transcript.jsonl"
+    ]
+    tp = next((p for p in candidates if p.is_file() and not p.is_symlink()), None)
+    if tp is None:
+        return None
+    try:
+        st = tp.stat()
+        mtime = float(st.st_mtime)
+        size = st.st_size
+        first_ts = None
+        last_model = None
+        last_tokens = None
+        in_flight = False
+        with tp.open("rb") as f:
+            head_line = f.readline(8192)
+            if head_line.endswith(b"\n"):
+                try:
+                    h_obj = json.loads(head_line)
+                    parsed_f = collector_mod.timestamp(h_obj.get("created_at")) if isinstance(h_obj, dict) else None
+                    if parsed_f:
+                        first_ts = parsed_f.timestamp()
+                except ValueError:
+                    pass
+            f.seek(max(0, size - 65536))
+            if size > 65536:
+                f.readline()
+            for raw_line in f:
+                if not raw_line.endswith(b"\n"):
+                    in_flight = True
+                    continue
+                try:
+                    obj = json.loads(raw_line)
+                except ValueError:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                otype = obj.get("type")
+                if otype == "USER_INPUT":
+                    content = obj.get("content") or ""
+                    if "<USER_SETTINGS_CHANGE>" in content and "Model Selection" in content:
+                        m_sw = collector_mod.GEMINI_SWITCH_RE.search(content)
+                        if m_sw:
+                            last_model = collector_mod.text(m_sw.group(2).strip(), 100)
+                    if obj.get("source") == "USER_EXPLICIT":
+                        in_flight = True
+                elif otype == "GENERIC":
+                    in_flight = True
+                elif otype == "PLANNER_RESPONSE":
+                    if isinstance(obj.get("model"), str) and obj["model"].strip():
+                        last_model = collector_mod.text(obj["model"].strip(), 100)
+                    in_t = collector_mod.number(obj.get("input_tokens"))
+                    cr_t = collector_mod.number(obj.get("cache_read_tokens"))
+                    cw_t = collector_mod.number(obj.get("cache_creation_tokens"))
+                    out_t = collector_mod.number(obj.get("output_tokens"))
+                    if in_t + cr_t + cw_t + out_t > 0:
+                        tot_in = in_t + cr_t + cw_t
+                        last_tokens = {
+                            "input_tokens": tot_in,
+                            "cached_input_tokens": cr_t,
+                            "cache_write_input_tokens": cw_t,
+                            "output_tokens": out_t,
+                            "total_tokens": tot_in + out_t
+                        }
+                    tcs = obj.get("tool_calls")
+                    in_flight = bool(isinstance(tcs, list) and len(tcs) > 0)
+        return {
+            "mtime": mtime,
+            "startedAt": first_ts or mtime,
+            "modelName": last_model,
+            "effort": parse_gemini_effort(last_model),
+            "tokenUsage": last_tokens,
+            "inFlight": in_flight
+        }
+    except OSError:
+        return None
 
 
 def read_gemini_live_tasks(gemini_home, collector_mod, now_ts):
@@ -269,13 +457,14 @@ def read_gemini_live_tasks(gemini_home, collector_mod, now_ts):
                     tasks_by_id[sid] = dict(item)
         except (OSError, ValueError):
             pass
-    # 补充 conversation_summaries.db 的运行态, 覆盖无 TUI 的 agy -p 会话与会话退出对账
+    default_model = read_gemini_default_model(gemini_home, collector_mod)
+    meta_map = collector_mod.load_gemini_metadata(gemini_home)
     db_path = gemini_home / "conversation_summaries.db"
     db_states = {}
     if db_path.is_file() and not db_path.is_symlink():
         conn = None
         try:
-            conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.25)
+            conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.5)
             conn.execute("PRAGMA query_only=ON")
             conn.execute("PRAGMA trusted_schema=OFF")
             rows = conn.execute(
@@ -290,7 +479,7 @@ def read_gemini_live_tasks(gemini_home, collector_mod, now_ts):
                 mod_ts = parsed_mod.timestamp() if parsed_mod else 0.0
                 db_states[sid] = {
                     "cid": cid,
-                    "project": collector_mod.workspace_project_name(uris) or "Gemini",
+                    "project": collector_mod.workspace_project_name(uris) or meta_map.get(cid, {}).get("project") or "Gemini",
                     "status": status or "",
                     "modTs": mod_ts
                 }
@@ -299,25 +488,75 @@ def read_gemini_live_tasks(gemini_home, collector_mod, now_ts):
         finally:
             if conn is not None:
                 conn.close()
-    result = []
+
+    # 补充扫描最近活跃的 brain 转录目录, 防止数据库短暂写锁期间任务闪断消失
+    brain_dir = gemini_home / "brain"
+    if brain_dir.is_dir() and not brain_dir.is_symlink():
+        try:
+            recent_brains = []
+            for entry in os.scandir(brain_dir):
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                cid = entry.name
+                if meta_map.get(cid, {}).get("subagent"):
+                    continue
+                tp = pathlib.Path(entry.path) / ".system_generated/logs/transcript.jsonl"
+                try:
+                    tm = tp.stat().st_mtime
+                    if now_ts - tm < 900:
+                        recent_brains.append((tm, cid))
+                except OSError:
+                    continue
+            for _, cid in sorted(recent_brains, reverse=True)[:12]:
+                sid = collector_mod.digest("gemini-session", cid)
+                if sid not in db_states:
+                    db_states[sid] = {
+                        "cid": cid,
+                        "project": meta_map.get(cid, {}).get("project") or "Gemini",
+                        "status": "",
+                        "modTs": 0.0
+                    }
+        except OSError:
+            pass
+
+    tails = {}
     for sid, info in db_states.items():
-        if info["status"] == "CASCADE_RUN_STATUS_RUNNING" and sid not in tasks_by_id and now_ts - info["modTs"] < 1800:
-            tasks_by_id[sid] = {
+        tail = read_gemini_transcript_tail(gemini_home, info["cid"], collector_mod)
+        if tail:
+            tails[sid] = tail
+        is_db_running = info["status"] == "CASCADE_RUN_STATUS_RUNNING"
+        latest_act = max(info["modTs"], tail["mtime"] if tail else 0.0)
+        is_tail_inflight = bool(
+            tail and tail["inFlight"] and (now_ts - tail["mtime"] < 600)
+            and not (info["status"] == "CASCADE_RUN_STATUS_IDLE" and info["modTs"] > tail["mtime"] + 2)
+        )
+        if (is_db_running and now_ts - latest_act < 14400) or is_tail_inflight:
+            existing = tasks_by_id.get(sid, {})
+            start_ts = existing.get("startedAt") or (tail["startedAt"] if tail else None) or info["modTs"] or (now_ts - 5)
+            prev_changed = existing.get("stateChangedAt") if existing.get("state") == "running" else start_ts
+            merged = dict(existing)
+            merged.update({
                 "id": sid,
                 "provider": "gemini",
                 "state": "running",
-                "project": info["project"],
-                "startedAt": info["modTs"] or (now_ts - 5),
+                "project": existing.get("project") if existing.get("project") not in (None, "", "未知", "Gemini") else info["project"],
+                "startedAt": start_ts,
                 "updatedAt": now_ts,
-                "stateChangedAt": info["modTs"] or (now_ts - 5),
-                "stage": "thinking",
-                "eventName": "UserPromptSubmit"
-            }
+                "stateChangedAt": prev_changed or start_ts,
+                "stage": existing.get("stage") or "thinking",
+                "eventName": existing.get("eventName") or "UserPromptSubmit"
+            })
+            tasks_by_id[sid] = merged
+
+    result = []
     for sid, item in tasks_by_id.items():
         state = item.get("state", "unknown")
         updated = float(item.get("updatedAt", now_ts))
         started = float(item.get("startedAt", max(1.0, updated - 1)))
         db_info = db_states.get(sid)
+        tail = tails.get(sid)
+        if tail is None and db_info:
+            tail = read_gemini_transcript_tail(gemini_home, db_info["cid"], collector_mod)
         if state in ("running", "waiting"):
             if db_info and db_info["status"] == "CASCADE_RUN_STATUS_IDLE" and db_info["modTs"] > updated + 2:
                 state = "completed"
@@ -329,16 +568,26 @@ def read_gemini_live_tasks(gemini_home, collector_mod, now_ts):
             continue
         if state == "ended" and updated <= started:
             updated = started + 0.5
+        proj_val = item.get("project")
+        if not proj_val or proj_val in ("未知", "Gemini"):
+            proj_val = (db_info["project"] if db_info else None) or proj_val or "Gemini"
+        model_val = item.get("modelName") or (tail["modelName"] if tail else None) or default_model
+        effort_val = item.get("effort") or (tail["effort"] if tail else None) or parse_gemini_effort(model_val)
+        token_val = item.get("tokenUsage") if isinstance(item.get("tokenUsage"), dict) else (tail["tokenUsage"] if tail else None)
         row = {
             "id": sid,
             "provider": "gemini",
             "state": state,
-            "project": collector_mod.text(item.get("project") or (db_info["project"] if db_info else "Gemini"), 100),
+            "project": collector_mod.text(proj_val, 100),
             "startedAt": min(started, updated),
             "updatedAt": max(started, updated),
             "stateChangedAt": float(item.get("stateChangedAt", min(started, updated)))
         }
-        for optional_key in ("modelName", "effort", "stage", "eventName"):
+        if isinstance(model_val, str) and model_val:
+            row["modelName"] = collector_mod.text(model_val, 100)
+        if isinstance(effort_val, str) and effort_val:
+            row["effort"] = collector_mod.text(effort_val, 40)
+        for optional_key in ("stage", "eventName"):
             val = item.get(optional_key)
             if isinstance(val, str) and val:
                 row[optional_key] = collector_mod.text(val, 100)
@@ -348,8 +597,8 @@ def read_gemini_live_tasks(gemini_home, collector_mod, now_ts):
             row["pendingInputCount"] = item["pendingInputCount"]
         if isinstance(item.get("hasBlockingInputRequest"), bool):
             row["hasBlockingInputRequest"] = item["hasBlockingInputRequest"]
-        if isinstance(item.get("tokenUsage"), dict):
-            row["tokenUsage"] = item["tokenUsage"]
+        if isinstance(token_val, dict):
+            row["tokenUsage"] = token_val
         result.append(row)
     return result[:120]
 
@@ -479,134 +728,143 @@ class ProbeAgent:
         currently_active = any(t.get("state") in ("running", "waiting") for t in live_tasks)
         just_finished = self.was_active and not currently_active
         self.was_active = currently_active
+        did_scan = False
         if force_scan or just_finished or (now_mono - self.last_scan_mono >= 60) or self.last_scan_mono == 0.0:
             self.run_usage_scan()
             self.last_scan_mono = time.monotonic()
+            did_scan = True
 
         enabled = self.config["enabledProviders"]
-        sync = self.read_sync_cursor()
         usage_dir = self.state_dir / "usage"
-        exported = {"epoch": "", "cursor": 0, "reset": False, "hasMore": False, "records": [], "quotas": [], "warnings": []}
-        if (usage_dir / "usage-v1.sqlite").is_file() and enabled:
-            db = self.collector_mod.Database(usage_dir, writable=False)
-            try:
-                exported = db.export(sync.get("epoch", ""), int(sync.get("cursor", 0)), 800, enabled)
-            finally:
-                db.connection.close()
-
-        gemini_val = None
-        if "gemini" in enabled and (usage_dir / self.collector_mod.GeminiValuationLedger.filename).is_file():
-            ledger = self.collector_mod.GeminiValuationLedger(usage_dir, self.homes["gemini"], budget=2, read_only=True)
-            try:
-                val_export = ledger.export()
-                last_val_at = float(sync.get("valuationAt", 0.0))
-                fresh_records = [r for r in val_export["records"] if float(r["at"]) >= last_val_at - 5][:600]
-                gemini_val = {
-                    "planTier": val_export.get("planTier"),
-                    "windows": val_export.get("windows", [])[-20:],
-                    "plans": val_export.get("plans", [])[-50:],
-                    "records": fresh_records
-                }
-            finally:
-                ledger.connection.close()
-
-        claude_val = None
-        if "claude" in enabled:
-            try:
-                c_export = self.collector_mod.scan_claude_weekly_windows(self.homes["claude"], budget=2)
-                if c_export.get("windows"):
-                    claude_val = {"windows": c_export["windows"][-20:]}
-            except Exception:
-                pass
-
-        live_fp = hashlib.sha256(self.collector_mod.encode({
-            "tasks": [{k: v for k, v in t.items() if k != "updatedAt"} for t in live_tasks],
-            "quotas": exported.get("quotas", [])
-        }).encode()).hexdigest()
-        has_records = bool(exported.get("records")) or bool(exported.get("reset"))
-        if not force_scan and not has_records and live_fp == self.last_live_fingerprint and (now_mono - self.last_push_mono < 30):
-            return True
-
         detected = detect_installed_providers(self.homes)
         codex_auth = self.collector_mod.codex_authentication_type(self.homes["codex"]) if "codex" in detected else "unknown"
-        payload = {
-            "protocol": 2,
-            "sentAt": time.time(),
-            "probeVersion": PROBE_VERSION,
-            "platform": f"{platform.system()} {platform.machine()}",
-            "detectedProviders": detected,
-            "epoch": exported.get("epoch", ""),
-            "reset": bool(exported.get("reset", False)),
-            "records": exported.get("records", []),
-            "quotas": exported.get("quotas", []),
-            "warnings": exported.get("warnings", []),
-            "geminiPlan": exported.get("geminiPlan") or (gemini_val or {}).get("planTier"),
-            "currentCodexAuthentication": codex_auth,
-            "liveTasks": live_tasks,
-            "geminiValuation": gemini_val,
-            "claudeValuation": claude_val
-        }
-        body = self.collector_mod.encode(payload).encode()
-        def send_signed_push(bypass_proxy):
-            ts_val = str(int(time.time()))
-            nonce_val = secrets.token_hex(16)
-            sig_val = sign_request(self.config["signingKey"], self.config["nodeID"], ts_val, nonce_val, body)
-            request_obj = urllib.request.Request(
-                self.config["hubURL"] + "/v1/push",
-                data=body,
-                method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": f"CodexBarProbe/{PROBE_VERSION}",
-                    "X-CodexBar-Node": self.config["nodeID"],
-                    "X-CodexBar-Timestamp": ts_val,
-                    "X-CodexBar-Nonce": nonce_val,
-                    "X-CodexBar-Signature": sig_val
-                }
-            )
-            chain = [urllib.request.ProxyHandler({})] if bypass_proxy else []
-            if ctx is not None:
-                chain.append(urllib.request.HTTPSHandler(context=ctx))
-            with urllib.request.build_opener(*chain).open(request_obj, timeout=15) as resp_obj:
-                return json.loads(resp_obj.read(65536))
 
-        ctx = ssl.create_default_context() if self.config["hubURL"].startswith("https://") else None
-        host = (urllib.parse.urlsplit(self.config["hubURL"]).hostname or "").lower()
-        is_local_net = (
-            host in ("localhost", "127.0.0.1", "::1")
-            or host.endswith(".local")
-            or host.startswith("192.168.")
-            or host.startswith("10.")
-            or host.startswith("100.")
-            or bool(re.match(r"^172\.(1[6-9]|2[0-9]|3[0-1])\.", host))
-        )
-        try:
-            reply = send_signed_push(bypass_proxy=True)
-        except urllib.error.HTTPError:
-            raise
-        except urllib.error.URLError:
-            if is_local_net:
-                raise
-            reply = send_signed_push(bypass_proxy=False)
-        self.last_push_mono = time.monotonic()
-        self.last_live_fingerprint = live_fp
-        new_sync = {
-            "epoch": exported.get("epoch", sync.get("epoch", "")),
-            "cursor": exported.get("cursor", sync.get("cursor", 0)),
-            "valuationAt": max(
-                [float(sync.get("valuationAt", 0.0))]
-                + [float(r["at"]) for r in (gemini_val or {}).get("records", [])]
+        for page_idx in range(6):
+            sync = self.read_sync_cursor()
+            exported = {"epoch": "", "cursor": 0, "reset": False, "hasMore": False, "records": [], "quotas": [], "warnings": []}
+            if (usage_dir / "usage-v1.sqlite").is_file() and enabled:
+                db = self.collector_mod.Database(usage_dir, writable=False)
+                try:
+                    exported = db.export(sync.get("epoch", ""), int(sync.get("cursor", 0)), 800, enabled)
+                finally:
+                    db.connection.close()
+
+            now_ts = time.time()
+            merged_quotas = merge_quotas_with_live(exported.get("quotas", []), self.homes, enabled, self.collector_mod, now_ts)
+
+            gemini_val = None
+            claude_val = None
+            if page_idx == 0 and did_scan:
+                if "gemini" in enabled and (usage_dir / self.collector_mod.GeminiValuationLedger.filename).is_file():
+                    ledger = self.collector_mod.GeminiValuationLedger(usage_dir, self.homes["gemini"], budget=2, read_only=True)
+                    try:
+                        val_export = ledger.export()
+                        last_val_at = float(sync.get("valuationAt", 0.0))
+                        fresh_records = [r for r in val_export["records"] if float(r["at"]) >= last_val_at - 5][:600]
+                        gemini_val = {
+                            "planTier": val_export.get("planTier"),
+                            "windows": val_export.get("windows", [])[-20:],
+                            "plans": val_export.get("plans", [])[-50:],
+                            "records": fresh_records
+                        }
+                    finally:
+                        ledger.connection.close()
+                if "claude" in enabled:
+                    try:
+                        c_export = self.collector_mod.scan_claude_weekly_windows(self.homes["claude"], budget=2)
+                        if c_export.get("windows"):
+                            claude_val = {"windows": c_export["windows"][-20:]}
+                    except Exception:
+                        pass
+
+            live_fp = hashlib.sha256(self.collector_mod.encode({
+                "tasks": [{k: v for k, v in t.items() if k != "updatedAt"} for t in live_tasks],
+                "quotas": merged_quotas
+            }).encode()).hexdigest()
+            has_records = bool(exported.get("records")) or bool(exported.get("reset"))
+            if page_idx == 0 and not force_scan and not has_records and live_fp == self.last_live_fingerprint and (now_mono - self.last_push_mono < 30):
+                return True
+
+            clean_warnings = [w for w in exported.get("warnings", []) if w != "首次或增量扫描尚未完成, 下次刷新继续"]
+            payload = {
+                "protocol": 2,
+                "sentAt": now_ts,
+                "probeVersion": PROBE_VERSION,
+                "platform": f"{platform.system()} {platform.machine()}",
+                "detectedProviders": detected,
+                "epoch": exported.get("epoch", ""),
+                "reset": bool(exported.get("reset", False)),
+                "records": exported.get("records", []),
+                "quotas": merged_quotas,
+                "warnings": clean_warnings,
+                "geminiPlan": exported.get("geminiPlan") or (gemini_val or {}).get("planTier"),
+                "currentCodexAuthentication": codex_auth,
+                "liveTasks": live_tasks,
+                "geminiValuation": gemini_val,
+                "claudeValuation": claude_val
+            }
+            body = self.collector_mod.encode(payload).encode()
+
+            def send_signed_push(bypass_proxy):
+                ts_val = str(int(time.time()))
+                nonce_val = secrets.token_hex(16)
+                sig_val = sign_request(self.config["signingKey"], self.config["nodeID"], ts_val, nonce_val, body)
+                request_obj = urllib.request.Request(
+                    self.config["hubURL"] + "/v1/push",
+                    data=body,
+                    method="POST",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "User-Agent": f"CodexBarProbe/{PROBE_VERSION}",
+                        "X-CodexBar-Node": self.config["nodeID"],
+                        "X-CodexBar-Timestamp": ts_val,
+                        "X-CodexBar-Nonce": nonce_val,
+                        "X-CodexBar-Signature": sig_val
+                    }
+                )
+                chain = [urllib.request.ProxyHandler({})] if bypass_proxy else []
+                if ctx is not None:
+                    chain.append(urllib.request.HTTPSHandler(context=ctx))
+                with urllib.request.build_opener(*chain).open(request_obj, timeout=15) as resp_obj:
+                    return json.loads(resp_obj.read(65536))
+
+            ctx = ssl.create_default_context() if self.config["hubURL"].startswith("https://") else None
+            host = (urllib.parse.urlsplit(self.config["hubURL"]).hostname or "").lower()
+            is_local_net = (
+                host in ("localhost", "127.0.0.1", "::1")
+                or host.endswith(".local")
+                or host.startswith("192.168.")
+                or host.startswith("10.")
+                or host.startswith("100.")
+                or bool(re.match(r"^172\.(1[6-9]|2[0-9]|3[0-1])\.", host))
             )
-        }
-        self.write_sync_cursor(new_sync)
-        if isinstance(reply, dict):
-            desired = reply.get("desiredProviders")
-            bridge_sl = reply.get("bridgeStatusLine")
-            if isinstance(desired, list):
-                self._save_config_updates(desired, bridge_sl)
-        if exported.get("hasMore"):
-            return self.push_once(force_scan=False)
+            try:
+                reply = send_signed_push(bypass_proxy=True)
+            except urllib.error.HTTPError:
+                raise
+            except urllib.error.URLError:
+                if is_local_net:
+                    raise
+                reply = send_signed_push(bypass_proxy=False)
+            self.last_push_mono = time.monotonic()
+            self.last_live_fingerprint = live_fp
+            new_sync = {
+                "epoch": exported.get("epoch", sync.get("epoch", "")),
+                "cursor": exported.get("cursor", sync.get("cursor", 0)),
+                "valuationAt": max(
+                    [float(sync.get("valuationAt", 0.0))]
+                    + [float(r["at"]) for r in (gemini_val or {}).get("records", [])]
+                )
+            }
+            self.write_sync_cursor(new_sync)
+            if isinstance(reply, dict):
+                desired = reply.get("desiredProviders")
+                bridge_sl = reply.get("bridgeStatusLine")
+                if isinstance(desired, list):
+                    self._save_config_updates(desired, bridge_sl)
+            if not exported.get("hasMore"):
+                break
         return True
 
     def serve_forever(self):

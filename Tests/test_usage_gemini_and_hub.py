@@ -296,7 +296,11 @@ class GeminiAndHubTests(unittest.TestCase):
             self.assertIn("gemini", node1_info["detectedProviders"])
             self.assertTrue(any(r["provider"] == "gemini" and r["nodeId"] == "node-1" for r in pulled["records"]))
             self.assertEqual(pulled["liveTasks"]["node-1"][0]["state"], "running")
-            self.assertEqual(len(pulled["geminiValuation"]["records"]), 1)
+            self.assertEqual(pulled["liveTasks"]["node-1"][0]["modelName"], "gemini-4-carbon-high")
+            self.assertEqual(pulled["geminiValuation"]["records"], [{"id": pulled["geminiValuation"]["records"][0]["id"],
+                                                                      "at": pulled["geminiValuation"]["records"][0]["at"],
+                                                                      "model": "gemini-4-carbon-high",
+                                                                      "tokens": {"input": 4000, "cached": 1000, "cacheWrite": 0, "output": 300}}])
 
             # 6. 控制中心关闭 node-1 的 gemini 渠道后, 下次心跳自动同步到探针配置并解除桥接
             disable_body = json.dumps({
@@ -322,6 +326,141 @@ class GeminiAndHubTests(unittest.TestCase):
             server.server_close()
             thread.join()
             store.close()
+
+    def test_live_tasks_merge_quota_and_bad_block_recovery(self):
+        now_ts = time.time()
+        # 1. Gemini 即使已有旧 live-state, 只要数据库仍为 RUNNING 就持续刷新并从转录尾部补齐模型和 token
+        cid = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+        self.create_gemini_summary_db(cid, "file:///Users/demo/AgyActive", status="CASCADE_RUN_STATUS_RUNNING")
+        self.write_gemini_transcript(cid, [
+            {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT",
+             "created_at": dt.datetime.fromtimestamp(now_ts - 120, dt.timezone.utc).isoformat(), "content": "work"},
+            {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE",
+             "created_at": dt.datetime.fromtimestamp(now_ts - 30, dt.timezone.utc).isoformat(),
+             "model": "gemini-4-carbon-high", "input_tokens": 2500, "cache_read_tokens": 500, "output_tokens": 200,
+             "tool_calls": [{"id": "tc1", "name": "run_command"}]}
+        ])
+        sid = collector.digest("gemini-session", cid)
+        gem_live = self.gemini / "codexbar-usage"
+        gem_live.mkdir(parents=True, exist_ok=True)
+        (gem_live / "live-state.json").write_text(json.dumps({
+            "updatedAt": now_ts - 700,
+            "tasks": {
+                sid: {
+                    "id": sid,
+                    "provider": "gemini",
+                    "state": "running",
+                    "project": "Gemini",
+                    "startedAt": now_ts - 800,
+                    "updatedAt": now_ts - 700,
+                    "stateChangedAt": now_ts - 800
+                }
+            },
+            "latestQuota": {
+                "provider": "gemini",
+                "observedAt": now_ts - 5,
+                "windows": [{"name": "5h", "usedPercent": 12.5, "resetsAt": now_ts + 3600}]
+            }
+        }))
+        gem_tasks = probe_mod.read_gemini_live_tasks(self.gemini, collector, now_ts)
+        self.assertEqual(len(gem_tasks), 1)
+        self.assertEqual(gem_tasks[0]["state"], "running")
+        self.assertEqual(gem_tasks[0]["project"], "AgyActive")
+        self.assertEqual(gem_tasks[0]["modelName"], "gemini-4-carbon-high")
+        self.assertEqual(gem_tasks[0]["tokenUsage"]["total_tokens"], 3200)
+
+        merged_q = probe_mod.merge_quotas_with_live([], {"claude": self.claude, "gemini": self.gemini}, ["gemini"], collector, now_ts)
+        self.assertEqual(len(merged_q), 1)
+        self.assertEqual(merged_q[0]["provider"], "gemini")
+        self.assertAlmostEqual(merged_q[0]["windows"][0]["usedPercent"], 12.5, places=1)
+
+        # 2. Claude 后台 shell 会话优先采用真实会话目录项目名而非子目录 tmp, 并从转录补齐模型
+        cc_raw_sid = "1212736-session-uuid"
+        cc_sid = collector.digest("claude-session", cc_raw_sid)
+        cc_live = self.claude / "codexbar-usage"
+        cc_live.mkdir(parents=True, exist_ok=True)
+        (cc_live / "live-state.json").write_text(json.dumps({
+            "updatedAt": now_ts - 300,
+            "tasks": {
+                cc_sid: {
+                    "id": cc_sid,
+                    "provider": "claude",
+                    "state": "completed",
+                    "project": "tmp",
+                    "startedAt": now_ts - 600,
+                    "updatedAt": now_ts - 300
+                }
+            }
+        }))
+        cc_sessions = self.claude / "sessions"
+        cc_sessions.mkdir(parents=True, exist_ok=True)
+        (cc_sessions / f"{os.getpid()}.json").write_text(json.dumps({
+            "pid": os.getpid(),
+            "sessionId": cc_raw_sid,
+            "cwd": "/root/YJOS",
+            "startedAt": int((now_ts - 600) * 1000),
+            "status": "shell"
+        }))
+        cc_proj_dir = self.claude / "projects/-root-YJOS"
+        cc_proj_dir.mkdir(parents=True, exist_ok=True)
+        (cc_proj_dir / f"{cc_raw_sid}.jsonl").write_text(
+            json.dumps({"type": "assistant", "message": {"model": "claude-opus-5-5"}}) + "\n"
+        )
+        cc_tasks = probe_mod.read_claude_live_tasks(self.claude, collector, now_ts)
+        self.assertEqual(len(cc_tasks), 1)
+        self.assertEqual(cc_tasks[0]["state"], "running")
+        self.assertEqual(cc_tasks[0]["stage"], "background-shell")
+        self.assertEqual(cc_tasks[0]["project"], "YJOS")
+        self.assertEqual(cc_tasks[0]["modelName"], "claude-opus-5-5")
+
+        # 3. 历史陈旧文件中途遭遇磁盘 I/O 错误时, 保留已读前缀并跳过坏块避免无限重复告警
+        bad_file = self.codex / "sessions/rollout-bad.jsonl"
+        bad_file.write_text('{"timestamp":"2026-11-18T10:00:00Z","type":"session_meta","payload":{"id":"s1","cwd":"/tmp/demo"}}\n')
+        old_mtime = now_ts - 86400
+        os.utime(bad_file, (old_mtime, old_mtime))
+        db = collector.Database(self.root / "bad_state")
+        try:
+            col = collector.Collector(db, self.codex, self.claude, ["codex"], budget=5)
+            orig_open = pathlib.Path.open
+
+            class FailingReader:
+                def __init__(self, raw):
+                    self.raw = raw
+                    self.calls = 0
+
+                def __enter__(self):
+                    self.raw.__enter__()
+                    return self
+
+                def __exit__(self, *args):
+                    return self.raw.__exit__(*args)
+
+                def __getattr__(self, name):
+                    return getattr(self.raw, name)
+
+                def readline(self, limit=-1):
+                    self.calls += 1
+                    if self.calls == 1:
+                        return self.raw.readline(limit)
+                    raise OSError(5, "Input/output error")
+
+            def patched_open(path_obj, *args, **kwargs):
+                handle = orig_open(path_obj, *args, **kwargs)
+                if path_obj == bad_file and args and args[0] == "rb":
+                    return FailingReader(handle)
+                return handle
+
+            pathlib.Path.open = patched_open
+            try:
+                col.collect()
+                self.assertEqual(col.warnings, set())
+                saved = db.connection.execute("SELECT offset FROM files WHERE id=?", (collector.digest(str(bad_file)),)).fetchone()
+                self.assertIsNotNone(saved)
+                self.assertEqual(saved[0], bad_file.stat().st_size)
+            finally:
+                pathlib.Path.open = orig_open
+        finally:
+            db.connection.close()
 
 
 if __name__ == "__main__":

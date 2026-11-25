@@ -347,15 +347,20 @@ actor UsageCollectorClient {
         return try JSONDecoder().decode(GeminiValuationEvidence.self, from: data)
     }
 
-    func fetchLocalZeroHookLiveTasks(source: UsageSource) async throws -> [RemoteActivityTask] {
+    nonisolated struct LocalZeroHookSnapshot: Decodable {
+        let tasks: [RemoteActivityTask]
+        let quotas: [UsageQuotaObservation]
+    }
+
+    func fetchLocalZeroHookSnapshot(source: UsageSource) async throws -> LocalZeroHookSnapshot {
         guard source.transport == .local,
               let probeURL = Bundle.main.url(forResource: "CodexBarProbe", withExtension: "py") else {
-            return []
+            return LocalZeroHookSnapshot(tasks: [], quotas: [])
         }
         let candidates = (CodexCLIResolver.environment["PATH"] ?? "").split(separator: ":").map { "\($0)/python3" }
             + ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
         guard let python = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-            return []
+            return LocalZeroHookSnapshot(tasks: [], quotas: [])
         }
         let snippet = """
         import importlib.util, json, pathlib, sys, time
@@ -369,19 +374,26 @@ actor UsageCollectorClient {
         if sys.argv[3]: homes["gemini"] = pathlib.Path(sys.argv[3]).expanduser()
         enabled = set(sys.argv[4].split(",")) if sys.argv[4] else set()
         now = time.time()
-        out = []
-        if "claude" in enabled: out.extend(mod.read_claude_live_tasks(homes["claude"], col, now))
-        if "gemini" in enabled: out.extend(mod.read_gemini_live_tasks(homes["gemini"], col, now))
-        print(json.dumps(out))
+        tasks = []
+        quotas = []
+        if "claude" in enabled:
+            tasks.extend(mod.read_claude_live_tasks(homes["claude"], col, now))
+            q = mod.read_live_quota(homes["claude"], "claude")
+            if q: quotas.append(q)
+        if "gemini" in enabled:
+            tasks.extend(mod.read_gemini_live_tasks(homes["gemini"], col, now))
+            q = mod.read_live_quota(homes["gemini"], "gemini")
+            if q: quotas.append(q)
+        print(json.dumps({"tasks": tasks, "quotas": quotas}))
         """
         let wanted = [source.includesClaude ? "claude" : nil, source.includesGemini ? "gemini" : nil].compactMap(\.self).joined(separator: ",")
-        guard !wanted.isEmpty else { return [] }
+        guard !wanted.isEmpty else { return LocalZeroHookSnapshot(tasks: [], quotas: []) }
         let data = try await UsageCommandRunner.run(
             executable: python,
             arguments: ["-c", snippet, probeURL.path, source.claudeHome, source.geminiHome, wanted],
-            timeout: 4
+            timeout: 8
         )
-        return (try? JSONDecoder().decode([RemoteActivityTask].self, from: data)) ?? []
+        return try JSONDecoder().decode(LocalZeroHookSnapshot.self, from: data)
     }
 
     func fetchTokenHistory(source: UsageSource, account: String, scan: Bool) async throws -> UsageSourceTokenEvidence {

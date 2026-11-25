@@ -535,6 +535,8 @@ class Collector:
 
     def scan_file(self, path, provider, cid=""):
         identity = digest(str(path))
+        stat = None
+        inode = ""
         try:
             stat = path.lstat()
             if not S_ISREG(stat.st_mode):
@@ -552,14 +554,30 @@ class Collector:
                 if cid:
                     state["cid"] = cid
                 stream.seek(offset)
+                hit_stale_io_error = False
                 while time.monotonic() < self.deadline:
                     position = stream.tell()
-                    line = stream.readline(MAX_LINE + 1)
+                    try:
+                        line = stream.readline(MAX_LINE + 1)
+                    except OSError:
+                        if time.time() - stat.st_mtime < 600:
+                            stream.seek(position)
+                            self.warnings.add("部分日志文件无法读取, 下次刷新重试")
+                        else:
+                            hit_stale_io_error = True
+                        break
                     if not line:
                         break
                     if len(line) > MAX_LINE:
-                        while line and not line.endswith(b"\n"):
-                            line = stream.readline(MAX_LINE + 1)
+                        try:
+                            while line and not line.endswith(b"\n"):
+                                line = stream.readline(MAX_LINE + 1)
+                        except OSError:
+                            hit_stale_io_error = time.time() - stat.st_mtime >= 600
+                            if not hit_stale_io_error:
+                                stream.seek(position)
+                                self.warnings.add("部分日志文件无法读取, 下次刷新重试")
+                            break
                         if not line:
                             stream.seek(position)
                             break
@@ -581,25 +599,35 @@ class Collector:
                             self.gemini(row, state, date)
                     except (ValueError, TypeError, AttributeError, OverflowError):
                         self.warnings.add("部分日志记录无法解析, 未计入统计")
-                offset = stream.tell()
+                offset = stat.st_size if hit_stale_io_error else stream.tell()
                 if time.monotonic() >= self.deadline and offset < stat.st_size:
                     self.scan_complete = False
                 state["mtimeNs"] = stat.st_mtime_ns
-                stream.seek(0)
-                prefix = hashlib.sha256(stream.read(min(256, offset))).hexdigest()
+                try:
+                    stream.seek(0)
+                    prefix = hashlib.sha256(stream.read(min(256, offset))).hexdigest()
+                except OSError:
+                    pass
                 self.db.connection.execute("INSERT OR REPLACE INTO files VALUES (?, ?, ?, ?, ?)",
                                            (identity, inode, offset, prefix, encode(state)))
-        except (OSError, ValueError):
-            self.warnings.add("部分日志文件无法读取, 下次刷新重试")
+        except (OSError, ValueError) as exc:
+            if stat is not None and isinstance(exc, OSError) and time.time() - stat.st_mtime >= 600:
+                fallback_state = {"provider": provider, "session": identity, "file": digest(provider, path.stem),
+                                  "model": "未知", "mtimeNs": stat.st_mtime_ns}
+                self.db.connection.execute("INSERT OR REPLACE INTO files VALUES (?, ?, ?, ?, ?)",
+                                           (identity, inode, stat.st_size, "", encode(fallback_state)))
+            else:
+                self.warnings.add("部分日志文件无法读取, 下次刷新重试")
 
     def collect(self):
+        signal_roots = []
         roots = []
         if "codex" in self.providers:
             roots.extend((root, "codex") for root in (self.codex_home / "sessions", self.codex_home / "archived_sessions"))
             if not any(root.exists() for root, provider in roots if provider == "codex"):
                 self.warnings.add("未找到 Codex 会话目录, 请检查来源路径")
         if "claude" in self.providers:
-            roots.append((self.claude_home / "codexbar-usage/signals", "claude"))
+            signal_roots.append((self.claude_home / "codexbar-usage/signals", "claude"))
             roots.append((self.claude_home / "projects", "claude"))
             if not (self.claude_home / "projects").exists():
                 self.warnings.add("未找到 Claude 会话目录, 请检查来源路径")
@@ -607,9 +635,10 @@ class Collector:
             self.gemini_meta = load_gemini_metadata(self.gemini_home)
             auth = gemini_authentication_type(self.gemini_home)
             self.gemini_auth = auth if auth != "unknown" else "oauth"
-            roots.append((self.gemini_home / "codexbar-usage/signals", "gemini"))
+            signal_roots.append((self.gemini_home / "codexbar-usage/signals", "gemini"))
             if not (self.gemini_home / "brain").exists() and not (self.gemini_home / "codexbar-usage/signals").exists():
                 self.warnings.add("未找到 Gemini (agy) 会话目录, 请检查来源路径")
+        roots = signal_roots + roots
         try:
             self.db.connection.execute("BEGIN IMMEDIATE")
             if "claude" in self.providers:
@@ -1345,7 +1374,23 @@ def configure_gemini(gemini_home, uninstall=False):
         lock.close()
 
 
-def update_live_state_file(bridge_dir, session_hash, entry):
+def format_quota_windows(provider, rate_limits, observed_at):
+    windows = []
+    for key, label in (("five_hour", "5h"), ("seven_day", "7d")):
+        win = rate_limits.get(key) if isinstance(rate_limits, dict) else None
+        if not isinstance(win, dict):
+            continue
+        used = win.get("used_percentage")
+        if isinstance(used, bool) or not isinstance(used, (int, float)) or not math.isfinite(used) or not 0 <= used <= 100:
+            continue
+        rst = number(win.get("resets_at")) or None
+        windows.append({"name": label, "usedPercent": float(used), "resetsAt": rst})
+    if not windows:
+        return None
+    return {"provider": provider, "observedAt": observed_at, "windows": windows}
+
+
+def update_live_state_file(bridge_dir, session_hash, entry, latest_quota=None):
     live_path = bridge_dir / "live-state.json"
     lock_path = bridge_dir / "live-state.lock"
     with open(lock_path, "a") as lock:
@@ -1355,30 +1400,41 @@ def update_live_state_file(bridge_dir, session_hash, entry):
         except (OSError, ValueError):
             data = {}
         tasks = data.get("tasks") if isinstance(data, dict) and isinstance(data.get("tasks"), dict) else {}
+        existing_quota = data.get("latestQuota") if isinstance(data, dict) and isinstance(data.get("latestQuota"), dict) else None
         now_ts = time.time()
-        tasks = {k: v for k, v in tasks.items() if isinstance(v, dict) and now_ts - float(v.get("updatedAt", 0)) < 86400}
-        prev = tasks.get(session_hash)
-        if prev:
-            entry["startedAt"] = prev.get("startedAt", entry["updatedAt"])
-            if prev.get("state") == entry["state"]:
-                entry["stateChangedAt"] = prev.get("stateChangedAt", entry["updatedAt"])
+        if session_hash and entry:
+            tasks = {k: v for k, v in tasks.items() if isinstance(v, dict) and now_ts - float(v.get("updatedAt", 0)) < 86400}
+            prev = tasks.get(session_hash)
+            if prev:
+                entry["startedAt"] = prev.get("startedAt", entry["updatedAt"])
+                if prev.get("state") == entry["state"]:
+                    entry["stateChangedAt"] = prev.get("stateChangedAt", entry["updatedAt"])
+                else:
+                    entry["stateChangedAt"] = entry["updatedAt"]
             else:
+                entry["startedAt"] = entry["updatedAt"]
                 entry["stateChangedAt"] = entry["updatedAt"]
+            should_append_signal = (
+                prev is None
+                or prev.get("state") != entry["state"]
+                or prev.get("quotaFingerprint") != entry.get("quotaFingerprint")
+                or now_ts - float(prev.get("lastSignalAt", 0)) >= 60
+            )
+            if should_append_signal:
+                entry["lastSignalAt"] = now_ts
+            elif prev:
+                entry["lastSignalAt"] = prev.get("lastSignalAt", 0)
+            tasks[session_hash] = entry
         else:
-            entry["startedAt"] = entry["updatedAt"]
-            entry["stateChangedAt"] = entry["updatedAt"]
-        should_append_signal = (
-            prev is None
-            or prev.get("state") != entry["state"]
-            or prev.get("quotaFingerprint") != entry.get("quotaFingerprint")
-            or now_ts - float(prev.get("lastSignalAt", 0)) >= 60
-        )
-        if should_append_signal:
-            entry["lastSignalAt"] = now_ts
-        elif prev:
-            entry["lastSignalAt"] = prev.get("lastSignalAt", 0)
-        tasks[session_hash] = entry
-        atomic_write(live_path, encode({"updatedAt": now_ts, "tasks": tasks}).encode())
+            should_append_signal = bool(latest_quota)
+        chosen_quota = existing_quota
+        if latest_quota:
+            if not existing_quota or claude_quota_priority(latest_quota, now_ts) >= claude_quota_priority(existing_quota, now_ts):
+                chosen_quota = latest_quota
+        out_payload = {"updatedAt": now_ts, "tasks": tasks}
+        if chosen_quota:
+            out_payload["latestQuota"] = chosen_quota
+        atomic_write(live_path, encode(out_payload).encode())
         return should_append_signal
 
 
@@ -1432,12 +1488,17 @@ def capture_claude(raw, claude_home, statusline=False):
                     "total_tokens": total_in + out_t
                 }
         try:
-            update_live_state_file(bridge_dir, session_hash, {
-                "id": session_hash, "provider": "claude", "state": "running",
-                "project": project_name or "未知", "modelName": model_name or None,
-                "updatedAt": now_ts, "tokenUsage": token_usage,
-                "quotaFingerprint": encode(rate_limits) if rate_limits else ""
-            })
+            update_live_state_file(
+                bridge_dir,
+                session_hash,
+                {
+                    "id": session_hash, "provider": "claude", "state": "running",
+                    "project": project_name or "未知", "modelName": model_name or None,
+                    "updatedAt": now_ts, "tokenUsage": token_usage,
+                    "quotaFingerprint": encode(rate_limits) if rate_limits else ""
+                },
+                latest_quota=format_quota_windows("claude", rate_limits, now_ts)
+            )
         except (OSError, BlockingIOError):
             pass
     directory = bridge_dir / "signals"
@@ -1464,8 +1525,9 @@ def capture_gemini(raw, gemini_home):
     ws = payload.get("workspace") if isinstance(payload.get("workspace"), dict) else {}
     cwd = ws.get("current_dir") or ws.get("project_dir") or payload.get("cwd") or ""
     project_name = text(pathlib.PurePath(cwd.rstrip("/") or "未知").name) if isinstance(cwd, str) and cwd else "未知"
-    model_obj = payload.get("model") if isinstance(payload.get("model"), dict) else {}
-    raw_model = text(model_obj.get("id") or model_obj.get("display_name") or "")
+    model_val = payload.get("model")
+    model_obj = model_val if isinstance(model_val, dict) else {}
+    raw_model = text(model_obj.get("id") or model_obj.get("display_name") or (model_val if isinstance(model_val, str) else ""))
     effort = text((model_obj.get("effort") or model_obj.get("effort_level") or "").strip().lower(), 40)
     if not effort and raw_model:
         matched = re.search(r"\((Low|Medium|High|XHigh|Max)\)", raw_model, flags=re.I) or re.search(r"-(low|medium|high|xhigh|max)$", raw_model, flags=re.I)
@@ -1528,10 +1590,12 @@ def capture_gemini(raw, gemini_home):
         auth_mode = "oauth"
     bridge_dir = gemini_home.expanduser() / "codexbar-usage"
     bridge_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    latest_gemini_quota = format_quota_windows("gemini", rate_limits, now_ts)
     should_write_signal = True
-    if cid:
-        try:
-            should_write_signal = update_live_state_file(bridge_dir, session_hash, {
+    try:
+        entry = None
+        if cid:
+            entry = {
                 "id": session_hash, "provider": "gemini", "state": task_state,
                 "project": project_name or "未知", "modelName": raw_model or None,
                 "effort": effort or None, "stage": stage, "eventName": event_name,
@@ -1539,9 +1603,13 @@ def capture_gemini(raw, gemini_home):
                 "hasBlockingInputRequest": waiting, "updatedAt": now_ts,
                 "tokenUsage": token_usage, "planTier": plan_tier or None,
                 "quotaFingerprint": encode(rate_limits) if rate_limits else ""
-            })
-        except (OSError, BlockingIOError):
-            pass
+            }
+        if entry or latest_gemini_quota:
+            should_write_signal = update_live_state_file(
+                bridge_dir, session_hash if cid else "", entry, latest_quota=latest_gemini_quota
+            )
+    except (OSError, BlockingIOError):
+        pass
     if not should_write_signal and not rate_limits:
         return
     record = {"type": "codexbar_signal", "timestamp": now.isoformat(), "event": "statusline",

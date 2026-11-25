@@ -182,4 +182,68 @@ struct ControlCenterAndValuationTests {
         #expect(!command.contains("install.sh?token="))
         #expect(command.contains(#"--providers "codex,claude,gemini""#))
     }
+
+    @MainActor
+    @Test
+    func probeSnapshotOverridesLegacyPausedProviderStateAndDeduplicatesEffortSuffix() throws {
+        let suiteName = "ControlCenterProbeStateTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let controller = RemoteActivityController(defaults: defaults)
+        var legacySource = UsageSource(id: "ssh-sk203", name: "sk_203", transport: .ssh, address: "sk_203")
+        legacySource.includesClaude = true
+        controller.setSources([legacySource])
+        controller.setConnectionAllowed(false, localAllowed: false)
+
+        var upgradedProbe = legacySource
+        upgradedProbe.transport = .probe
+        upgradedProbe.isOnline = true
+        controller.setSources([upgradedProbe])
+
+        let now = Date().timeIntervalSince1970
+        let taskData = try JSONSerialization.data(withJSONObject: [
+            "id": String(repeating: "c", count: 64),
+            "provider": "claude",
+            "state": "running",
+            "project": "YJOS",
+            "startedAt": now - 120,
+            "updatedAt": now,
+            "stateChangedAt": now - 120,
+            "modelName": "claude-opus-5-5",
+            "stage": "background-shell",
+            "eventName": "BackgroundShell"
+        ])
+        let task = try JSONDecoder().decode(RemoteActivityTask.self, from: taskData)
+        controller.applyProbeSnapshot(sourceID: "ssh-sk203", tasks: [task], isOnline: true, emitLiveNotifications: false)
+
+        let merged = ActivityPresentationModel.merge(
+            local: .empty,
+            tasks: controller.tasks,
+            states: controller.states,
+            enabled: controller.enabledSourceIDs,
+            sources: [upgradedProbe],
+            scope: .all,
+            now: Date(timeIntervalSince1970: now)
+        )
+        #expect(merged.runningTasks.count == 1)
+        #expect(merged.unconfirmedTasks.isEmpty)
+        #expect(merged.runningTasks.first?.projectName == "YJOS")
+        #expect(merged.runningTasks.first?.stageTitle == "后台 Shell 运行中")
+
+        #expect(
+            CodexActivityDisplayFormat.modelMetadata(
+                modelName: "gemini-4-carbon-high",
+                effort: "high",
+                machineName: "sk_203"
+            ) == "gemini-4-carbon-high • sk_203"
+        )
+        #expect(
+            CodexActivityDisplayFormat.modelMetadata(
+                modelName: "gpt-5.4",
+                effort: "xhigh",
+                machineName: "本机"
+            ) == "gpt-5.4 • xhigh • 本机"
+        )
+    }
 }

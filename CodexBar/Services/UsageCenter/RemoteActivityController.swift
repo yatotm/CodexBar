@@ -392,11 +392,19 @@ final class RemoteActivityController: ObservableObject {
             probeConnected.remove(sourceID)
         }
         if sourceID == "local" {
+            backendTasks[Self.connectionKey("local", provider: "claude")] = nil
             for provider in ["claude", "gemini"] {
                 states[Self.connectionKey("local", provider: provider)] = isOnline ? "实时连接" : "已暂停"
             }
         } else {
-            states[sourceID] = isOnline ? "实时连接" : "状态待确认"
+            let statusText = isOnline ? "实时连接" : "状态待确认"
+            for backend in ActivityBackend.allCases {
+                backendTasks[Self.connectionKey(sourceID, provider: backend.provider)] = nil
+            }
+            for provider in ["codex", "claude", "gemini"] {
+                states[Self.connectionKey(sourceID, provider: provider)] = statusText
+            }
+            states[sourceID] = statusText
         }
         publishMergedTasks(for: sourceID)
     }
@@ -447,7 +455,8 @@ final class RemoteActivityController: ObservableObject {
             for backend in ActivityBackend.allCases {
                 let key = Self.connectionKey(source.id, provider: backend.provider)
                 let includesProvider = backend == .sharedCodex ? source.includesCodex : source.includesClaude
-                let enabled = enabledSourceIDs.contains(source.id) || (source.transport == .local && backend == .sharedCodex)
+                let enabled = (source.transport == .local && backend == .sharedCodex)
+                    || (source.transport == .ssh && enabledSourceIDs.contains(source.id))
                 let desired = includesProvider && enabled && source.isEnabled && source.validationError == nil
                     && (source.transport == .local || source.transport == .ssh)
                     && (source.transport == .local ? canReadLocal : canConnect)

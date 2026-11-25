@@ -269,7 +269,16 @@ nonisolated enum CodexDurationFormat {
 
 nonisolated enum CodexActivityDisplayFormat {
     static func modelMetadata(modelName: String?, effort: String?, machineName: String? = nil) -> String? {
-        let components = [modelName, effort, machineName].compactMap(normalizedText)
+        let normalizedModel = normalizedText(modelName)
+        let normalizedEffort = normalizedText(effort).flatMap { candidate -> String? in
+            guard let model = normalizedModel?.lowercased() else { return candidate }
+            let lower = candidate.lowercased()
+            if model.hasSuffix("-\(lower)") || model.hasSuffix("(\(lower))") {
+                return nil
+            }
+            return candidate
+        }
+        let components = [normalizedModel, normalizedEffort, normalizedText(machineName)].compactMap(\.self)
         return components.isEmpty ? nil : components.joined(separator: " • ")
     }
 

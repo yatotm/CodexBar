@@ -133,8 +133,15 @@ struct UsageMenuFooter: View {
 
     private var needsAttention: Bool {
         viewModel.error != nil || viewModel.menuSources.contains { source in
-            guard let status = viewModel.statuses[source.id], let lastSuccess = status.lastSuccess else { return true }
-            return status.error != nil || !status.warnings.isEmpty || Date().timeIntervalSince(lastSuccess) > 900
+            let status = viewModel.statuses[source.id]
+            if status?.error != nil {
+                return true
+            }
+            if source.transport == .probe {
+                return source.lastSeenAt != nil && !source.isOnline
+            }
+            guard let lastSuccess = status?.lastSuccess else { return true }
+            return Date().timeIntervalSince(lastSuccess) > 900
         }
     }
 
@@ -177,7 +184,7 @@ struct UsageMenuFooter: View {
                     LiquidGlassDivider()
                     ForEach(viewModel.menuSources) { source in
                         HStack {
-                            Image(systemName: source.transport == .local ? "laptopcomputer" : "server.rack")
+                            Image(systemName: sourceSymbol(for: source))
                             Text(source.name).lineLimit(1)
                             Spacer()
                             let tokens = viewModel.menuDashboard?.groups.first { $0.name == source.name }?.metrics.tokens
@@ -198,5 +205,13 @@ struct UsageMenuFooter: View {
         }
         .font(.caption2)
         .liquidGlassSurface(cornerRadius: MenuMetrics.panelCornerRadius)
+    }
+
+    private func sourceSymbol(for source: UsageSource) -> String {
+        switch source.transport {
+        case .local: "laptopcomputer"
+        case .probe: "antenna.radiowaves.left.and.right"
+        case .ssh, .https: "server.rack"
+        }
     }
 }

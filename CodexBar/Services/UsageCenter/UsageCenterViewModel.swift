@@ -470,14 +470,15 @@ final class UsageCenterViewModel: ObservableObject {
         localLiveTask = Task { [weak self] in
             while !Task.isCancelled {
                 if let self, let local = sources.first(where: { $0.id == "local" }),
-                   local.isEnabled, local.includesClaude || local.includesGemini {
-                    let live = await (try? client.fetchLocalZeroHookLiveTasks(source: local)) ?? []
+                   local.isEnabled, local.includesClaude || local.includesGemini,
+                   let snapshot = try? await client.fetchLocalZeroHookSnapshot(source: local) {
                     remoteActivity.applyProbeSnapshot(
                         sourceID: "local",
-                        tasks: live,
+                        tasks: snapshot.tasks,
                         isOnline: true,
                         emitLiveNotifications: true
                     )
+                    applyLocalLiveQuotas(snapshot.quotas)
                 }
                 do { try await Task.sleep(for: .seconds(3)) } catch { return }
             }
@@ -515,6 +516,30 @@ final class UsageCenterViewModel: ObservableObject {
                     do { try await Task.sleep(for: .seconds(5)) } catch { return }
                 }
             }
+        }
+    }
+
+    private func applyLocalLiveQuotas(_ liveQuotas: [UsageQuotaObservation]) {
+        guard !liveQuotas.isEmpty else { return }
+        var st = statuses["local"] ?? UsageSourceStatus()
+        var byProvider = Dictionary(uniqueKeysWithValues: st.quotas.map { ($0.provider, $0) })
+        let now = Date().timeIntervalSince1970
+        var changed = false
+        for q in liveQuotas where q.isValid {
+            if let existing = byProvider[q.provider] {
+                if q.isPreferred(over: existing, at: now), q != existing {
+                    byProvider[q.provider] = q
+                    changed = true
+                }
+            } else {
+                byProvider[q.provider] = q
+                changed = true
+            }
+        }
+        if changed {
+            st.quotas = Array(byProvider.values)
+            statuses["local"] = st
+            recalculateGeminiValuation()
         }
     }
 
