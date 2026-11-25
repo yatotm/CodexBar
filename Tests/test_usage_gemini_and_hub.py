@@ -233,6 +233,9 @@ class GeminiAndHubTests(unittest.TestCase):
             bundled_file = self.root / "downloaded_probe.py"
             bundled_file.write_bytes(bundled_bytes)
             bundled_file.chmod(0o700)
+            bundled_lines = bundled_file.read_bytes().splitlines()
+            self.assertIn(b"coding: utf-8", bundled_lines[1])
+            self.assertLessEqual(max(len(line) for line in bundled_lines), 512)
 
             cid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
             self.create_gemini_summary_db(cid, "file:///workspace/ProbeProj", status="CASCADE_RUN_STATUS_RUNNING")

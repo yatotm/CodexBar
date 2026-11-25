@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """CodexBar 通用无 Hook 探针客户端, 自动探测本机工具并单向签名上报"""
 
 import argparse

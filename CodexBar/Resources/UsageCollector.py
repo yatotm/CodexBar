@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """CodexBar 的本地统计采集器, 只输出白名单元数据"""
 
 import argparse

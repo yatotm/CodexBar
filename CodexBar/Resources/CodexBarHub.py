@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """CodexBar 多节点汇聚中枢服务, 读写密钥分离并强制防重放签名校验"""
 
 import argparse
+import base64
 import hashlib
 import hmac
 import http.server
@@ -124,8 +126,20 @@ def build_bundled_probe_script():
         raise FileNotFoundError("缺少探针脚本资源")
     collector_src = collector_path.read_text(encoding="utf-8")
     probe_src = probe_path.read_text(encoding="utf-8")
-    header = "#!/usr/bin/env python3\nimport shutil\nEMBEDDED_USAGE_COLLECTOR = " + repr(collector_src) + "\n"
-    stripped_probe = "\n".join(line for line in probe_src.splitlines() if not line.startswith("#!"))
+    b64_src = base64.encodebytes(collector_src.encode("utf-8")).decode("ascii")
+    header = (
+        "#!/usr/bin/env python3\n"
+        "# -*- coding: utf-8 -*-\n"
+        "import base64\n"
+        "import shutil\n"
+        'EMBEDDED_USAGE_COLLECTOR = base64.b64decode("""\n'
+        + b64_src
+        + '""").decode("utf-8")\n'
+    )
+    stripped_probe = "\n".join(
+        line for line in probe_src.splitlines()
+        if not line.startswith("#!") and "coding: utf-8" not in line
+    )
     return (header + stripped_probe + "\n").encode("utf-8")
 
 
