@@ -322,6 +322,14 @@ nonisolated struct UsageCreditPart {
     var modelTokens: [String: AnalyticsTokens] = [:]
     var modelCredits: [String: ClosedRange<Double>] = [:]
 
+    func scalingCredits(by factor: Double) -> Self {
+        guard factor != 1 else { return self }
+        var result = self
+        result.credits = credits.lowerBound * factor ... credits.upperBound * factor
+        result.modelCredits = modelCredits.mapValues { $0.lowerBound * factor ... $0.upperBound * factor }
+        return result
+    }
+
     mutating func record(_ amount: ClosedRange<Double>, tokens count: AnalyticsTokens, model: String) {
         credits = (credits.lowerBound + amount.lowerBound) ... (credits.upperBound + amount.upperBound)
         tokens = (tokens ?? .zero) + count

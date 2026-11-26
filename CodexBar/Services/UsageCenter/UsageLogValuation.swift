@@ -6,13 +6,14 @@ nonisolated enum UsageLogValuation {
         prices: UsagePriceBook, sources: [UsageTokenSource], expectedSources: Int, now: Date, plans: [UsagePlanObservation] = []
     ) -> UsageLogEstimate? {
         let available = sources.filter { $0.evidence.ready && $0.evidence.scannedAt > context.start }
-        guard let scannedAt = available.map(\.evidence.scannedAt).min() else { return nil }
+        guard let scannedAt = available.map(\.evidence.scannedAt).max() else { return nil }
         let quotaCutoff = context.end > now.timeIntervalSince1970 ? context.window.lastAt : context.end
         let cutoff = min(context.end, now.timeIntervalSince1970, scannedAt, quotaCutoff)
         var records: [String: UsageTokenRecord] = [:]
         var conflicts = Set<Int>()
         for source in available {
-            for record in source.evidence.records where record.at >= context.start && record.at < context.end && record.at <= cutoff {
+            let sourceCutoff = min(cutoff, source.evidence.scannedAt)
+            for record in source.evidence.records where record.at >= context.start && record.at < context.end && record.at <= sourceCutoff {
                 if let previous = records[record.id] {
                     // 复制日志只计一次, 相同请求的模型或计数冲突不能伪装成完整证据
                     if previous.model != record.model || previous.tokens != record.tokens {

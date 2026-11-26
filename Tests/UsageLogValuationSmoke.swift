@@ -130,6 +130,13 @@ nonisolated enum UsageLogValuationSmoke {
         precondition(unpricedOnly.logEstimate == nil, "未知价格不能冒充零金额")
         let partialSources = periods(snapshot(), sources: [source([record("one")])], expected: 2)[0].logEstimate!
         precondition(partialSources.incomplete && partialSources.projected != nil, "缺少设备时仍给出有标记的部分估算")
+        let recent = record("recent", at: start + 86400 + 50, speed: "standard")
+        let archive = source([record("archived", speed: "standard")], name: "旧来源", at: start + 3600)
+        let mixedAges = periods(snapshot(), sources: [archive, source([recent])], expected: 2)[0].deviceEstimate!
+        precondition(
+            mixedAges.tokens == sample + sample && mixedAges.valuedThrough == now && mixedAges.incomplete,
+            "一台设备的旧缓存不能截断其他设备的新请求"
+        )
 
         var declined = window
         declined.decreased = true

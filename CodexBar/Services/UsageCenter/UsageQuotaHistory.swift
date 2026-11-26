@@ -36,7 +36,7 @@ private actor UsageQuotaHistoryCache {
 
 @MainActor
 final class UsageQuotaHistoryController {
-    private(set) var sources: [UsageSource] = []
+    private(set) var eligibleSources: [UsageSource] = []
     private(set) var accountKey: String?
     private(set) var isRefreshing = false
     private var quotaErrors: [String: String] = [:]
@@ -47,27 +47,41 @@ final class UsageQuotaHistoryController {
 
     var onUpdate: (() -> Void)?
     private var selected = Set<String>()
+    private var linkedSources: [String: UsageSource] = [:]
     private var localEnabled = false
     private var evidence: [String: UsageSourceQuotaEvidence] = [:]
     private var tokenEvidence: [String: UsageSourceTokenEvidence] = [:]
     private let cache = UsageQuotaHistoryCache()
     private let client = UsageCollectorClient()
+    private let defaults: UserDefaults
     private var task: Task<Void, Never>?
     private var generation = 0
     private var isPaused = false
 
-    var eligibleSources: [UsageSource] {
-        sources.filter { $0.isEnabled && $0.includesCodex && $0.transport != .https }
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
     }
 
     func isSelected(_ source: UsageSource) -> Bool {
-        source.id == "local" ? localEnabled : selected.contains(source.id)
+        source.id == "local" ? localEnabled : selected.contains(source.id) || selected.contains(historySource(source).id)
     }
 
     func setSources(_ sources: [UsageSource]) {
-        guard self.sources != sources else { return }
+        // 在线心跳和探针版本不改变历史采集路径
+        let sources = sources.filter { $0.isEnabled && $0.includesCodex && $0.transport != .https }.map {
+            UsageSource(
+                id: $0.id,
+                name: $0.name,
+                transport: $0.transport,
+                address: $0.address,
+                codexHome: $0.codexHome,
+                claudeHome: $0.claudeHome,
+                collectorCacheDirectory: $0.collectorCacheDirectory
+            )
+        }
+        guard eligibleSources != sources else { return }
         stop()
-        self.sources = sources
+        eligibleSources = sources
         quotaErrors = quotaErrors.filter { id, _ in eligibleSources.contains { $0.id == id } }
         tokenErrors = tokenErrors.filter { id, _ in eligibleSources.contains { $0.id == id } }
         onUpdate?()
@@ -82,7 +96,15 @@ final class UsageQuotaHistoryController {
             tokenEvidence = [:]
             quotaErrors = [:]
             tokenErrors = [:]
-            selected = Set(key.flatMap { UserDefaults.standard.stringArray(forKey: "UsageAnalytics.historySources." + $0) } ?? [])
+            selected = Set(key.flatMap { defaults.stringArray(forKey: "UsageAnalytics.historySources." + $0) } ?? [])
+            linkedSources = [:]
+            if let key, let entries = defaults.dictionary(forKey: "UsageAnalytics.historyLinks." + key) as? [String: String] {
+                for (node, json) in entries {
+                    guard let source = try? JSONDecoder().decode(UsageSource.self, from: Data(json.utf8)),
+                          source.transport == .ssh, source.id != "local", source.validationError == nil else { continue }
+                    linkedSources[node] = source
+                }
+            }
         }
         if self.localEnabled != localEnabled {
             stop()
@@ -95,13 +117,14 @@ final class UsageQuotaHistoryController {
         guard let accountKey else { return }
         stop()
         if enabled {
-            selected.insert(source.id)
+            selected.insert(historySource(source).id)
         } else {
             selected.remove(source.id)
+            selected.remove(historySource(source).id)
             quotaErrors[source.id] = nil
             tokenErrors[source.id] = nil
         }
-        UserDefaults.standard.set(selected.sorted(), forKey: "UsageAnalytics.historySources." + accountKey)
+        defaults.set(selected.sorted(), forKey: "UsageAnalytics.historySources." + accountKey)
         onUpdate?()
         refresh()
     }
@@ -133,7 +156,14 @@ final class UsageQuotaHistoryController {
         }
     }
 
-    private func scope(_ source: UsageSource, account: String) -> String {
+    private func historySource(_ node: UsageSource) -> UsageSource {
+        guard node.transport == .probe, let prior = linkedSources[node.id],
+              !eligibleSources.contains(where: { $0.id != node.id && $0.id == prior.id }) else { return node }
+        return prior
+    }
+
+    private func scope(_ node: UsageSource, account: String) -> String {
+        let source = historySource(node)
         let fields = [account, source.id, source.transport.rawValue, source.address, source.codexHome, source.claudeHome, source.collectorCacheDirectory ?? ""]
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.withoutEscapingSlashes])) ?? Data()
         return UsageAnalyticsIdentity.hash("quota-source", String(data: data, encoding: .utf8) ?? "")
@@ -173,20 +203,18 @@ final class UsageQuotaHistoryController {
                     onUpdate?()
                 }
             }
+            guard await restoreCaches(candidates, account: account, generation: currentGeneration) else { return }
             for source in candidates {
-                if Task.isCancelled {
-                    return
-                }
+                guard !Task.isCancelled else { return }
                 let key = scope(source, account: account)
-                if evidence[key] == nil, let saved = await cache.read(key), saved.matches(account) {
-                    guard generation == currentGeneration else { return }
-                    evidence[key] = saved
-                    onUpdate?()
+                var endpoint = historySource(source)
+                if endpoint.transport == .probe {
+                    endpoint.transport = .ssh
                 }
                 do {
-                    var scan = source.transport == .local || source.collectorCacheDirectory?.isEmpty != false
+                    var scan = endpoint.transport == .local || endpoint.collectorCacheDirectory?.isEmpty != false
                     for _ in 0 ..< 4 {
-                        let value = try await client.fetchQuotaHistory(source: source, account: account, scan: scan)
+                        let value = try await client.fetchQuotaHistory(source: endpoint, account: account, scan: scan)
                         try Task.checkCancellation()
                         guard generation == currentGeneration, isSelected(source),
                               eligibleSources.contains(where: { scope($0, account: account) == key }) else { break }
@@ -209,25 +237,40 @@ final class UsageQuotaHistoryController {
                     quotaErrors[source.id] = source.name + ": " + ((error as? UsageCenterError)?.message ?? "额度历史读取失败, 保留缓存")
                     onUpdate?()
                 }
-                await refreshTokens(source, account: account, key: key, generation: currentGeneration, force: force)
+                await refreshTokens(source, endpoint: endpoint, account: account, key: key, generation: currentGeneration, force: force)
             }
         }
     }
 
-    private func refreshTokens(_ source: UsageSource, account: String, key: String, generation expected: Int, force: Bool) async {
-        guard !Task.isCancelled, generation == expected else { return }
-        if tokenEvidence[key] == nil, let saved = await cache.readTokens(key), saved.matches(account) {
-            guard generation == expected else { return }
-            tokenEvidence[key] = saved
-            onUpdate?()
+    private func restoreCaches(_ candidates: [UsageSource], account: String, generation expected: Int) async -> Bool {
+        // 先恢复所有已选设备, 一台机器离线不能挡住其他设备的本地历史
+        var cachedQuota = evidence
+        var cachedTokens = tokenEvidence
+        for source in candidates {
+            let key = scope(source, account: account)
+            if cachedQuota[key] == nil, let saved = await cache.read(key), saved.matches(account) {
+                cachedQuota[key] = saved
+            }
+            if cachedTokens[key] == nil, let saved = await cache.readTokens(key), saved.matches(account) {
+                cachedTokens[key] = saved
+            }
+            guard generation == expected else { return false }
         }
+        evidence = cachedQuota
+        tokenEvidence = cachedTokens
+        onUpdate?()
+        return true
+    }
+
+    private func refreshTokens(_ source: UsageSource, endpoint: UsageSource, account: String, key: String, generation expected: Int, force: Bool) async {
+        guard !Task.isCancelled, generation == expected else { return }
         if !force, let value = tokenEvidence[key], value.ready, value.complete, value.requestContextVersion == 1,
            Date().timeIntervalSince1970 - value.scannedAt < 900 {
             return
         }
         do {
             for _ in 0 ..< 4 {
-                let value = try await client.fetchTokenHistory(source: source, account: account, scan: true)
+                let value = try await client.fetchTokenHistory(source: endpoint, account: account, scan: true)
                 try Task.checkCancellation()
                 guard generation == expected, isSelected(source),
                       eligibleSources.contains(where: { scope($0, account: account) == key }) else { return }

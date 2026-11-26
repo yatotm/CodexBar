@@ -388,6 +388,8 @@ struct UsageAnalyticsSmoke {
         precondition(periods([creditsOnly], [quota], logs: [], fetched: 2 * day)[0].creditEstimate!.recorded.tokens == nil)
         let fallback = periods([], [quota], logs: records, fetched: 2.5 * day)[0].creditEstimate!
         precondition(!fallback.hasOfficial && fallback.recorded.credits == 600 ... 600)
+        let delayed = periods([daily(0, 50, 250000)], [quota], logs: [records[0]], fetched: day + 60)[0].creditEstimate!
+        precondition(!delayed.hasOfficial && delayed.recorded.credits == 200 ... 200, "最近日报已经落后时, 零输出和零缓存不妨碍识别延迟")
         let early = window(0, [(0, 0), (day / 2 - 1, 40)])
         let restarted = window(day / 2, [(day / 2, 0), (day - 1, 10)])
         let split = periods([daily(0, 500)], [early, restarted], logs: [], fetched: day)
@@ -396,6 +398,32 @@ struct UsageAnalyticsSmoke {
         precondition(aligned.map { $0.creditEstimate!.recorded.credits.lowerBound } == [375, 125], "三类 Token 对齐时按重置两侧的逐请求份额分摊")
         let noSplit = periods([daily(0, 500, 4000000)], [restarted], logs: [(day / 2, 1000000)], fetched: day)[0].creditEstimate!
         precondition(noSplit.recorded.credits == 200 ... 200 && !noSplit.hasOfficial, "不能用整个报告日给半天的周期计费")
+
+        let closed = window(0, [(0, 0), (day, 10), (2 * day, 20), (3 * day - 30, 39), (3 * day + 15, 40)])
+        let next = window(3 * day, [(3 * day, 0), (4 * day, 5)])
+        let history = [daily(0, 150), daily(1, nil), daily(2, 300)]
+        for days in [history, history + [daily(3, 9000)]] {
+            let result = periods(days, [closed, next], logs: [(day + 10, 1000000)], fetched: 4 * day).last!.creditEstimate!
+            precondition(
+                result.recorded.credits == 650 ... 650 && result.projected == 65 ... 65,
+                "结算整期并采用原窗口的末次回执, 下一期日报不能改变上一期"
+            )
+        }
+        let corrected = periods(
+            [daily(0, 150), daily(1, 250), daily(2, 300)],
+            [closed, next],
+            logs: [(day + 10, 1000000)],
+            fetched: 4 * day
+        ).last!.creditEstimate!
+        precondition(corrected.recorded.credits == 700 ... 700 && corrected.projected == 70 ... 70, "官方补报只替换同一天的设备估算")
+        let middle = window(day / 2, [(day / 2, 0), (0.75 * day - 1, 20)])
+        let last = window(0.75 * day, [(0.75 * day, 0), (day, 40)])
+        let three = periods([daily(0, 500)], [early, middle, last], logs: [], fetched: day)
+        precondition(three.map { $0.creditEstimate!.recorded.credits.lowerBound } == [200, 100, 200], "一天内多次重置只分一笔日报")
+        let uncertain = window(0.25 * day, [(0.25 * day, 0), (0.75 * day, 5)])
+        let capped = periods([daily(0, 500)], [uncertain, last], logs: [(day / 2, 3000000), (0.8 * day, 2000000)], fetched: 2 * day)
+        precondition(capped.allSatisfy { $0.creditEstimate?.hasOfficial == false })
+        precondition(capped.reduce(0) { $0 + $1.creditEstimate!.recorded.credits.upperBound } <= 500, "部分设备估算加总不能超过已结算的日报")
     }
 
     private static func verifyCurrentCodexPricing(_ prices: UsagePriceBook) {

@@ -4,6 +4,38 @@ import SwiftUI
 import Testing
 
 struct ControlCenterAndValuationTests {
+    @Test func selectedSSHHistoryFollowsOnlyTheLinkedProbeAndAccount() throws {
+        let suite = "HistoryLinks.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let old = UsageSource(id: "old", name: "旧名称", transport: .ssh, address: "dev")
+        var probe = UsageSource(id: "new", name: "新名称", transport: .probe)
+        let other = UsageSource(id: "other", name: probe.name, transport: .probe)
+        defaults.set(["old"], forKey: "UsageAnalytics.historySources.A")
+        let encoded = try #require(String(data: JSONEncoder().encode(old), encoding: .utf8))
+        defaults.set(["new": encoded], forKey: "UsageAnalytics.historyLinks.A")
+        let history = UsageQuotaHistoryController(defaults: defaults)
+        history.setPaused(true)
+        history.setSources([probe, other])
+        history.setAccount("A", localEnabled: false)
+        #expect(history.isSelected(probe) && !history.isSelected(other) && history.selectedSourceCount == 1)
+        var changes = 0
+        history.onUpdate = { changes += 1 }
+        probe.isOnline = true
+        probe.lastSeenAt = 100
+        history.setSources([probe, other])
+        #expect(changes == 0)
+        history.setAccount("B", localEnabled: false)
+        #expect(history.selectedSourceCount == 0)
+        history.setAccount("A", localEnabled: false)
+        history.setSelected(probe, enabled: false)
+        #expect(defaults.stringArray(forKey: "UsageAnalytics.historySources.A") == [])
+        history.setSelected(probe, enabled: true)
+        #expect(defaults.stringArray(forKey: "UsageAnalytics.historySources.A") == ["old"])
+        history.setSources([old, probe])
+        #expect(history.isSelected(old) && !history.isSelected(probe))
+    }
+
     @Test func dailyChartHeaderKeepsItsHeightWhenInspectingADay() {
         let metrics = UsageMetrics(tokens: 987654321, output: 12345678, cacheRead: 456789012, cacheWrite: 98765)
         let day = UsageDay(day: "2026-11-26", tokens: metrics.tokens, metrics: metrics)

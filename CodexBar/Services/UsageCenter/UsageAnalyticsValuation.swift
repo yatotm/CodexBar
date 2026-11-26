@@ -16,7 +16,7 @@ nonisolated enum UsageAnalyticsValuation {
                 if acrossSources, !combined.decreased {
                     // 不同设备会收到迟到的较旧回执, 单来源真实回落仍由质量标记保留
                     var highest = -1.0
-                    combined.observations = combined.observations.sorted { $0.at < $1.at }.filter { point in
+                    combined.observations = combined.observations.sorted { ($0.at, $0.used) < ($1.at, $1.used) }.filter { point in
                         guard point.used >= highest else { return false }
                         highest = point.used
                         return true
@@ -42,7 +42,7 @@ nonisolated enum UsageAnalyticsValuation {
     private static func normalized(_ window: UsageObservedWindow, detectsRegression: Bool = true) -> UsageObservedWindow {
         var result = window
         let points = Dictionary(window.observations.map { ("\($0.at):\($0.used)", $0) }, uniquingKeysWith: { first, _ in first })
-            .values.sorted { $0.at < $1.at }
+            .values.sorted { ($0.at, $0.used) < ($1.at, $1.used) }
         guard let first = points.first, let last = points.last else { return result }
         result.firstAt = first.at
         result.firstUsed = first.used
@@ -62,7 +62,7 @@ nonisolated enum UsageAnalyticsValuation {
                 buckets[key]?[1] = point
             }
         }
-        result.observations = buckets.values.flatMap(\.self).sorted { $0.at < $1.at }
+        result.observations = buckets.values.flatMap(\.self).sorted { ($0.at, $0.used) < ($1.at, $1.used) }
         return result
     }
 
@@ -119,21 +119,12 @@ nonisolated enum UsageAnalyticsValuation {
             )
             return period
         }
-        var deviceTotals: [Int: UsageCreditPart] = [:]
-        var conflicts = Set<Int>()
-        for period in valued {
-            guard let device = period.deviceEstimate else { continue }
-            conflicts.formUnion(device.conflictingDays)
-            for (day, part) in device.days {
-                deviceTotals[day, default: UsageCreditPart()].add(part)
-            }
-        }
-        let credits = CreditLedger(
+        let ledger = CreditLedger(
             days: days,
             estimates: estimates,
             contexts: contexts,
-            deviceTotals: deviceTotals,
-            conflicts: conflicts,
+            periods: valued,
+            plans: plans,
             fetchedAt: cutoff,
             now: now.timeIntervalSince1970
         )
@@ -141,7 +132,7 @@ nonisolated enum UsageAnalyticsValuation {
         return valued.reversed().map { value in
             var period = value
             if let context = byReset[period.id] {
-                period.creditEstimate = credits.estimate(context, device: period.deviceEstimate)
+                period.creditEstimate = ledger.estimate(context, device: period.deviceEstimate)
             }
             return period
         }
@@ -230,20 +221,110 @@ nonisolated enum UsageAnalyticsValuation {
         var high: Double
     }
 
+    private struct SettledDay {
+        let day: AnalyticsDay
+        let credits: Double
+        let shares: [Double: Double]
+        let fallbackScale: Double
+        let matchedTokens: Bool
+    }
+
     private struct CreditLedger {
-        let days: [Int: AnalyticsDay]
+        private let reports: [Int: SettledDay]
         let estimates: [Int: [UsageModelEstimate]?]
-        let contexts: [PeriodWindow]
-        let deviceTotals: [Int: UsageCreditPart]
-        let conflicts: Set<Int>
-        let fetchedAt: Double
         let now: Double
+
+        init(
+            days: [Int: AnalyticsDay],
+            estimates: [Int: [UsageModelEstimate]?],
+            contexts: [PeriodWindow],
+            periods: [UsageAnalyticsPeriod],
+            plans: [UsagePlanObservation],
+            fetchedAt: Double,
+            now: Double
+        ) {
+            self.estimates = estimates
+            self.now = now
+            var parts: [Int: [Double: UsageCreditPart]] = [:]
+            var conflicts = Set<Int>()
+            for period in periods {
+                guard let device = period.deviceEstimate else { continue }
+                conflicts.formUnion(device.conflictingDays)
+                for (key, part) in device.days {
+                    parts[key, default: [:]][period.id] = part
+                }
+            }
+            var settled: [Int: SettledDay] = [:]
+            for (key, day) in days {
+                let start = Double(key) * 86400
+                let end = start + 86400
+                guard end <= fetchedAt, let credits = day.reportedCredits, credits.isFinite, credits >= 0 else { continue }
+                let windows = contexts.filter { $0.start < end && $0.end > start }
+                let slices = parts[key] ?? [:]
+                var total = UsageCreditPart()
+                for part in slices.values {
+                    total.add(part)
+                }
+                if credits == 0, (day.tokens?.total ?? 0) == 0,
+                   total.credits.upperBound > 0 || day.models.contains(where: { $0.weight > 0 }) || windows.contains(where: {
+                       (Self.delta($0, from: start, to: end) ?? 0) > 0
+                   }) {
+                    continue
+                }
+                if fetchedAt - end < 86400, !conflicts.contains(key), let local = total.tokens, let official = day.tokens,
+                   local != official, local.input >= official.input, local.cached >= official.cached, local.output >= official.output {
+                    continue
+                }
+                let matched = !conflicts.contains(key) && day.tokens != nil && total.tokens == day.tokens
+                let shares = Self.shares(windows: windows, day: start ..< end, parts: slices, total: total, matched: matched, plans: plans)
+                // 无法拆分的日报仍约束所有设备估算之和, 剩余金额留在未归属的报告日
+                let scale = total.credits.upperBound > credits ? credits / total.credits.upperBound : 1
+                settled[key] = SettledDay(day: day, credits: credits, shares: shares, fallbackScale: scale, matchedTokens: matched)
+            }
+            reports = settled
+        }
+
+        private static func shares(
+            windows: [PeriodWindow],
+            day: Range<Double>,
+            parts: [Double: UsageCreditPart],
+            total: UsageCreditPart,
+            matched: Bool,
+            plans: [UsagePlanObservation]
+        ) -> [Double: Double] {
+            if let single = windows.first, single.start <= day.lowerBound, single.end >= day.upperBound {
+                return [single.window.resetsAt: 1]
+            }
+            if matched, total.credits.lowerBound > 0, total.credits.lowerBound == total.credits.upperBound {
+                return Dictionary(uniqueKeysWithValues: windows.map {
+                    ($0.window.resetsAt, (parts[$0.window.resetsAt]?.credits.lowerBound ?? 0) / total.credits.lowerBound)
+                })
+            }
+            // 只有完整覆盖报告日的相邻周期才能分走整笔日报, 周限比例必须使用同一档位
+            guard let first = windows.first, let last = windows.last, first.start <= day.lowerBound, last.end >= day.upperBound,
+                  zip(windows, windows.dropFirst()).allSatisfy({ $0.end == $1.start }),
+                  Set(plans.filter { entry in windows.contains { abs($0.window.resetsAt - entry.resetsAt) <= 2 } }.map(\.plan)).count <= 1 else { return [:] }
+            var weights: [Double: Double] = [:]
+            for context in windows {
+                guard let change = delta(context, from: day.lowerBound, to: day.upperBound) else { return [:] }
+                weights[context.window.resetsAt] = change
+            }
+            let sum = weights.values.reduce(0, +)
+            return sum > 0 ? weights.mapValues { $0 / sum } : [:]
+        }
+
+        private static func delta(_ context: PeriodWindow, from start: Double, to end: Double) -> Double? {
+            guard !context.window.decreased, let a = alignedPercent(context, at: max(start, context.start)),
+                  let b = alignedPercent(context, at: min(end, context.end)), b >= a else { return nil }
+            return b - a
+        }
 
         func estimate(_ context: PeriodWindow, device: UsageLogEstimate?) -> UsageCreditEstimate? {
             let limit = min(context.end, now)
             var recorded = UsageCreditPart(tokens: nil)
             var spans: [CreditSpan] = []
-            var officialSpans: [CreditSpan] = []
+            var settledWholeDays: [CreditSpan] = []
+            var hasOfficial = false
             var hasDevice = false
             var dayStart = floor(context.start / 86400) * 86400
             while dayStart < limit {
@@ -253,12 +334,16 @@ nonisolated enum UsageAnalyticsValuation {
                 let upper = min(limit, dayStart + 86400)
                 let part: UsageCreditPart
                 let through: Double
-                if let official = officialPart(key, context: context, devicePart: device?.days[key]) {
+                if let report = reports[key], let share = report.shares[context.window.resetsAt] {
+                    let official = officialPart(report, key: key, share: share, device: device?.days[key])
                     part = official
                     through = upper
-                    append(official.credits, from: lower, to: through, into: &officialSpans)
+                    hasOfficial = true
+                    if lower == dayStart, upper == dayStart + 86400 {
+                        append(official.credits, from: lower, to: through, into: &settledWholeDays)
+                    }
                 } else if let device, let local = device.days[key], !device.conflictingDays.contains(key) {
-                    part = local
+                    part = local.scalingCredits(by: reports[key]?.fallbackScale ?? 1)
                     through = min(upper, device.valuedThrough.timeIntervalSince1970)
                     hasDevice = true
                 } else {
@@ -269,10 +354,10 @@ nonisolated enum UsageAnalyticsValuation {
                 append(part.credits, from: lower, to: through, into: &spans)
             }
             guard !spans.isEmpty else { return nil }
-            // 日报对齐的实测周限变化须超过一个显示刻度, 才单独用于外推
-            let projected = forecast(officialSpans, context: context, minimumChange: 1)
-                ?? forecast(spans, context: context, minimumChange: 0)
-            return UsageCreditEstimate(recorded: recorded, projected: projected, hasOfficial: !officialSpans.isEmpty, hasDevice: hasDevice)
+            // 进行中的周期优先用完整日报预测, 已结束的周期结算所有有对应额度读数的区段
+            let settled = limit < context.end ? forecast(settledWholeDays, context: context, minimumChange: 1) : nil
+            let projected = settled ?? forecast(spans, context: context, minimumChange: 0)
+            return UsageCreditEstimate(recorded: recorded, projected: projected, hasOfficial: hasOfficial, hasDevice: hasDevice)
         }
 
         private func append(_ amount: ClosedRange<Double>, from start: Double, to end: Double, into spans: inout [CreditSpan]) {
@@ -291,7 +376,7 @@ nonisolated enum UsageAnalyticsValuation {
             var high = 0.0
             var used = 0.0
             for span in spans {
-                guard let first = alignedPercent(context, at: span.start), let last = alignedPercent(context, at: span.end),
+                guard let first = Self.alignedPercent(context, at: span.start), let last = Self.alignedPercent(context, at: span.end),
                       last > first, span.high > 0 else { continue }
                 low += span.low
                 high += span.high
@@ -302,51 +387,14 @@ nonisolated enum UsageAnalyticsValuation {
             return UsageCreditEstimate.dollars(low * factor ... high * factor)
         }
 
-        private func officialPart(_ key: Int, context: PeriodWindow, devicePart: UsageCreditPart?) -> UsageCreditPart? {
-            let start = Double(key) * 86400
-            let end = start + 86400
-            guard end <= fetchedAt, let day = days[key], let reported = day.reportedCredits,
-                  reported.isFinite, reported >= 0 else { return nil }
-            let emptyReport = reported == 0 && (day.tokens?.total ?? 0) == 0
-            if emptyReport, (deviceTotals[key]?.credits.upperBound ?? 0) > 0 || day.models.contains(where: { $0.weight > 0 }) {
-                return nil
+        private func officialPart(_ report: SettledDay, key: Int, share: Double, device: UsageCreditPart?) -> UsageCreditPart {
+            let day = report.day
+            let amount = report.credits * share
+            if report.matchedTokens, let device, device.credits.lowerBound > 0,
+               device.credits.lowerBound == device.credits.upperBound, report.shares.count > 1 {
+                return device.scalingCredits(by: amount / device.credits.lowerBound)
             }
-            // 最近一个已结束的 UTC 日可能还在入账, 三类计数共同落后时整段暂用设备
-            if fetchedAt - end < 86400, !conflicts.contains(key), let local = deviceTotals[key]?.tokens, let official = day.tokens,
-               local.input > official.input, local.cached > official.cached, local.output > official.output {
-                return nil
-            }
-            let share: Double
-            if start >= context.start, end <= context.end {
-                share = 1
-            } else if !conflicts.contains(key), let whole = deviceTotals[key], let tokens = day.tokens, tokens == whole.tokens,
-                      whole.credits.lowerBound > 0, whole.credits.lowerBound == whole.credits.upperBound {
-                // 全日三类 Token 都对齐时, 用重置两侧的请求权重分摊同一笔官方日总额
-                share = min(1, (devicePart?.credits.lowerBound ?? 0) / whole.credits.lowerBound)
-            } else {
-                let adjacent = contexts.filter { $0.start < end && $0.end > start }
-                let coverage = adjacent.reduce(0.0) { $0 + min(end, $1.end) - max(start, $1.start) }
-                guard coverage >= 86400 - 1 else { return nil }
-                var delta = 0.0
-                var totalDelta = 0.0
-                for window in adjacent {
-                    guard !window.window.decreased, let a = alignedPercent(window, at: max(start, window.start)),
-                          let b = alignedPercent(window, at: min(end, window.end)), b >= a else { return nil }
-                    totalDelta += b - a
-                    if window.window.resetsAt == context.window.resetsAt {
-                        delta = b - a
-                    }
-                }
-                guard totalDelta > 0 else { return nil }
-                share = delta / totalDelta
-            }
-            let sliceStart = max(context.start, start)
-            let sliceEnd = min(context.end, end)
-            if emptyReport, let a = alignedPercent(context, at: sliceStart), let b = alignedPercent(context, at: sliceEnd), b > a {
-                return nil
-            }
-            let amount = reported * share
-            var part = UsageCreditPart(credits: amount ... amount, tokens: day.tokens.map { UsageModelAllocation.scaled($0, by: share) })
+            var part = UsageCreditPart(credits: amount ... amount, tokens: day.tokens.map { UsageModelAllocation.scaled($0, by: share) } ?? device?.tokens)
             let weight = day.models.reduce(0) { $0 + $1.weight }
             for model in day.models where model.weight > 0 && weight > 0 {
                 let modelAmount = amount * model.weight / weight
@@ -355,24 +403,31 @@ nonisolated enum UsageAnalyticsValuation {
             for row in (estimates[key] ?? nil) ?? [] {
                 part.modelTokens[row.model, default: .zero] += UsageModelAllocation.scaled(row.tokens, by: share)
             }
+            if day.tokens == nil, let device {
+                part.modelTokens = device.modelTokens
+            }
             return part
         }
 
-        private func alignedPercent(_ context: PeriodWindow, at time: Double) -> Double? {
+        private static func alignedPercent(_ context: PeriodWindow, at time: Double) -> Double? {
             if time == context.start {
                 return 0
+            }
+            // 旧窗口回执可能在重置后才送达, 它携带的截止标识仍属于原周期
+            if time == context.end {
+                return context.window.lastUsed
             }
             let points = context.window.observations
             guard let before = points.last(where: { $0.at <= time && $0.at >= context.start }) else {
                 return points.first(where: { $0.at >= context.start })?.used == 0 ? 0 : nil
             }
-            guard before.at < time, let after = points.first(where: { $0.at >= time && $0.at <= context.end }) else { return before.used }
+            guard before.at < time, let after = points.first(where: { $0.at >= time }) else { return before.used }
             if before.used == after.used {
                 return before.used
             }
             // 缺报段边缘只在同一读数或一次正常刷新间隔内对齐, 不跨长空档摊百分比
             guard after.at - before.at <= 900 else { return nil }
-            return consumption(context, at: time)
+            return before.used + (after.used - before.used) * (time - before.at) / (after.at - before.at)
         }
     }
 

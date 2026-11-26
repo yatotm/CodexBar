@@ -6,7 +6,7 @@ import Foundation
 final class UsageCenterViewModel: ObservableObject {
     @Published private(set) var sources: [UsageSource] = [] {
         didSet {
-            analytics.history.setSources(sources)
+            analytics.history.setSources(effectiveSources)
             remoteActivity.setSources(sources)
             reconcileMenuScope()
         }
@@ -21,6 +21,7 @@ final class UsageCenterViewModel: ObservableObject {
             guard topologyMode != oldValue else { return }
             UserDefaults.standard.set(topologyMode.rawValue, forKey: "ControlCenter.topologyMode")
             filter.localOnly = (topologyMode == .localOnly)
+            analytics.history.setSources(effectiveSources)
             reconcileMenuScope()
             reloadDashboard()
             reloadMenuDashboards()
