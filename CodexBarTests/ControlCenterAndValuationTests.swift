@@ -3,6 +3,46 @@ import SQLite3
 import Testing
 
 struct ControlCenterAndValuationTests {
+    @Test func localClaudeSnapshotUsesTaskTimeAcrossPolls() async throws {
+        let temp = try TestDirectory()
+        defer { try? temp.remove() }
+        let home = temp.url
+        let session = "timing-test"
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let now = Int(Date().timeIntervalSince1970)
+        let worker = home.appendingPathComponent("sessions/\(pid).json")
+        let transcript = home.appendingPathComponent("projects/project/\(session).jsonl")
+        for file in [worker, transcript] {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        let registration: [String: Any] = ["pid": pid, "sessionId": session, "status": "busy", "startedAt": now - 54000, "statusUpdatedAt": now - 1]
+        try JSONSerialization.data(withJSONObject: registration).write(to: worker)
+        var source = UsageSource.local
+        source.claudeHome = home.path
+        let client = UsageCollectorClient()
+        let probe = try #require(Bundle(for: AppUpdater.self).url(forResource: "CodexBarProbe", withExtension: "py"))
+        let unverified = try await client.fetchLocalZeroHookSnapshot(source: source, probeURL: probe)
+        let task = try #require(unverified.tasks.first)
+        #expect(task.lifecycleComplete == false)
+        let row = ActivityPresentationModel.taskSnapshot(task, id: UUID())
+        let stage = try #require(row.stageTitle)
+        #expect(CodexActivityTaskDetails.components(for: row, now: Date(), isWaiting: false) == [stage])
+        func prompt(_ at: Int) -> String {
+            #"{"type":"user","sessionId":"timing-test","timestamp":\#(at),"origin":{"kind":"human"},"message":{"content":"work"}}"#
+        }
+        try (prompt(now - 60) + "\n").write(to: transcript, atomically: false, encoding: .utf8)
+        let first = try await client.fetchLocalZeroHookSnapshot(source: source, probeURL: probe)
+        #expect(first.tasks.first?.startedAt == Double(now - 60))
+        let stop = #"{"type":"system","sessionId":"timing-test","timestamp":\#(now - 30),"subtype":"turn_duration"}"#
+        let file = try FileHandle(forWritingTo: transcript)
+        defer { try? file.close() }
+        try file.seekToEnd()
+        try file.write(contentsOf: Data((stop + "\n" + prompt(now - 5) + "\n").utf8))
+        let second = try await client.fetchLocalZeroHookSnapshot(source: source, probeURL: probe)
+        #expect(second.tasks.first?.startedAt == Double(now - 5))
+        #expect(second.tasks.first?.lifecycleComplete == true)
+    }
+
     @Test func localSnapshotLeavesBundledResourcesUntouched() async throws {
         let temp = try TestDirectory()
         defer { try? temp.remove() }

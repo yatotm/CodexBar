@@ -157,6 +157,8 @@ private final nonisolated class UsageHTTPDelegate: NSObject, URLSessionTaskDeleg
 
 actor UsageCollectorClient {
     private static let keychainService = "io.github.yatotm.codexbar.usage-center"
+    private var claudeClockHome: String?
+    private var claudeClockMemo = Data()
 
     func saveToken(_ token: String, for sourceID: String) throws {
         guard !token.isEmpty else { return }
@@ -351,6 +353,7 @@ actor UsageCollectorClient {
         let tasks: [RemoteActivityTask]
         let quotas: [UsageQuotaObservation]
         var geminiAccountKey: String?
+        var claudeClockMemo: String?
     }
 
     func fetchLocalZeroHookSnapshot(source: UsageSource, probeURL: URL? = Bundle.main.url(forResource: "CodexBarProbe", withExtension: "py")) async throws -> LocalZeroHookSnapshot {
@@ -377,8 +380,10 @@ actor UsageCollectorClient {
         tasks = []
         quotas = []
         account = None
+        clocks = {}
         if "claude" in enabled:
-            tasks.extend(mod.read_claude_live_tasks(homes["claude"], col, now))
+            clocks = json.loads(sys.stdin.buffer.read() or b"{}")
+            tasks.extend(mod.read_claude_live_tasks(homes["claude"], col, now, clocks))
             q = mod.read_live_quota(homes["claude"], "claude")
             if q: quotas.append(q)
         if "gemini" in enabled:
@@ -387,16 +392,25 @@ actor UsageCollectorClient {
             account = state.get("activeAccount")
             q = mod.read_live_quota(homes["gemini"], "gemini", state)
             if q: quotas.append(q)
-        print(json.dumps({"tasks": tasks, "quotas": quotas, "geminiAccountKey": account}))
+        memo = json.dumps(clocks, separators=(",", ":"))
+        print(json.dumps({"tasks": tasks, "quotas": quotas, "geminiAccountKey": account,
+                          "claudeClockMemo": memo if len(memo) <= 262144 else "{}"}))
         """
         let wanted = [source.includesClaude ? "claude" : nil, source.includesGemini ? "gemini" : nil].compactMap(\.self).joined(separator: ",")
         guard !wanted.isEmpty else { return LocalZeroHookSnapshot(tasks: [], quotas: []) }
         let data = try await UsageCommandRunner.run(
             executable: python,
             arguments: ["-B", "-c", snippet, probeURL.path, source.claudeHome, source.geminiHome, wanted],
+            input: source.includesClaude && source.claudeHome == claudeClockHome ? claudeClockMemo : Data(),
             timeout: 8
         )
-        return try JSONDecoder().decode(LocalZeroHookSnapshot.self, from: data)
+        try Task.checkCancellation()
+        var snapshot = try JSONDecoder().decode(LocalZeroHookSnapshot.self, from: data)
+        // 本机每次采集使用短进程, 游标只在内存中交接
+        claudeClockHome = source.claudeHome
+        claudeClockMemo = Data((snapshot.claudeClockMemo ?? "").utf8)
+        snapshot.claudeClockMemo = nil
+        return snapshot
     }
 
     func fetchTokenHistory(source: UsageSource, account: String, scan: Bool) async throws -> UsageSourceTokenEvidence {

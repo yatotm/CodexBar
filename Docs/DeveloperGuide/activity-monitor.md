@@ -12,6 +12,8 @@ Claude 的 `Stop` 和 `SubagentStop` 可通过 `background_tasks` 报告仍在�
 
 ## 快照与连接
 
+无 Hook 探针按主转录中的用户输入、轮次结束和后台任务回执确定 Claude 任务的起点。后台命令唤醒同一轮时沿用原起点，完整空闲后重新计时。后台作业的本地时间线可补充完成边界。转录游标和未结束任务的摘要只在内存中保留，缺少可靠起点时通过 `lifecycleComplete` 隐藏时长。
+
 `RemoteActivityController` 的连接键包含来源 ID 与提供方。同一机器的 Codex 和 Claude 有独立的健康状态、重试与代次；某一端失败不能把另一端标为失联。
 
 帧保留 `schema=1`、`epoch`、`revision`、`sentAt`，新增字段均为可选。共享来源明确提供 `backend=sharedCodex`、`sourceAvailable` 和实际 `serverVersion`。最多接收 500 条任务、512 KiB 一帧；ACK、版本顺序与字段长度均校验。

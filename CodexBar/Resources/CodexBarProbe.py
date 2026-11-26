@@ -27,7 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-PROBE_VERSION = "2.1.0"
+PROBE_VERSION = "2.1.1"
 VALID_PROVIDERS = ("codex", "claude", "gemini")
 
 
@@ -259,44 +259,210 @@ def merge_quotas_with_live(exported_quotas, homes, enabled, collector_mod, now_t
     return list(by_provider.values())
 
 
-def read_claude_transcript_model(claude_home, raw_sid, collector_mod):
-    projects = claude_home / "projects"
-    if not raw_sid or not projects.is_dir() or projects.is_symlink():
+def claude_transcript(home, session):
+    projects = home / "projects"
+    if not projects.is_dir() or projects.is_symlink():
         return None
-    target_name = f"{raw_sid}.jsonl"
     try:
         with os.scandir(projects) as entries:
-            for proj_entry in entries:
-                if not proj_entry.is_dir(follow_symlinks=False):
-                    continue
-                cand = pathlib.Path(proj_entry.path) / target_name
-                if not cand.is_file() or cand.is_symlink():
-                    continue
-                size = cand.stat().st_size
-                with cand.open("rb") as f:
-                    if size > 49152:
-                        f.seek(size - 49152)
-                        f.readline()
-                    model = None
-                    for raw_line in f:
-                        if b'"model"' not in raw_line:
-                            continue
-                        try:
-                            obj = json.loads(raw_line)
-                        except ValueError:
-                            continue
-                        msg = obj.get("message") if isinstance(obj, dict) else None
-                        m_val = (msg.get("model") if isinstance(msg, dict) else None) or (obj.get("model") if isinstance(obj, dict) else None)
-                        if isinstance(m_val, str) and m_val and not m_val.startswith("<"):
-                            model = collector_mod.text(m_val, 100)
-                    if model:
-                        return model
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    path = pathlib.Path(entry.path) / (session + ".jsonl")
+                    if not path.is_symlink() and path.is_file():
+                        return path
     except OSError:
         pass
     return None
 
 
-def read_claude_live_tasks(claude_home, collector_mod, now_ts):
+def claude_timestamp(value, collector, now):
+    date = collector.timestamp(value) if isinstance(value, str) else None
+    return session_time(date.timestamp() if date else value, now)
+
+
+def clock_lines(stream, start, end):
+    if start:
+        stream.seek(start - 1)
+        if stream.read(1) != b"\n":
+            stream.readline(end - start)
+    offset = stream.tell()
+    data = stream.read(end - offset)
+    complete = data.rfind(b"\n") + 1
+    return data[:complete].splitlines(), offset + complete
+
+
+def claude_job_boundary(home, worker, state, memo, collector, now):
+    job = worker.get("job") if worker else None
+    if not isinstance(job, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job):
+        return 0, None
+    folder = home / "jobs" / job
+    path = folder / "timeline.jsonl"
+    if folder.parent.is_symlink() or folder.is_symlink() or path.is_symlink() or not path.is_file():
+        return 0, None
+    try:
+        with path.open("rb") as stream:
+            st = os.fstat(stream.fileno())
+            signature = [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
+            saved = memo.get("job", {})
+            if saved.get("signature") != signature:
+                start = max(0, st.st_size - 128 * 1024)
+                groups = []
+                for line in clock_lines(stream, start, st.st_size)[0]:
+                    try:
+                        row = json.loads(line)
+                        at = claude_timestamp(row.get("at"), collector, now)
+                        kind = row.get("state")
+                    except (ValueError, AttributeError, OverflowError):
+                        continue
+                    if not at:
+                        continue
+                    phase = "done" if kind in ("done", "failed", "cancelled", "stopped") else "work" if kind in ("running", "working", "blocked") else "unknown"
+                    if not groups or groups[-1][0] != phase:
+                        groups.append([phase, at])
+                saved = memo["job"] = {"signature": signature, "groups": groups[-4:], "whole": not start and len(groups) <= 4}
+        groups = saved["groups"]
+        if groups and groups[-1][0] == "done":
+            if state not in ("completed", "ended"):
+                return groups[-1][1], None
+            groups = groups[:-1]
+        if groups and groups[-1][0] == "work":
+            if len(groups) >= 2 and groups[-2][0] == "done":
+                return groups[-2][1], groups[-1][1]
+            if len(groups) == 1 and saved["whole"]:
+                return 0, groups[-1][1]
+    except OSError:
+        pass
+    return 0, None
+
+
+def claude_task_notice(value):
+    if not isinstance(value, str) or not value.startswith("<task-notification>"):
+        return None
+    header = value[:2048].split("<summary>", 1)[0]
+    task = re.search(r"<task-id>([A-Za-z0-9_-]{1,128})</task-id>", header)
+    if task and re.search(r"<status>(completed|failed|killed|stopped|cancelled)</status>", header):
+        return hashlib.sha256(task[1].encode()).hexdigest()
+    return None
+
+
+def advance_claude_clock(row, at, clock, pending, queued):
+    typ = row.get("type")
+    msg = row.get("message")
+    turn_ended = typ == "system" and row.get("subtype") == "turn_duration"
+    assistant_ended = typ == "assistant" and isinstance(msg, dict) and msg.get("stop_reason") in ("end_turn", "stop_sequence")
+    if turn_ended or assistant_ended:
+        if not pending and not queued and not row.get("pendingBackgroundAgentCount"):
+            clock["closedAt"] = at
+        elif row.get("pendingBackgroundAgentCount"):
+            clock["closedAt"] = None
+        return
+    if typ == "queue-operation" and row.get("operation") == "enqueue":
+        task = claude_task_notice(row.get("content"))
+        if task in pending:
+            pending.remove(task)
+            queued.add(task)
+            clock["closedAt"] = None
+        return
+    if typ != "user":
+        return
+    result = row.get("toolUseResult")
+    if isinstance(result, dict):
+        task = result.get("backgroundTaskId") or (result.get("agentId") if result.get("isAsync") is True else None)
+        if isinstance(task, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", task):
+            if len(pending) + len(queued) < 128:
+                pending.add(hashlib.sha256(task.encode()).hexdigest())
+            else:
+                clock["certain"] = False
+            clock["closedAt"] = None
+        return
+    if not isinstance(msg, dict) or row.get("isMeta") or row.get("isCompactSummary"):
+        return
+    content = msg.get("content")
+    blocks = content if isinstance(content, list) else []
+    if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in blocks):
+        return
+    origin = row.get("origin") or {}
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    notification = kind == "task-notification" or row.get("turnOrigin") == "task_notification"
+    if notification:
+        texts = [content] if isinstance(content, str) else [b.get("text") for b in blocks if isinstance(b, dict)]
+        for text in texts:
+            if isinstance(text, str) and text.startswith("<task-notification>"):
+                for notice in text[:16384].split("<task-notification>")[1:]:
+                    task = claude_task_notice("<task-notification>" + notice)
+                    pending.discard(task)
+                    queued.discard(task)
+    elif (row.get("promptSource") == "system" or kind not in (None, "human") or row.get("turnOrigin") not in (None, "human")
+          or not (isinstance(content, str) and content or any(isinstance(b, dict) and b.get("type") in ("text", "image", "document") for b in blocks))):
+        return
+    # 主回复和后台任务均已结束后, 下一条输入才开启新的计时
+    if clock["closedAt"] is not None:
+        clock["start"] = at
+    clock["closedAt"] = None
+
+
+def claude_run_metadata(path, session, fence, memo, collector, now, remaining):
+    if path is None:
+        return {}
+    try:
+        with path.open("rb") as stream:
+            stat = os.fstat(stream.fileno())
+            identity = [stat.st_dev, stat.st_ino]
+            clock = memo.get("transcript", {})
+            same = clock.get("file") == identity and clock.get("fence") == fence
+            if same and clock["size"] == stat.st_size and clock["mtime"] == stat.st_mtime_ns:
+                return clock
+            budget = 2 * 1024 * 1024
+            append = same and clock["size"] < stat.st_size and stat.st_size - clock["offset"] <= budget
+            if append:
+                stream.seek(max(0, clock["offset"] - 128))
+                append = hashlib.sha256(stream.read(min(128, clock["offset"]))).hexdigest() == clock["anchor"]
+            if append:
+                start = clock["offset"]
+            else:
+                start = max(0, stat.st_size - budget)
+                clock = {"file": identity, "fence": fence, "certain": start == 0, "start": None,
+                         "closedAt": 0, "pending": [], "queued": [], "model": None, "last": 0}
+            if stat.st_size - start > remaining[0]:
+                return {}
+            remaining[0] -= stat.st_size - start
+            stream.seek(0)
+            lines, offset = clock_lines(stream, start, stat.st_size)
+            pending, queued = set(clock["pending"]), set(clock["queued"])
+            for line in lines:
+                if not any(tag in line for tag in (b'"user"', b'"turn_duration"', b'"queue-operation"', b'"model"', b'"stop_reason"')):
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, RecursionError):
+                    clock["certain"] = False
+                    continue
+                if not isinstance(row, dict) or row.get("isSidechain") or row.get("sessionId", session) != session:
+                    continue
+                msg = row.get("message")
+                model = (msg.get("model") if isinstance(msg, dict) else None) or row.get("model")
+                if isinstance(model, str) and model and not model.startswith("<"):
+                    clock["model"] = collector.text(model, 100)
+                at = claude_timestamp(row.get("timestamp"), collector, now)
+                if not at or at < clock["last"]:
+                    continue
+                clock["last"] = at
+                if at <= fence:
+                    clock["certain"] = True
+                else:
+                    advance_claude_clock(row, at, clock, pending, queued)
+            stream.seek(max(0, offset - 128))
+            anchor = hashlib.sha256(stream.read(min(128, offset))).hexdigest()
+            clock.update(pending=sorted(pending), queued=sorted(queued), offset=offset, anchor=anchor, size=stat.st_size, mtime=stat.st_mtime_ns)
+            memo["transcript"] = clock
+            return clock
+    except OSError:
+        return {}
+
+
+def read_claude_live_tasks(claude_home, collector_mod, now_ts, clocks=None):
+    clocks = {} if clocks is None else clocks
+    remaining = [8 * 1024 * 1024]
     tasks_by_id = {}
     live_path = claude_home / "codexbar-usage/live-state.json"
     if live_path.is_file() and not live_path.is_symlink():
@@ -335,6 +501,7 @@ def read_claude_live_tasks(claude_home, collector_mod, now_ts):
                 active_sessions[sid] = {
                     "status": status,
                     "rawSid": sid_raw,
+                    "job": info.get("jobId"),
                     "project": collector_mod.text(proj, 100),
                     "startedAt": session_time(info.get("startedAt"), now_ts),
                     "changedAt": changed
@@ -343,22 +510,31 @@ def read_claude_live_tasks(claude_home, collector_mod, now_ts):
             pass
     result = []
     seen = set(tasks_by_id) | set(active_sessions)
-    for sid in seen:
+    for old in clocks.keys() - seen:
+        del clocks[old]
+    for sid in sorted(seen):
         base = tasks_by_id.get(sid, {})
         proc_info = active_sessions.get(sid)
         proc_status = proc_info["status"] if proc_info else None
         updated = session_time(base.get("updatedAt"), now_ts)
         changed = proc_info["changedAt"] if proc_info else None
         started = session_time(base.get("startedAt"), now_ts) or (proc_info and proc_info["startedAt"])
+        memo = clocks.setdefault(sid, {}) if sid in clocks or len(clocks) < 64 else {}
+        if proc_status == "idle" and changed:
+            if memo.get("idle") and memo["idle"] < changed:
+                memo["fence"] = memo["idle"]
+            memo["idle"] = changed
+        elif proc_status in ("busy", "shell") and memo.get("idle"):
+            memo["fence"] = memo["idle"]
         if proc_status == "idle":
             # 状态栏重绘和轮询都不是完成事件, 缺少终态时间就不生成最近完成记录
             ended = changed or (updated if base.get("state") in ("completed", "ended") else None)
-            if ended is None or (started and ended < started) or now_ts - ended >= 600:
+            if ended is None or now_ts - ended >= 600:
                 continue
             updated = changed = ended
             state, stage, event_name = "completed", None, "Stop"
         elif proc_status in ("shell", "busy"):
-            updated = max(filter(None, (updated, changed, started)), default=None)
+            updated = max(filter(None, (updated, changed, started)), default=memo.setdefault("firstSeen", now_ts))
             if proc_status == "shell":
                 state, stage, event_name = "running", "background-shell", "BackgroundShell"
             else:
@@ -385,12 +561,29 @@ def read_claude_live_tasks(claude_home, collector_mod, now_ts):
             chosen_proj = proc_proj
         else:
             chosen_proj = base_proj or proc_proj or "Claude"
-        model_name = collector_mod.text(base.get("modelName") or "", 100) or None
-        if not model_name and proc_info:
-            model_name = read_claude_transcript_model(claude_home, proc_info["rawSid"], collector_mod)
+        boundary, native_start = claude_job_boundary(claude_home, proc_info, state, memo, collector_mod, now_ts)
+        fence = max(boundary, memo.get("fence", 0))
+        path = claude_transcript(claude_home, proc_info["rawSid"]) if proc_info else None
+        evidence = claude_run_metadata(path, proc_info["rawSid"], fence, memo, collector_mod, now_ts, remaining) if proc_info else {}
+        run_start = evidence.get("start") if evidence.get("certain") else None
+        ended_at = evidence.get("closedAt")
+        active = state in ("running", "waiting")
+        if active and ended_at is not None:
+            run_start = None
+        if (run_start is None and native_start and native_start > fence and native_start >= (proc_info.get("startedAt") or 0)
+                and not (active and ended_at and native_start <= ended_at)):
+            run_start = native_start
+        if active and run_start is not None:
+            updated = max(updated, run_start)
+        precise = run_start is not None and run_start <= updated
+        if precise:
+            started = run_start
+        model_name = collector_mod.text(base.get("modelName") or "", 100) or evidence.get("model")
+
         row = {
             "id": sid,
             "provider": "claude",
+            "lifecycleComplete": precise,
             "state": state,
             "project": chosen_proj,
             "startedAt": started,
@@ -684,6 +877,7 @@ class ProbeAgent:
     def __init__(self, config_path=None, state_dir=None):
         self.collector_mod = load_collector_module()
         self.codex_session = CodexProbeSession()
+        self.claude_clocks = {}
         self.config_path = config_path or (config_directory() / "config.json")
         self.state_dir = state_dir or probe_state_directory()
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -771,7 +965,7 @@ class ProbeAgent:
         if "codex" in enabled:
             tasks.extend(self.codex_session.read(self.homes["codex"], self.collector_mod, now_ts))
         if "claude" in enabled:
-            tasks.extend(read_claude_live_tasks(self.homes["claude"], self.collector_mod, now_ts))
+            tasks.extend(read_claude_live_tasks(self.homes["claude"], self.collector_mod, now_ts, self.claude_clocks))
         if "gemini" in enabled:
             tasks.extend(read_gemini_live_tasks(self.homes["gemini"], self.collector_mod, now_ts))
         recent = [t for t in tasks if t["state"] not in ("completed", "ended") or now_ts - t["updatedAt"] < 600]

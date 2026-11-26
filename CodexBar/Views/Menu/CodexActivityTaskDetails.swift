@@ -8,6 +8,8 @@ nonisolated enum CodexActivityTaskDetails {
         if let stage = normalized(task.stageTitle) {
             if isWaiting {
                 result[0] = stage
+            } else if !task.showsPreciseDuration {
+                result = [stage]
             } else {
                 result[1] = stage
                 result.swapAt(0, 1)

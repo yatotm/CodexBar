@@ -574,6 +574,118 @@ class GeminiAndHubTests(unittest.TestCase):
             self.assertAlmostEqual(task["updatedAt"], now-90, places=4)
         self.assertEqual(probe_mod.read_claude_live_tasks(self.claude, collector, now+511), [])
 
+    def test_claude_run_clock_spans_shells_and_wakeups_but_resets_after_completion(self):
+        now = int(time.time())
+        session = "active-session"
+        worker = self.claude / "sessions" / f"{os.getpid()}.json"
+        worker.parent.mkdir()
+        transcript = self.claude / "projects/test" / (session + ".jsonl")
+        transcript.parent.mkdir(parents=True)
+        live = self.claude / "codexbar-usage/live-state.json"
+        live.parent.mkdir()
+        sid = collector.digest("claude-session", session)
+        live.write_text(json.dumps({"tasks": {sid: {"state": "running", "startedAt": now-54000, "updatedAt": now}}}))
+        cache = {}
+
+        def emit(kind, elapsed, **fields):
+            with transcript.open("a") as f:
+                f.write(json.dumps(dict(type=kind, sessionId=session, timestamp=now+elapsed, **fields)) + "\n")
+
+        def prompt(elapsed, content="private input"):
+            emit("user", elapsed, origin={"kind": "human"}, message={"role": "user", "content": content})
+
+        def job(elapsed, task):
+            emit("user", elapsed, toolUseResult={"backgroundTaskId": task, "stdout": "private output"})
+
+        def receipt(task):
+            return f"<task-notification><task-id>{task}</task-id><status>completed</status></task-notification>"
+
+        def get(elapsed, status, memo):
+            worker.write_text(json.dumps(dict(pid=os.getpid(), sessionId=session, status=status,
+                                              startedAt=(now-36000)*1000, statusUpdatedAt=(now+elapsed)*1000)))
+            row, = probe_mod.read_claude_live_tasks(self.claude, collector, now+elapsed, memo)
+            return row
+
+        prompt(-1800)
+        job(-1790, "first")
+        emit("system", -1780, subtype="turn_duration")
+        emit("user", -1700, origin={"kind": "task-notification"}, message={"content": receipt("first")})
+        emit("system", -1690, subtype="turn_duration")
+        prompt(0)
+        job(5, "one")
+        job(6, "two")
+        emit("system", 10, subtype="turn_duration")
+        row = get(11, "shell", cache)
+        self.assertEqual((row["startedAt"], row["stage"], row["lifecycleComplete"]), (now, "background-shell", True))
+        with patch.object(probe_mod, "clock_lines", side_effect=AssertionError("心跳不应重读未变化的转录")):
+            self.assertEqual(get(12, "shell", cache)["startedAt"], now)
+        emit("queue-operation", 20, operation="enqueue", content=receipt("one"))
+        emit("user", 21, turnOrigin="task_notification", message={"content": receipt("one")})
+        emit("system", 23, subtype="turn_duration")
+        prompt(25, receipt("two"))
+        emit("system", 26, subtype="turn_duration")
+        self.assertEqual(get(27, "shell", cache)["startedAt"], now)
+        emit("queue-operation", 29, operation="enqueue", content=receipt("two"))
+        emit("system", 30, subtype="turn_duration")
+        emit("user", 31, promptSource="system", origin={"kind":"task-notification"}, message={"content": receipt("two")})
+        self.assertEqual(get(32, "busy", cache)["startedAt"], now)
+        emit("system", 40, subtype="turn_duration")
+        self.assertEqual(get(41, "idle", cache)["startedAt"], now)
+        prompt(80)
+        job(81, "three")
+        emit("system", 82, subtype="turn_duration")
+        for memo in (cache, {}):
+            row = get(84, "shell", memo)
+            self.assertEqual((row["startedAt"], row["state"], row["lifecycleComplete"]), (now+80, "running", True))
+        self.assertNotIn("private", json.dumps(cache))
+
+    def test_worker_open_and_statusline_are_not_certain_run_starts(self):
+        now = time.time()
+        session = "worker"
+        raw = dict(pid=os.getpid(), sessionId=session, status="shell", startedAt=(now-54000)*1000,
+                   statusUpdatedAt=(now-20)*1000, jobId="job")
+        worker = self.claude / "sessions" / f"{os.getpid()}.json"
+        worker.parent.mkdir()
+        worker.write_text(json.dumps(raw))
+        memo = {}
+        task, = probe_mod.read_claude_live_tasks(self.claude, collector, now, memo)
+        self.assertEqual(task["stage"], "background-shell")
+        self.assertFalse(task["lifecycleComplete"])
+        timeline = self.claude / "jobs/job/timeline.jsonl"
+        timeline.parent.mkdir(parents=True)
+        timeline.write_text("".join(json.dumps(dict(at=now+t, state=s))+"\n" for t,s in
+                                    [(-50000,"working"), (-45000,"done"), (-100,"working"), (-85,"blocked"), (-20,"working")]))
+        task, = probe_mod.read_claude_live_tasks(self.claude, collector, now, memo)
+        self.assertTrue(task["lifecycleComplete"])
+        self.assertEqual(task["startedAt"], now-100)
+
+    def test_turn_clock_rechecks_rewritten_files_and_waits_for_complete_lines(self):
+        session = "test-session"
+        now = int(time.time())
+        path = self.root / "events.jsonl"
+        memo = {}
+        def line(at):
+            return json.dumps(dict(sessionId=session, timestamp=at, type="user", promptSource="typed",
+                                   message={"role":"user", "content":"work"})).encode() + b"\n"
+        def read(fence=0):
+            return probe_mod.claude_run_metadata(path, session, fence, memo, collector, now, [2*1024*1024])
+        path.write_bytes(line(now-120))
+        self.assertEqual(read()["start"], now-120)
+        stop = json.dumps(dict(sessionId=session, timestamp=now-80, type="system", subtype="turn_duration")).encode()+b"\n"
+        with path.open("ab") as f:
+            f.write(stop + line(now-10)[:-1])
+        self.assertEqual(read()["closedAt"], now-80)
+        with path.open("ab") as f:
+            f.write(b"\n")
+        self.assertEqual(read()["start"], now-10)
+        path.write_bytes(line(now-5) + b" "*512 + b"\n")
+        self.assertEqual(read()["start"], now-5)
+        oversized = json.dumps(dict(type="assistant", message={"content":"x"*(2*1024*1024)})).encode()+b"\n"
+        path.write_bytes(oversized + line(now-60) + stop + line(now-2))
+        self.assertFalse(read()["certain"])
+        self.assertTrue(read(now-50)["certain"])
+        self.assertEqual(read(now-50)["start"], now-2)
+
     def test_confirmed_history_backfills_and_pause_only_sends_control_heartbeats(self):
         cfg = self.root / "node.json"
         state = self.root / "node-state"
