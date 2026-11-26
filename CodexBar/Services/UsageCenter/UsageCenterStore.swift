@@ -292,37 +292,31 @@ actor UsageCenterStore {
         return try nextRow(query) ? string(query, 0) : nil
     }
 
-    func valuationUsageRecords(provider: String, localOnly: Bool) throws -> [GeminiStepUsageRecord] {
-        guard ["claude", "gemini"].contains(provider) else { return [] }
-        let cutoff = Date().timeIntervalSince1970 - 70 * 86400
+    func forEachClaudeUsageRecord(since start: Double, localOnly: Bool, visit: (GeminiStepUsageRecord) -> Void) throws {
+        let connection = try connect()
+        sqlite3_progress_handler(connection, 10000, { _ in Task<Never, Never>.isCancelled ? 1 : 0 }, nil)
+        defer { sqlite3_progress_handler(connection, 0, nil, nil) }
         let sql = """
-        WITH dedup AS (
-            SELECT r.id, r.observed, r.model, r.input, r.cacheRead, r.cacheWrite, r.output,
-            ROW_NUMBER() OVER(PARTITION BY r.id ORDER BY (r.input+r.output+r.cacheRead+r.cacheWrite) DESC, r.observed DESC) AS pos
+        WITH ranked AS (
+            SELECT r.id,r.observed,r.model,r.input,r.cacheRead,r.cacheWrite,r.output,
+            ROW_NUMBER() OVER(PARTITION BY r.id ORDER BY (r.input+r.output+r.cacheRead+r.cacheWrite) DESC,r.observed DESC,r.source) AS pos
             FROM records r JOIN sources s ON s.id=r.source
-            WHERE s.enabled=1 AND (?=0 OR s.id='local')
-            AND ((r.provider='claude' AND s.claude=1) OR (r.provider='gemini' AND s.gemini=1))
-            AND r.provider=? AND r.kind='usage' AND r.auth!='api' AND r.observed>=?
+            WHERE s.enabled=1 AND s.claude=1 AND (?=0 OR s.id='local') AND r.provider='claude'
+            AND r.kind='usage' AND r.auth!='api' AND r.observed>=?
         )
-        SELECT id, observed, model, input, cacheRead, cacheWrite, output FROM dedup WHERE pos=1 ORDER BY observed DESC LIMIT 25000
+        SELECT id,observed,model,input,cacheRead,cacheWrite,output FROM ranked WHERE pos=1
         """
-        let query = try statement(sql, values: [.integer(localOnly ? 1 : 0), .text(provider), .real(cutoff)])
+        let query = try statement(sql, values: [.integer(localOnly ? 1 : 0), .real(start)])
         defer { sqlite3_finalize(query) }
-        var items: [GeminiStepUsageRecord] = []
         while try nextRow(query) {
-            items.append(GeminiStepUsageRecord(
-                id: string(query, 0),
-                at: sqlite3_column_double(query, 1),
-                model: string(query, 2),
+            visit(GeminiStepUsageRecord(
+                id: string(query, 0), at: sqlite3_column_double(query, 1), model: string(query, 2),
                 tokens: GeminiStepTokens(
-                    input: sqlite3_column_int64(query, 3),
-                    cached: sqlite3_column_int64(query, 4),
-                    cacheWrite: sqlite3_column_int64(query, 5),
-                    output: sqlite3_column_int64(query, 6)
+                    input: sqlite3_column_int64(query, 3), cached: sqlite3_column_int64(query, 4),
+                    cacheWrite: sqlite3_column_int64(query, 5), output: sqlite3_column_int64(query, 6)
                 )
             ))
         }
-        return items
     }
 
     func applyHubBatch(

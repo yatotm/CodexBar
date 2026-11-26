@@ -330,7 +330,7 @@ final class UsageCenterViewModel: ObservableObject {
                 if source.includesGemini, let val = try? await client.fetchLocalGeminiValuation(source: source, scan: false) {
                     localGeminiEvidence = val
                 }
-                if source.includesClaude, let cval = try? await client.fetchLocalClaudeValuation(source: source) {
+                if source.includesClaude, let cval = try? await client.fetchLocalClaudeValuation(source: source), cval.complete != false {
                     localClaudeEvidence = cval
                 }
             }
@@ -537,6 +537,7 @@ final class UsageCenterViewModel: ObservableObject {
 
     private func applyLocalLiveQuotas(_ liveQuotas: [UsageQuotaObservation]) {
         guard !liveQuotas.isEmpty else { return }
+        let previous = liveValuationWindows
         var st = statuses["local"] ?? UsageSourceStatus()
         var byProvider = Dictionary(uniqueKeysWithValues: st.quotas.map { ($0.provider, $0) })
         let now = Date().timeIntervalSince1970
@@ -555,13 +556,17 @@ final class UsageCenterViewModel: ObservableObject {
         if changed {
             st.quotas = Array(byProvider.values)
             statuses["local"] = st
-            recalculateGeminiValuation()
+            if previous != liveValuationWindows {
+                recalculateGeminiValuation()
+            }
         }
     }
 
     private func applyLiveEventFrame(_ events: HubEventsResponse) {
         hubHealthy = true
-        if currentLocalGeminiAccount == nil, events.geminiAccountKey != hubGeminiEvidence.confirmedAccount {
+        let previous = liveValuationWindows
+        let changedAccount = currentLocalGeminiAccount == nil && events.geminiAccountKey != hubGeminiEvidence.confirmedAccount
+        if changedAccount {
             hubGeminiEvidence = .empty
             if automaticRefresh, events.geminiAccountKey != nil {
                 refresh(manual: false)
@@ -586,7 +591,9 @@ final class UsageCenterViewModel: ObservableObject {
                 emitLiveNotifications: true
             )
         }
-        recalculateGeminiValuation()
+        if changedAccount || previous != liveValuationWindows {
+            recalculateGeminiValuation()
+        }
     }
 
     func saveHubSettings(mode: ControlCenterTopologyMode, hubURL: String, readToken: String, port: Int) async -> Bool {
@@ -842,6 +849,21 @@ final class UsageCenterViewModel: ObservableObject {
         return latest
     }
 
+    private struct LiveValuationWindows: Equatable {
+        let geminiAccount: String?
+        let gemini: UsageQuotaObservation.Window?
+        let claude: UsageQuotaObservation.Window?
+    }
+
+    private var liveValuationWindows: LiveValuationWindows {
+        let gemini = latestGeminiQuota
+        return LiveValuationWindows(
+            geminiAccount: gemini?.accountKey,
+            gemini: gemini?.windows.first { $0.name == "7d" },
+            claude: latestClaudeQuota?.windows.first { $0.name == "7d" }
+        )
+    }
+
     private func recalculateGeminiValuation() {
         valuationTask?.cancel()
         let localOnly = (topologyMode == .localOnly)
@@ -857,22 +879,16 @@ final class UsageCenterViewModel: ObservableObject {
 
         valuationTask = Task { [weak self] in
             guard let self else { return }
-            let cRecords = await (try? store.valuationUsageRecords(provider: "claude", localOnly: localOnly)) ?? []
-            guard !Task.isCancelled else { return }
+            guard let claude = try? await store.claudeValuationPeriods(evidences: cEvidences, weekly: liveC, localOnly: localOnly, prices: book),
+                  !Task.isCancelled else { return }
             geminiPeriods = GeminiValuationCalculator.computePeriods(
                 provider: "gemini",
                 evidences: gEvidences,
                 liveWeeklyObservation: liveG,
                 preferredGeminiAccount: geminiAccount,
                 priceBook: book
-            )
-            claudePeriods = GeminiValuationCalculator.computePeriods(
-                provider: "claude",
-                evidences: cEvidences,
-                storeRecords: cRecords,
-                liveWeeklyObservation: liveC,
-                priceBook: book
-            )
+            ) { _, _ in }
+            claudePeriods = claude
         }
     }
 

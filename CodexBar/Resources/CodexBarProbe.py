@@ -27,7 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-PROBE_VERSION = "2.1.1"
+PROBE_VERSION = "2.1.2"
 VALID_PROVIDERS = ("codex", "claude", "gemini")
 
 
@@ -1058,7 +1058,7 @@ class ProbeAgent:
             if page_idx == 0 and did_scan:
                 if "claude" in enabled:
                     try:
-                        c_export = self.collector_mod.scan_claude_weekly_windows(self.homes["claude"], budget=2)
+                        c_export = self.collector_mod.scan_claude_weekly_windows(self.homes["claude"], budget=2, directory=usage_dir)
                         if c_export.get("windows"):
                             claude_val = {"windows": wire_windows(c_export["windows"])}
                     except Exception:

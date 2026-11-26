@@ -145,11 +145,10 @@ struct ControlCenterAndValuationTests {
                     records: [.init(id: "other", at: stepTs, model: geminiRecord.model, tokens: geminiRecord.tokens)]
                 )
             ],
-            storeRecords: [.init(id: "legacy", at: stepTs, model: geminiRecord.model, tokens: geminiRecord.tokens)],
             liveWeeklyObservation: geminiObs,
             priceBook: .fallback,
             now: now
-        )
+        ) { _, _ in Issue.record("Gemini 估值不应读取无账号的通用账本") }
         #expect(geminiPeriods.count == 1)
         let gPeriod = geminiPeriods[0]
         #expect(abs(gPeriod.dollars - 6.0) < 0.001)
@@ -177,7 +176,7 @@ struct ControlCenterAndValuationTests {
             liveWeeklyObservation: claudeObs,
             priceBook: .fallback,
             now: now
-        )
+        ) { _, visit in visit(claudeRecord) }
         #expect(claudePeriods.count == 1)
         let cPeriod = claudePeriods[0]
         #expect(abs(cPeriod.dollars - 5.0) < 0.001)
@@ -260,12 +259,84 @@ struct ControlCenterAndValuationTests {
         let localOnlyDash = try await store.dashboard(filter: UsageFilter(provider: "gemini", days: 210, localOnly: true))
         #expect(localOnlyDash.totals.tokens == 0)
 
-        let valRecords = try await store.valuationUsageRecords(provider: "gemini", localOnly: false)
-        let firstVal = try #require(valRecords.first)
-        #expect(firstVal.tokens.input == 2000)
-        #expect(firstVal.tokens.cached == 500)
-        #expect(firstVal.tokens.cw == 100)
-        #expect(firstVal.tokens.output == 400)
+        #expect(allDash.totals.input == 2000)
+        #expect(allDash.totals.cacheRead == 500)
+        #expect(allDash.totals.cacheWrite == 100)
+        #expect(allDash.totals.output == 400)
+    }
+
+    @Test func claudeHistoryKeepsOlderCyclesAfterTwentyFiveThousandNewRequests() async throws {
+        let temp = try TestDirectory()
+        defer { try? temp.remove() }
+        let store = UsageCenterStore(directory: temp.url)
+        try await store.save(.local)
+        var remote = UsageSource(id: "vps", name: "VPS", transport: .probe)
+        remote.includesClaude = true
+        try await store.save(remote)
+        let now = Date().timeIntervalSince1970
+        let boundary = now - 3600
+        var db: OpaquePointer?
+        #expect(sqlite3_open(temp.url.appendingPathComponent("center-v1.sqlite").path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        let insert = """
+        WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<25001),
+        events(source,id,at,auth,n) AS (
+            SELECT 'vps',printf('new-%d',i),\(boundary),'oauth',10 FROM seq UNION ALL
+            SELECT 'local','old',\(boundary - 1),'oauth',1000000 UNION ALL
+            SELECT 'vps','old',\(boundary),'oauth',200 UNION ALL
+            SELECT 'vps','api',\(boundary - 1),'api',1000000
+        )
+        INSERT INTO records SELECT source,id,'claude',auth,date(at,'unixepoch'),'s','claude-sonnet-5-5','p','usage','',at,
+        n,0,0,0,0,0,0,0,0,0,0 FROM events
+        """
+        try #require(sqlite3_exec(db, insert, nil, nil, nil) == SQLITE_OK)
+        let windows = [boundary, boundary + 604800].map { reset in
+            let at = min(now, reset - 1)
+            return UsageObservedWindow(
+                resetsAt: reset,
+                firstAt: at,
+                firstUsed: 50,
+                lastAt: at,
+                lastUsed: 50,
+                maxUsed: 50,
+                decreased: false,
+                observations: [.init(at: at, used: 50)]
+            )
+        }
+        let evidence = GeminiValuationEvidence(windows: windows, records: [])
+        let periods = try await store.claudeValuationPeriods(evidences: [evidence], weekly: nil, localOnly: false, prices: .fallback)
+        #expect(periods.map(\.tokens.input) == [250010, 1000000])
+        #expect(periods.last?.projectedDollars == 4)
+    }
+
+    @Test func claudeLocalCommandDecodesWithNoRequestRowsAndAnOlderLivePercentage() async throws {
+        let temp = try TestDirectory()
+        defer { try? temp.remove() }
+        let cache = temp.url.appendingPathComponent("ccline")
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        let now = Date()
+        let reset = Int(now.timeIntervalSince1970) + 86400
+        let payload: [String: Any] = [
+            "cached_at": ISO8601DateFormatter().string(from: now.addingTimeInterval(-60)),
+            "seven_day_utilization": 91,
+            "seven_day_resets_at": reset
+        ]
+        try JSONSerialization.data(withJSONObject: payload).write(to: cache.appendingPathComponent(".api_usage_cache.json"))
+        let script = try #require(Bundle(for: AppUpdater.self).url(forResource: "UsageCollector", withExtension: "py"))
+        let data = try await UsageCommandRunner.run(executable: "/usr/bin/python3", arguments: [
+            "-B", script.path, "claude-valuation", "--claude-home", temp.url.path, "--state-dir", temp.url.appendingPathComponent("state").path
+        ])
+        let evidence = try JSONDecoder().decode(GeminiValuationEvidence.self, from: data)
+        #expect(evidence.records.isEmpty)
+        #expect(evidence.complete == true)
+        let live = UsageQuotaObservation(
+            provider: "claude",
+            observedAt: now.timeIntervalSince1970,
+            windows: [.init(name: "7d", usedPercent: 80, resetsAt: Double(reset))]
+        )
+        let result = GeminiValuationCalculator.computePeriods(provider: "claude", evidences: [evidence], liveWeeklyObservation: live, now: now) { _, _ in }
+        #expect(result.first?.usedPercent == 91)
+        #expect(result.first?.unreliable == false)
     }
 
     @Test

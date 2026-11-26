@@ -2035,62 +2035,113 @@ def gemini_value_record(record):
             "tokens": {"input": record["input"], "cached": record["cacheRead"], "cacheWrite": record["cacheWrite"], "output": record["output"]}}
 
 
-def scan_claude_weekly_windows(claude_home, budget=4):
-    claude_home = claude_home.expanduser()
-    cutoff = time.time() - 70 * 86400
-    deadline = time.monotonic() + budget
-    samples = {}
-    cache_path = claude_home / "ccline/.api_usage_cache.json"
-    if cache_path.is_file() and not cache_path.is_symlink() and not cache_path.parent.is_symlink():
-        try:
-            value = json.loads(cache_path.read_bytes()[:65536])
-            obs = timestamp(value.get("cached_at"))
-            rst_raw = value.get("seven_day_resets_at", value.get("resets_at"))
-            rst = timestamp(rst_raw).timestamp() if isinstance(rst_raw, str) and timestamp(rst_raw) else number(rst_raw)
-            used = value.get("seven_day_utilization")
-            if obs and rst and isinstance(used, (int, float)) and not isinstance(used, bool) and 0 <= used <= 100:
-                at = obs.timestamp()
-                if cutoff <= at <= time.time() + 60 and at - 60 <= rst <= at + 8 * 86400:
-                    sid = digest("claude-ccline-cache", at, rst, used)
-                    samples[sid] = ("ccline", float(rst), at, float(used))
-        except (OSError, ValueError, TypeError):
-            pass
-    signals = claude_home / "codexbar-usage/signals"
-    if signals.is_dir() and not signals.is_symlink():
-        for path in sorted(signals.glob("*.jsonl"), reverse=True):
-            if time.monotonic() >= deadline:
-                break
+class ClaudeWeeklyLedger(ValuationLedger):
+    """按文件续读状态栏, 同一会话的连续重绘只保存首末时间"""
+
+    def observe(self, row, state):
+        if row.get("event") != "statusline":
+            return
+        limits = row.get("rateLimits")
+        week = limits.get("seven_day") if isinstance(limits, dict) else None
+        if not isinstance(week, dict):
+            return
+        date = timestamp(row.get("timestamp"))
+        reset = number(week.get("resets_at"))
+        used = week.get("used_percentage")
+        if not date or type(used) not in (float, int) or not 0 <= used <= 100:
+            return
+        at = date.timestamp()
+        if not self.cutoff <= at <= time.time() + 60 or not at - 60 <= reset <= at + 8 * 86400:
+            return
+        session = row.get("session")
+        session = digest("claude-weekly", session) if isinstance(session, str) and session else "unknown"
+        runs = state.setdefault("weeks", {}).setdefault(str(reset), {}).setdefault(session, [])
+        if runs and runs[-1][2] == used and at >= runs[-1][1]:
+            runs[-1][1] = at
+        else:
+            runs.append([at, at, used])
+
+    @staticmethod
+    def without_transient_declines(rows):
+        sessions = {}
+        for row in rows:
+            sessions.setdefault(row[0], []).append(row)
+        cleaned = []
+        for samples in sessions.values():
+            kept, decreased = ValuationLedger.without_transient_declines(samples)
+            if decreased:
+                return rows, True
+            cleaned.extend(kept)
+        # 各会话会反复绘制上次响应的额度, 相同重置时间只推进已观测的最高值
+        high = -1
+        points = []
+        for row in sorted(cleaned, key=lambda r: (r[2], r[3])):
+            if row[3] >= high:
+                high = row[3]
+                if points and points[-1][2] == row[2]:
+                    points[-1] = row
+                else:
+                    points.append(row)
+        return points, False
+
+    def scan_signals(self):
+        root = self.home / "codexbar-usage/signals"
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            if root.is_dir() and not root.is_symlink():
+                for path in sorted(root.glob("*.jsonl"), reverse=True):
+                    if time.monotonic() >= self.deadline:
+                        self.complete = False
+                        break
+                    try:
+                        if S_ISREG(path.lstat().st_mode) and path.stat().st_mtime >= self.cutoff:
+                            self.scan_file(path)
+                    except OSError:
+                        self.complete = False
+            self.connection.execute("DELETE FROM files WHERE json_extract(state,'$.mtime') < ?", (int(self.cutoff * 1e9),))
+
+    def weekly_windows(self):
+        rows = []
+        for (raw,) in self.connection.execute("SELECT state FROM files"):
+            for reset, sessions in json.loads(raw).get("weeks", {}).items():
+                for session, runs in sessions.items():
+                    for first, last, used in runs:
+                        if last >= self.cutoff:
+                            if first != last and first >= self.cutoff:
+                                rows.append((session, int(reset), first, used))
+                            rows.append((session, int(reset), last, used))
+        cache = self.home / "ccline/.api_usage_cache.json"
+        if cache.is_file() and not cache.is_symlink() and not cache.parent.is_symlink():
             try:
-                if path.is_symlink() or path.stat().st_mtime < cutoff:
-                    continue
-                with path.open("rb") as stream:
-                    for raw in stream:
-                        if time.monotonic() >= deadline:
-                            break
-                        if len(raw) > MAX_LINE:
-                            continue
-                        row = json.loads(raw)
-                        if not isinstance(row, dict) or row.get("event") != "statusline":
-                            continue
-                        obs = timestamp(row.get("timestamp"))
-                        weekly = (row.get("rateLimits") or {}).get("seven_day") if isinstance(row.get("rateLimits"), dict) else None
-                        if not obs or not isinstance(weekly, dict):
-                            continue
-                        at = obs.timestamp()
-                        rst = number(weekly.get("resets_at"))
-                        used = weekly.get("used_percentage")
-                        if at < cutoff or at > time.time() + 60 or not rst or isinstance(used, bool) or not isinstance(used, (int, float)) or not 0 <= used <= 100:
-                            continue
-                        if not at - 60 <= rst <= at + 8 * 86400:
-                            continue
-                        sess = row.get("session") if isinstance(row.get("session"), str) else "claude"
-                        sid = digest("claude-weekly-sample", sess, at, rst, used)
-                        samples[sid] = (sess, float(rst), at, float(used))
-            except (OSError, ValueError, TypeError):
-                continue
-    rows = sorted(samples.values(), key=lambda r: (r[1], r[2], r[3]))
-    windows = ValuationLedger.build_windows(rows) if rows else []
-    return {"schema": 1, "generatedAt": time.time(), "windows": windows}
+                with cache.open("rb") as stream:
+                    value = json.loads(stream.read(65537))
+                obs = timestamp(value.get("cached_at"))
+                raw_reset = value.get("seven_day_resets_at", value.get("resets_at"))
+                reset_date = timestamp(raw_reset)
+                reset = reset_date.timestamp() if reset_date else number(raw_reset)
+                used = value.get("seven_day_utilization")
+                if obs and type(used) in (int, float) and 0 <= used <= 100:
+                    at = obs.timestamp()
+                    if self.cutoff <= at <= time.time() + 60 and at - 60 <= reset <= at + 8 * 86400:
+                        rows.append(("ccline", reset, at, used))
+            except (OSError, ValueError, AttributeError, TypeError):
+                pass
+        return self.build_windows(sorted(rows, key=lambda r: (r[1], r[2], r[3])))
+
+
+def scan_claude_weekly_windows(claude_home, budget=4, directory=None):
+    home = claude_home.expanduser().resolve()
+    if directory is None:
+        directory = state_directory()
+    # 估值索引可从状态栏日志重建, 与旧统计库及不同 Claude 配置目录隔离
+    ledger = ClaudeWeeklyLedger(directory, home, budget, "claude-weekly-" + digest(str(home))[:16] + ".sqlite")
+    try:
+        ledger.cutoff = time.time() - 70 * 86400
+        ledger.scan_signals()
+        return {"schema": 1, "generatedAt": time.time(), "complete": ledger.complete,
+                "windows": ledger.weekly_windows() if ledger.complete else [], "records": []}
+    finally:
+        ledger.connection.close()
 
 
 def bridge_input(args):
@@ -2183,7 +2234,7 @@ def main():
     directory = args.state_dir.expanduser() if args.state_dir else default_source_state_dir(args.codex_home, args.claude_home, args.gemini_home)
     if args.command == "claude-valuation":
         if not args.quiet:
-            print(encode(scan_claude_weekly_windows(args.claude_home, budget=min(8.0, args.budget))))
+            print(encode(scan_claude_weekly_windows(args.claude_home, budget=min(8.0, args.budget), directory=directory)))
         return
     if args.command == "gemini-valuation":
         if args.skip_scan and not (directory / GeminiValuationLedger.filename).exists():

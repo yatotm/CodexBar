@@ -156,6 +156,29 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(quota["observedAt"], now - 1)
         self.assertEqual([w["usedPercent"] for w in quota["windows"]], [4, 1])
 
+    def test_claude_weekly_history_reconciles_redraws_and_resumes_from_cache(self):
+        now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+        reset = now + 86400
+        def signal(session, seconds, used):
+            return {"event": "statusline", "session": session,
+                    "timestamp": dt.datetime.fromtimestamp(now + seconds, dt.timezone.utc).isoformat(),
+                    "rateLimits": {"seven_day": {"used_percentage": used, "resets_at": reset}}}
+        path = self.write([signal("a", -500, 80), signal("b", -490, 91),
+                           signal("a", -200, 80), signal("a", -190, 80)], self.claude / "codexbar-usage/signals/day.jsonl")
+        def read(budget=4):
+            return collector.scan_claude_weekly_windows(self.claude, budget, self.root / "state")
+        self.assertFalse(read(0)["complete"])
+        first = read()
+        self.assertTrue(first["complete"])
+        self.assertEqual(first["records"], [])
+        self.assertEqual([p["used"] for p in first["windows"][0]["observations"]], [80, 91])
+        self.assertFalse(first["windows"][0]["decreased"])
+        with mock.patch.object(collector.ClaudeWeeklyLedger, "observe", side_effect=AssertionError("重复读取")):
+            self.assertEqual(read()["windows"], first["windows"])
+        self.write([signal("b", -180, 70), signal("b", -8, 70)], path, append=True)
+        last = read()["windows"][0]
+        self.assertEqual((last["maxUsed"], last["lastUsed"], last["decreased"]), (91, 70, True))
+
     def test_claude_weekly_rollover_survives_redraw_with_same_five_hour_window(self):
         now = int(dt.datetime.now(dt.timezone.utc).timestamp())
         value = collector.Collector(self.db, self.codex, self.claude, ["claude"])

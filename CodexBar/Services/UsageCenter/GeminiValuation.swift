@@ -196,12 +196,12 @@ nonisolated enum GeminiValuationCalculator {
     static func computePeriods(
         provider: String = "gemini",
         evidences: [GeminiValuationEvidence],
-        storeRecords: [GeminiStepUsageRecord] = [],
         liveWeeklyObservation: UsageQuotaObservation?,
         preferredGeminiAccount: String? = nil,
         priceBook: GeminiPriceBook = .loadBundled(),
-        now: Date = Date()
-    ) -> [GeminiValuationPeriod] {
+        now: Date = Date(),
+        forEachStoredRecord: (Double, (GeminiStepUsageRecord) -> Void) throws -> Void
+    ) rethrows -> [GeminiValuationPeriod] {
         let nowTs = now.timeIntervalSince1970
         let isGemini = provider == "gemini"
         let account = preferredGeminiAccount ?? evidences.compactMap(\.confirmedAccount).first ?? liveWeeklyObservation?.accountKey
@@ -228,90 +228,93 @@ nonisolated enum GeminiValuationCalculator {
             ))
         }
         guard !rawWindows.isEmpty else { return [] }
-        let settled = UsageAnalyticsValuation.settledWindows(rawWindows, acrossSources: selected.count > 1)
-        var dedupRecords: [String: GeminiStepUsageRecord] = [:]
-        for item in (isGemini ? [] : storeRecords) + selected.flatMap(\.records) {
-            if provider == "gemini" {
-                let low = item.model.lowercased()
-                if ["claude", "opus", "sonnet", "haiku", "fable", "mythos", "gpt"].contains(where: { low.contains($0) }) {
+        let settled = UsageAnalyticsValuation.settledWindows(rawWindows, acrossSources: !isGemini || selected.count > 1)
+        var periods = settled.enumerated().compactMap { index, window -> PeriodTotals? in
+            let start = window.resetsAt - 604800
+            let nextStart = settled.indices.contains(index + 1) ? settled[index + 1].resetsAt - 604800 : window.resetsAt
+            let end = min(nextStart, window.resetsAt)
+            guard start < nowTs, start < end else { return nil }
+            return PeriodTotals(window: window, start: start, end: end, through: min(end, nowTs))
+        }
+        guard let firstStart = periods.first?.start else { return [] }
+        var rates: [String: GeminiPriceBook.Rate] = [:]
+        func accumulate(_ record: GeminiStepUsageRecord) {
+            guard let index = periods.lastIndex(where: { $0.start <= record.at }),
+                  record.at < periods[index].end, record.at <= periods[index].through else { return }
+            let rate = rates[record.model] ?? priceBook.rate(for: record.model, provider: provider)
+            rates[record.model] = rate
+            periods[index].add(record, rate: rate)
+        }
+
+        var evidenceRecords: [String: GeminiStepUsageRecord] = [:]
+        for evidence in selected {
+            for item in evidence.records where evidenceRecords[item.id] == nil {
+                if isGemini, ["claude", "opus", "sonnet", "haiku", "fable", "mythos", "gpt"].contains(where: item.model.lowercased().contains) {
                     continue
                 }
-            }
-            if dedupRecords[item.id] == nil {
-                dedupRecords[item.id] = item
+                evidenceRecords[item.id] = item
             }
         }
-        let sortedRecords = dedupRecords.values.sorted { $0.at < $1.at }
-        let latestPlan = selected.compactMap(\.planTier).first { !$0.isEmpty }
-
-        return settled.enumerated().compactMap { index, window in
-            let nextStart = settled.indices.contains(index + 1) ? (settled[index + 1].resetsAt - 604800) : window.resetsAt
-            return buildPeriod(
-                window: window,
-                nextStart: nextStart,
-                nowTs: nowTs,
-                provider: provider,
-                sortedRecords: sortedRecords,
-                priceBook: priceBook,
-                latestPlan: latestPlan
-            )
-        }.reversed()
+        if !isGemini {
+            try forEachStoredRecord(firstStart) { record in
+                evidenceRecords.removeValue(forKey: record.id)
+                accumulate(record)
+            }
+        }
+        for item in evidenceRecords.values.sorted(by: { ($0.at, $0.id) < ($1.at, $1.id) }) {
+            accumulate(item)
+        }
+        let plan = selected.compactMap(\.planTier).first { !$0.isEmpty }
+        return periods.reversed().map { $0.result(plan: plan) }
     }
 
-    private static func buildPeriod(
-        window: UsageObservedWindow,
-        nextStart: Double,
-        nowTs: Double,
-        provider: String,
-        sortedRecords: [GeminiStepUsageRecord],
-        priceBook: GeminiPriceBook,
-        latestPlan: String?
-    ) -> GeminiValuationPeriod? {
-        let startTs = window.resetsAt - 604800
-        let endTs = min(window.resetsAt, nextStart)
-        guard startTs < nowTs, endTs > startTs else { return nil }
-        let valuedTs = min(endTs, max(window.lastAt, min(nowTs, endTs)))
-        let cycleRecords = sortedRecords.filter { $0.at >= startTs && $0.at < endTs && $0.at <= valuedTs }
-        let priceRefTs = endTs > nowTs ? nowTs : valuedTs
-        var byModel: [String: GeminiModelPeriodBreakdown] = [:]
-        var totalTokens = GeminiStepTokens.zero
-        var totalDollars = 0.0
+    private struct PeriodTotals {
+        let window: UsageObservedWindow
+        let start: Double
+        let end: Double
+        let through: Double
+        var tokens = GeminiStepTokens.zero
+        var dollars = 0.0
+        var models: [String: GeminiModelPeriodBreakdown] = [:]
 
-        for rec in cycleRecords {
-            let rate = priceBook.rate(for: rec.model, provider: provider)
-            let unit = rate.unitRates(at: priceRefTs, promptTokens: rec.tokens.promptTotal)
+        mutating func add(_ record: GeminiStepUsageRecord, rate: GeminiPriceBook.Rate) {
+            let unit = rate.unitRates(at: through, promptTokens: record.tokens.promptTotal)
             let cost = (
-                Double(rec.tokens.input) * unit.inRate
-                    + Double(rec.tokens.cached) * unit.crRate
-                    + Double(rec.tokens.cw) * unit.cwRate
-                    + Double(rec.tokens.output) * unit.outRate
-            ) / 1000000.0
-            totalTokens += rec.tokens
-            totalDollars += cost
-            var entry = byModel[rec.model] ?? GeminiModelPeriodBreakdown(model: rec.model, tokens: .zero, dollars: 0)
-            entry.tokens += rec.tokens
-            entry.dollars += cost
-            byModel[rec.model] = entry
+                Double(record.tokens.input) * unit.inRate
+                    + Double(record.tokens.cached) * unit.crRate
+                    + Double(record.tokens.cw) * unit.cwRate
+                    + Double(record.tokens.output) * unit.outRate
+            ) / 1000000
+            tokens += record.tokens
+            dollars += cost
+            var model = models[record.model] ?? GeminiModelPeriodBreakdown(model: record.model, tokens: .zero, dollars: 0)
+            model.tokens += record.tokens
+            model.dollars += cost
+            models[record.model] = model
         }
 
-        let usedPct = max(window.lastUsed, window.maxUsed)
-        let projected: Double? = if !window.decreased, usedPct >= 1.0, totalDollars >= 0.03 {
-            totalDollars / (usedPct / 100.0)
-        } else {
-            nil
+        func result(plan: String?) -> GeminiValuationPeriod {
+            let used = max(window.lastUsed, window.maxUsed)
+            return GeminiValuationPeriod(
+                start: Date(timeIntervalSince1970: start), end: Date(timeIntervalSince1970: end),
+                scheduledEnd: Date(timeIntervalSince1970: window.resetsAt), usedPercent: used,
+                valuedThrough: Date(timeIntervalSince1970: through), tokens: tokens, dollars: dollars,
+                projectedDollars: !window.decreased && used >= 1 && dollars >= 0.03 ? dollars * 100 / used : nil,
+                models: models.values.sorted { $0.dollars > $1.dollars }, unreliable: window.decreased, planTitle: plan
+            )
         }
-        return GeminiValuationPeriod(
-            start: Date(timeIntervalSince1970: startTs),
-            end: Date(timeIntervalSince1970: endTs),
-            scheduledEnd: Date(timeIntervalSince1970: window.resetsAt),
-            usedPercent: usedPct,
-            valuedThrough: Date(timeIntervalSince1970: valuedTs),
-            tokens: totalTokens,
-            dollars: totalDollars,
-            projectedDollars: projected,
-            models: byModel.values.sorted { $0.dollars > $1.dollars },
-            unreliable: window.decreased,
-            planTitle: latestPlan
-        )
+    }
+}
+
+extension UsageCenterStore {
+    func claudeValuationPeriods(
+        evidences: [GeminiValuationEvidence], weekly: UsageQuotaObservation?, localOnly: Bool, prices: GeminiPriceBook, now: Date = Date()
+    ) throws -> [GeminiValuationPeriod] {
+        try Task.checkCancellation()
+        return try GeminiValuationCalculator.computePeriods(
+            provider: "claude", evidences: evidences, liveWeeklyObservation: weekly, priceBook: prices, now: now
+        ) { start, visit in
+            try forEachClaudeUsageRecord(since: start, localOnly: localOnly, visit: visit)
+        }
     }
 }
