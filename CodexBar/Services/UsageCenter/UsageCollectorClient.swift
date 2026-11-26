@@ -16,11 +16,24 @@ private final nonisolated class UsageCommandCancellation: @unchecked Sendable {
 }
 
 nonisolated enum UsageCommandRunner {
-    static func run(executable: String, arguments: [String], input: Data = Data(), timeout: TimeInterval = 45) async throws -> Data {
+    static func run(
+        executable: String,
+        arguments: [String],
+        input: Data = Data(),
+        timeout: TimeInterval = 45,
+        outputLimit: Int = 8 * 1024 * 1024
+    ) async throws -> Data {
         let cancellation = UsageCommandCancellation()
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) {
-                try execute(executable: executable, arguments: arguments, input: input, timeout: timeout, cancellation: cancellation)
+                try execute(
+                    executable: executable,
+                    arguments: arguments,
+                    input: input,
+                    timeout: timeout,
+                    outputLimit: outputLimit,
+                    cancellation: cancellation
+                )
             }.value
         } onCancel: {
             cancellation.cancel()
@@ -32,6 +45,7 @@ nonisolated enum UsageCommandRunner {
         arguments: [String],
         input: Data,
         timeout: TimeInterval,
+        outputLimit: Int,
         cancellation: UsageCommandCancellation
     ) throws -> Data {
         if cancellation.isCancelled {
@@ -94,7 +108,7 @@ nonisolated enum UsageCommandRunner {
                     inputClosed = true
                 }
             }
-            outputClosed = try drain(outputHandle.fileDescriptor, into: &output, limit: 8 * 1024 * 1024)
+            outputClosed = try drain(outputHandle.fileDescriptor, into: &output, limit: outputLimit)
             errorClosed = try drain(errorHandle.fileDescriptor, into: &errors, limit: 32768)
             var descriptors = [
                 pollfd(fd: outputClosed ? -1 : outputHandle.fileDescriptor, events: Int16(POLLIN), revents: 0),
@@ -105,7 +119,7 @@ nonisolated enum UsageCommandRunner {
                 poll(buffer.baseAddress, nfds_t(buffer.count), 100)
             }
         } while process.isRunning
-        _ = try drain(outputHandle.fileDescriptor, into: &output, limit: 8 * 1024 * 1024)
+        _ = try drain(outputHandle.fileDescriptor, into: &output, limit: outputLimit)
         _ = try drain(errorHandle.fileDescriptor, into: &errors, limit: 32768)
         try checkExitStatus(process.terminationStatus, errors: errors)
         return output
@@ -333,7 +347,7 @@ actor UsageCollectorClient {
         if let directory = source.collectorCacheDirectory, !directory.isEmpty {
             arguments += ["--state-dir", directory]
         }
-        let data = try await runCollector(source: source, arguments: arguments)
+        let data = try await runCollector(source: source, arguments: arguments, outputLimit: 24 * 1024 * 1024)
         return try JSONDecoder().decode(GeminiValuationEvidence.self, from: data)
     }
 
@@ -345,7 +359,7 @@ actor UsageCollectorClient {
         if !source.claudeHome.isEmpty {
             arguments += ["--claude-home", source.claudeHome]
         }
-        let data = try await runCollector(source: source, arguments: arguments)
+        let data = try await runCollector(source: source, arguments: arguments, outputLimit: 24 * 1024 * 1024)
         return try JSONDecoder().decode(GeminiValuationEvidence.self, from: data)
     }
 
@@ -428,7 +442,7 @@ actor UsageCollectorClient {
         ] where !path.isEmpty {
             arguments += [flag, path]
         }
-        let data = try await runCollector(source: source, arguments: arguments)
+        let data = try await runCollector(source: source, arguments: arguments, outputLimit: 24 * 1024 * 1024)
         guard let value = try? JSONDecoder().decode(UsageSourceTokenEvidence.self, from: data), value.isValid else {
             throw UsageCenterError(message: "设备 Token 历史格式无效")
         }
@@ -436,7 +450,7 @@ actor UsageCollectorClient {
         return value
     }
 
-    private func runCollector(source: UsageSource, arguments: [String]) async throws -> Data {
+    private func runCollector(source: UsageSource, arguments: [String], outputLimit: Int = 8 * 1024 * 1024) async throws -> Data {
         guard let script = Bundle.main.url(forResource: "UsageCollector", withExtension: "py") else {
             throw UsageCenterError(message: "App 包内缺少统计采集器")
         }
@@ -446,7 +460,7 @@ actor UsageCollectorClient {
             guard let python = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
                 throw UsageCenterError(message: "本机统计需要 Python 3.9 或以上")
             }
-            return try await UsageCommandRunner.run(executable: python, arguments: [script.path] + arguments)
+            return try await UsageCommandRunner.run(executable: python, arguments: [script.path] + arguments, outputLimit: outputLimit)
         }
         let bootstrap = "import sys; CODEXBAR_SCRIPT_SOURCE=sys.stdin.buffer.read(1048576); exec(compile(CODEXBAR_SCRIPT_SOURCE, '<codexbar>', 'exec'))"
         let command = (["python3", "-c", bootstrap] + arguments).map(Self.shellQuote).joined(separator: " ")
@@ -465,7 +479,7 @@ actor UsageCollectorClient {
             source.address,
             command
         ]
-        return try await UsageCommandRunner.run(executable: "/usr/bin/ssh", arguments: ssh, input: Data(contentsOf: script))
+        return try await UsageCommandRunner.run(executable: "/usr/bin/ssh", arguments: ssh, input: Data(contentsOf: script), outputLimit: outputLimit)
     }
 
     private static func shellQuote(_ value: String) -> String {

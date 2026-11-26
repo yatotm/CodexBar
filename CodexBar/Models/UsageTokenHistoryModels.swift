@@ -24,7 +24,7 @@ nonisolated struct UsageSourceTokenEvidence: Codable {
 
     var isValid: Bool {
         schema == 1 && generatedAt.isFinite && generatedAt > 0 && scannedAt.isFinite && scannedAt >= 0
-            && scannedAt <= generatedAt + 60 && records.count <= 20000 && unattributedCount >= 0
+            && scannedAt <= generatedAt + 60 && records.count <= 60000 && unattributedCount >= 0
             && (accountKey == nil || accountKey?.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil)
             && (unattributedDays == nil || (unattributedDays!.count <= 72 && unattributedDays!.allSatisfy { Int($0.key) != nil && $0.value >= 0 }))
             && records.allSatisfy {

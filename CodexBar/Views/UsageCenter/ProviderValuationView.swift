@@ -244,6 +244,10 @@ private struct ProviderPeriodDetails: View {
             } else if period.projectedDollars == nil {
                 Text("已用周限低于 1% 或已记录折合价值不足 $0.03, 暂不外推周限总额").foregroundStyle(.secondary)
             }
+            if !period.unknownModels.isEmpty {
+                Text("未收录模型 \(period.unknownModels.joined(separator: ", ")) 按默认档位单价估算")
+                    .foregroundStyle(.secondary)
+            }
             if !period.models.isEmpty {
                 Divider().opacity(0.5)
                 UsageDisclosure(title: "按模型查看估值明细 (\(period.models.count))") {
@@ -281,10 +285,23 @@ private struct ProviderPeriodDetails: View {
 
     private func unitPriceCaption(for modelName: String) -> some View {
         let rate = priceBook.rate(for: modelName, provider: provider)
+        let startTs = period.start.timeIntervalSince1970
         let refTs = min(Date().timeIntervalSince1970, period.valuedThrough.timeIntervalSince1970)
+        if let promo = rate.promo, startTs < promo.endExclusive, refTs >= promo.endExclusive {
+            let before = rate.unitRates(at: promo.endExclusive - 1, promptTokens: 0)
+            let after = rate.unitRates(at: promo.endExclusive, promptTokens: 0)
+            return Text(
+                "API 单价 / 百万 Token · 促销期 \(currency(before.inRate))/\(currency(before.outRate)) · 促销后 \(currency(after.inRate))/\(currency(after.outRate))"
+            )
+            .font(.system(size: 11))
+            .foregroundStyle(.tertiary)
+        }
         let unit = rate.unitRates(at: refTs, promptTokens: 0)
+        let writeText = unit.cw1hRate != unit.cwRate
+            ? "缓存写入(5m/1h) \(currency(unit.cwRate))/\(currency(unit.cw1hRate))"
+            : "缓存写入 \(currency(unit.cwRate))"
         return Text(
-            "API 单价 / 百万 Token · 输入 \(currency(unit.inRate)) · 缓存读取 \(currency(unit.crRate)) · 缓存写入 \(currency(unit.cwRate)) · 输出 \(currency(unit.outRate))"
+            "API 单价 / 百万 Token · 输入 \(currency(unit.inRate)) · 缓存读取 \(currency(unit.crRate)) · \(writeText) · 输出 \(currency(unit.outRate))"
         )
         .font(.system(size: 11))
         .foregroundStyle(.tertiary)

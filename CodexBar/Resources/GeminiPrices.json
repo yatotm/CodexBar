@@ -89,6 +89,7 @@
       "input": 10.0,
       "cachedInput": 0.25,
       "cacheWrite": 12.5,
+      "cacheWrite1h": 20.0,
       "output": 50.0,
       "longThreshold": null
     },
@@ -99,17 +100,30 @@
       "input": 8.0,
       "cachedInput": 0.2,
       "cacheWrite": 10.0,
+      "cacheWrite1h": 16.0,
       "output": 40.0,
       "longThreshold": null
     },
     {
       "id": "claude-opus-5.5",
       "provider": "claude",
-      "match": ["opus-5-5", "opus-5.5", "opus-5", "opus 5"],
+      "match": ["opus-5-5", "opus-5.5"],
       "input": 4.0,
       "cachedInput": 0.2,
       "cacheWrite": 5.0,
+      "cacheWrite1h": 8.0,
       "output": 20.0,
+      "longThreshold": null
+    },
+    {
+      "id": "claude-opus-5",
+      "provider": "claude",
+      "match": ["opus-5", "opus 5"],
+      "input": 5.0,
+      "cachedInput": 0.5,
+      "cacheWrite": 6.25,
+      "cacheWrite1h": 10.0,
+      "output": 25.0,
       "longThreshold": null
     },
     {
@@ -119,6 +133,7 @@
       "input": 5.0,
       "cachedInput": 0.5,
       "cacheWrite": 6.25,
+      "cacheWrite1h": 10.0,
       "output": 25.0,
       "longThreshold": null
     },
@@ -129,11 +144,13 @@
       "input": 5.0,
       "cachedInput": 0.5,
       "cacheWrite": 6.25,
+      "cacheWrite1h": 10.0,
       "output": 25.0,
       "longThreshold": 200000,
       "longInput": 10.0,
       "longCachedInput": 1.0,
       "longCacheWrite": 12.5,
+      "longCacheWrite1h": 20.0,
       "longOutput": 37.5
     },
     {
@@ -143,6 +160,7 @@
       "input": 2.0,
       "cachedInput": 0.1,
       "cacheWrite": 2.5,
+      "cacheWrite1h": 4.0,
       "output": 10.0,
       "longThreshold": null
     },
@@ -153,6 +171,7 @@
       "input": 3.0,
       "cachedInput": 0.3,
       "cacheWrite": 3.75,
+      "cacheWrite1h": 6.0,
       "output": 15.0,
       "longThreshold": null
     },
@@ -163,11 +182,13 @@
       "input": 3.0,
       "cachedInput": 0.3,
       "cacheWrite": 3.75,
+      "cacheWrite1h": 6.0,
       "output": 15.0,
       "longThreshold": 200000,
       "longInput": 6.0,
       "longCachedInput": 0.6,
       "longCacheWrite": 7.5,
+      "longCacheWrite1h": 12.0,
       "longOutput": 22.5
     },
     {
@@ -177,11 +198,13 @@
       "input": 0.1,
       "cachedInput": 0.01,
       "cacheWrite": 0.125,
+      "cacheWrite1h": 0.2,
       "output": 0.5,
       "longThreshold": 100000,
       "longInput": 0.5,
       "longCachedInput": 0.05,
       "longCacheWrite": 0.625,
+      "longCacheWrite1h": 1.0,
       "longOutput": 2.5
     },
     {
@@ -191,6 +214,7 @@
       "input": 1.0,
       "cachedInput": 0.1,
       "cacheWrite": 1.25,
+      "cacheWrite1h": 2.0,
       "output": 5.0,
       "longThreshold": null
     }

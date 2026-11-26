@@ -13,6 +13,7 @@ nonisolated struct GeminiPriceBook: Decodable {
         let inRate: Double
         let crRate: Double
         let cwRate: Double
+        let cw1hRate: Double
         let outRate: Double
     }
 
@@ -23,27 +24,43 @@ nonisolated struct GeminiPriceBook: Decodable {
         let input: Double
         let cachedInput: Double
         let cacheWrite: Double
+        var cacheWrite1h: Double?
         let output: Double
         let longThreshold: Int64?
         let longInput: Double?
         let longCachedInput: Double?
         let longCacheWrite: Double?
+        var longCacheWrite1h: Double?
         let longOutput: Double?
         let promo: Promotion?
 
         func unitRates(at timestamp: Double, promptTokens: Int64) -> UnitRates {
             if let promo, timestamp < promo.endExclusive {
-                return UnitRates(inRate: promo.input, crRate: promo.cachedInput, cwRate: promo.cacheWrite, outRate: promo.output)
+                return UnitRates(
+                    inRate: promo.input,
+                    crRate: promo.cachedInput,
+                    cwRate: promo.cacheWrite,
+                    cw1hRate: promo.cacheWrite,
+                    outRate: promo.output
+                )
             }
             if let threshold = longThreshold, promptTokens > threshold {
+                let cw = longCacheWrite ?? cacheWrite
                 return UnitRates(
                     inRate: longInput ?? input,
                     crRate: longCachedInput ?? cachedInput,
-                    cwRate: longCacheWrite ?? cacheWrite,
+                    cwRate: cw,
+                    cw1hRate: longCacheWrite1h ?? cacheWrite1h ?? cw,
                     outRate: longOutput ?? output
                 )
             }
-            return UnitRates(inRate: input, crRate: cachedInput, cwRate: cacheWrite, outRate: output)
+            return UnitRates(
+                inRate: input,
+                crRate: cachedInput,
+                cwRate: cacheWrite,
+                cw1hRate: cacheWrite1h ?? cacheWrite,
+                outRate: output
+            )
         }
     }
 
@@ -55,7 +72,7 @@ nonisolated struct GeminiPriceBook: Decodable {
 
     static let fallback = GeminiPriceBook(
         schema: 1,
-        asOf: "2026-11-25",
+        asOf: "2026-11-26",
         geminiApiSource: "https://ai.google.dev/gemini-api/docs/pricing",
         claudeApiSource: "https://docs.anthropic.com/en/docs/about-claude/pricing",
         rates: [
@@ -83,32 +100,37 @@ nonisolated struct GeminiPriceBook: Decodable {
             ),
             Rate(
                 id: "claude-mythos-5", provider: "claude", match: ["fable", "mythos"],
-                input: 8.0, cachedInput: 0.2, cacheWrite: 10.0, output: 40.0,
+                input: 8.0, cachedInput: 0.2, cacheWrite: 10.0, cacheWrite1h: 16.0, output: 40.0,
                 longThreshold: nil, longInput: nil, longCachedInput: nil, longCacheWrite: nil, longOutput: nil, promo: nil
             ),
             Rate(
-                id: "claude-opus-5.5", provider: "claude", match: ["opus-5", "opus 5"],
-                input: 4.0, cachedInput: 0.2, cacheWrite: 5.0, output: 20.0,
+                id: "claude-opus-5.5", provider: "claude", match: ["opus-5-5", "opus-5.5"],
+                input: 4.0, cachedInput: 0.2, cacheWrite: 5.0, cacheWrite1h: 8.0, output: 20.0,
+                longThreshold: nil, longInput: nil, longCachedInput: nil, longCacheWrite: nil, longOutput: nil, promo: nil
+            ),
+            Rate(
+                id: "claude-opus-5", provider: "claude", match: ["opus-5", "opus 5"],
+                input: 5.0, cachedInput: 0.5, cacheWrite: 6.25, cacheWrite1h: 10.0, output: 25.0,
                 longThreshold: nil, longInput: nil, longCachedInput: nil, longCacheWrite: nil, longOutput: nil, promo: nil
             ),
             Rate(
                 id: "claude-opus-legacy", provider: "claude", match: ["opus"],
-                input: 5.0, cachedInput: 0.5, cacheWrite: 6.25, output: 25.0,
-                longThreshold: 200000, longInput: 10.0, longCachedInput: 1.0, longCacheWrite: 12.5, longOutput: 37.5, promo: nil
+                input: 5.0, cachedInput: 0.5, cacheWrite: 6.25, cacheWrite1h: 10.0, output: 25.0,
+                longThreshold: 200000, longInput: 10.0, longCachedInput: 1.0, longCacheWrite: 12.5, longCacheWrite1h: 20.0, longOutput: 37.5, promo: nil
             ),
             Rate(
                 id: "claude-sonnet-5.5", provider: "claude", match: ["sonnet-5", "sonnet 5"],
-                input: 2.0, cachedInput: 0.1, cacheWrite: 2.5, output: 10.0,
+                input: 2.0, cachedInput: 0.1, cacheWrite: 2.5, cacheWrite1h: 4.0, output: 10.0,
                 longThreshold: nil, longInput: nil, longCachedInput: nil, longCacheWrite: nil, longOutput: nil, promo: nil
             ),
             Rate(
                 id: "claude-sonnet-legacy", provider: "claude", match: ["sonnet"],
-                input: 3.0, cachedInput: 0.3, cacheWrite: 3.75, output: 15.0,
-                longThreshold: 200000, longInput: 6.0, longCachedInput: 0.6, longCacheWrite: 7.5, longOutput: 22.5, promo: nil
+                input: 3.0, cachedInput: 0.3, cacheWrite: 3.75, cacheWrite1h: 6.0, output: 15.0,
+                longThreshold: 200000, longInput: 6.0, longCachedInput: 0.6, longCacheWrite: 7.5, longCacheWrite1h: 12.0, longOutput: 22.5, promo: nil
             ),
             Rate(
                 id: "claude-haiku-legacy", provider: "claude", match: ["haiku"],
-                input: 1.0, cachedInput: 0.1, cacheWrite: 1.25, output: 5.0,
+                input: 1.0, cachedInput: 0.1, cacheWrite: 1.25, cacheWrite1h: 2.0, output: 5.0,
                 longThreshold: nil, longInput: nil, longCachedInput: nil, longCacheWrite: nil, longOutput: nil, promo: nil
             )
         ]
@@ -124,12 +146,17 @@ nonisolated struct GeminiPriceBook: Decodable {
         return parsed
     }
 
-    func rate(for model: String, provider: String = "gemini") -> Rate {
+    func knownRate(for model: String, provider: String = "gemini") -> Rate? {
         let lower = model.lowercased()
         let candidates = rates.filter { $0.provider == nil || $0.provider == provider }
-        if let hit = candidates.first(where: { candidate in candidate.match.contains { lower.contains($0) } }) {
+        return candidates.first { candidate in candidate.match.contains { lower.contains($0) } }
+    }
+
+    func rate(for model: String, provider: String = "gemini") -> Rate {
+        if let hit = knownRate(for: model, provider: provider) {
             return hit
         }
+        let candidates = rates.filter { $0.provider == nil || $0.provider == provider }
         if provider == "claude" {
             return candidates.first { $0.id.contains("sonnet") } ?? Self.fallback.rates.last!
         }
@@ -182,6 +209,7 @@ nonisolated struct GeminiValuationPeriod: Identifiable, Equatable {
     let models: [GeminiModelPeriodBreakdown]
     let unreliable: Bool
     let planTitle: String?
+    var unknownModels: [String] = []
 
     var id: Double {
         scheduledEnd.timeIntervalSince1970
@@ -234,16 +262,25 @@ nonisolated enum GeminiValuationCalculator {
             let nextStart = settled.indices.contains(index + 1) ? settled[index + 1].resetsAt - 604800 : window.resetsAt
             let end = min(nextStart, window.resetsAt)
             guard start < nowTs, start < end else { return nil }
-            return PeriodTotals(window: window, start: start, end: end, through: min(end, nowTs))
+            // 分子金额与分母百分比对齐至最新有效采样时间, 避免采样停滞后多计消费
+            let alignedThrough = window.lastAt >= start ? min(end, nowTs, window.lastAt) : min(end, nowTs)
+            return PeriodTotals(window: window, start: start, end: end, through: alignedThrough)
         }
         guard let firstStart = periods.first?.start else { return [] }
-        var rates: [String: GeminiPriceBook.Rate] = [:]
+        var rates: [String: (rate: GeminiPriceBook.Rate, unknown: Bool)] = [:]
         func accumulate(_ record: GeminiStepUsageRecord) {
+            guard record.tokens.input > 0 || record.tokens.cached > 0 || record.tokens.cw > 0 || record.tokens.output > 0 else { return }
             guard let index = periods.lastIndex(where: { $0.start <= record.at }),
                   record.at < periods[index].end, record.at <= periods[index].through else { return }
-            let rate = rates[record.model] ?? priceBook.rate(for: record.model, provider: provider)
-            rates[record.model] = rate
-            periods[index].add(record, rate: rate)
+            let resolved: (rate: GeminiPriceBook.Rate, unknown: Bool) = if let cached = rates[record.model] {
+                cached
+            } else if let known = priceBook.knownRate(for: record.model, provider: provider) {
+                (known, false)
+            } else {
+                (priceBook.rate(for: record.model, provider: provider), true)
+            }
+            rates[record.model] = resolved
+            periods[index].add(record, rate: resolved.rate, unknownModel: resolved.unknown)
         }
 
         var evidenceRecords: [String: GeminiStepUsageRecord] = [:]
@@ -276,13 +313,15 @@ nonisolated enum GeminiValuationCalculator {
         var tokens = GeminiStepTokens.zero
         var dollars = 0.0
         var models: [String: GeminiModelPeriodBreakdown] = [:]
+        var unknownModels: Set<String> = []
 
-        mutating func add(_ record: GeminiStepUsageRecord, rate: GeminiPriceBook.Rate) {
-            let unit = rate.unitRates(at: through, promptTokens: record.tokens.promptTotal)
+        mutating func add(_ record: GeminiStepUsageRecord, rate: GeminiPriceBook.Rate, unknownModel: Bool) {
+            let unit = rate.unitRates(at: record.at, promptTokens: record.tokens.promptTotal)
             let cost = (
                 Double(record.tokens.input) * unit.inRate
                     + Double(record.tokens.cached) * unit.crRate
-                    + Double(record.tokens.cw) * unit.cwRate
+                    + Double(record.tokens.cw5m) * unit.cwRate
+                    + Double(record.tokens.cw1h) * unit.cw1hRate
                     + Double(record.tokens.output) * unit.outRate
             ) / 1000000
             tokens += record.tokens
@@ -291,6 +330,9 @@ nonisolated enum GeminiValuationCalculator {
             model.tokens += record.tokens
             model.dollars += cost
             models[record.model] = model
+            if unknownModel {
+                unknownModels.insert(record.model)
+            }
         }
 
         func result(plan: String?) -> GeminiValuationPeriod {
@@ -300,7 +342,8 @@ nonisolated enum GeminiValuationCalculator {
                 scheduledEnd: Date(timeIntervalSince1970: window.resetsAt), usedPercent: used,
                 valuedThrough: Date(timeIntervalSince1970: through), tokens: tokens, dollars: dollars,
                 projectedDollars: !window.decreased && used >= 1 && dollars >= 0.03 ? dollars * 100 / used : nil,
-                models: models.values.sorted { $0.dollars > $1.dollars }, unreliable: window.decreased, planTitle: plan
+                models: models.values.sorted { $0.dollars > $1.dollars }, unreliable: window.decreased, planTitle: plan,
+                unknownModels: unknownModels.sorted()
             )
         }
     }

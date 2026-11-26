@@ -271,6 +271,7 @@ nonisolated struct UsageRecord: Codable {
     let output: Int64
     let cacheRead: Int64
     let cacheWrite: Int64
+    var cacheWrite1h: Int64?
     let reasoning: Int64
     let turns: Int64
     let tools: Int64
@@ -282,6 +283,7 @@ nonisolated struct UsageRecord: Codable {
 
     var isValid: Bool {
         let counters = [input, output, cacheRead, cacheWrite, reasoning, turns, tools, permissions, compactions, subagents, durationMs]
+        let validCacheWrite1h = cacheWrite1h.map { $0 >= 0 && $0 <= cacheWrite } ?? true
         return id.count == 64 && session.count == 64
             && ["codex", "claude", "gemini"].contains(provider)
             && UsageAuthentication(rawValue: auth) != nil
@@ -289,6 +291,7 @@ nonisolated struct UsageRecord: Codable {
             && model.count <= 120 && project.count <= 120 && kind.count <= 30 && state.count <= 30
             && observedAt.isFinite && observedAt > 0 && observedAt < Date().timeIntervalSince1970 + 86400
             && counters.allSatisfy { $0 >= 0 && $0 <= 1000000000000 }
+            && validCacheWrite1h
     }
 
     var totalTokens: Int64 {

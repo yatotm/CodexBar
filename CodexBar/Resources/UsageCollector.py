@@ -367,6 +367,11 @@ class Database:
             # 流式响应可能多次落盘, 同一请求的各计数只保留最大值
             for key in COUNTERS:
                 record[key] = max(record[key], previous.get(key, 0))
+            merged_cw1h = min(max(record.get("cacheWrite1h", 0), previous.get("cacheWrite1h", 0)), record["cacheWrite"])
+            if merged_cw1h > 0:
+                record["cacheWrite1h"] = merged_cw1h
+            elif "cacheWrite1h" in record:
+                record.pop("cacheWrite1h", None)
             if record["kind"] != "activity":
                 record["observedAt"] = min(record["observedAt"], previous["observedAt"])
                 record["day"] = previous["day"]
@@ -554,9 +559,13 @@ class Collector:
             state["model"] = text(message.get("model")) or state.get("model", "未知")
             usage = message.get("usage")
             if isinstance(usage, dict) and message.get("id"):
+                cw_total = number(usage.get("cache_creation_input_tokens"))
+                cache_detail = usage.get("cache_creation")
+                cw_1h = number(cache_detail.get("ephemeral_1h_input_tokens")) if isinstance(cache_detail, dict) else 0
+                extra = {"cacheWrite1h": min(cw_1h, cw_total)} if cw_1h > 0 and cw_total > 0 else {}
                 self.emit(state, "usage", message["id"], date,
                           input=number(usage.get("input_tokens")), output=number(usage.get("output_tokens")),
-                          cacheRead=number(usage.get("cache_read_input_tokens")), cacheWrite=number(usage.get("cache_creation_input_tokens")))
+                          cacheRead=number(usage.get("cache_read_input_tokens")), cacheWrite=cw_total, **extra)
             content = message.get("content")
             if isinstance(content, list):
                 for item in content:
@@ -681,11 +690,15 @@ class Collector:
             saved = self.db.connection.execute("SELECT inode, offset, prefix, state FROM files WHERE id=?", (identity,)).fetchone()
             inode = str(stat.st_dev) + ":" + str(stat.st_ino)
             previous_state = json.loads(saved[3]) if saved else {}
-            if saved and saved[0] == inode and saved[1] == stat.st_size and previous_state.get("mtimeNs") == stat.st_mtime_ns:
+            needs_cw1h = (
+                provider == "claude" and not cid and path.parent.name != "signals"
+                and not previous_state.get("cw1hScanned") and stat.st_mtime >= time.time() - 75 * 86400
+            )
+            if saved and not needs_cw1h and saved[0] == inode and saved[1] == stat.st_size and previous_state.get("mtimeNs") == stat.st_mtime_ns:
                 return
             with path.open("rb") as stream:
                 prefix = hashlib.sha256(stream.read(min(256, saved[1] if saved else 256))).hexdigest()
-                continuing = saved and saved[0] == inode and saved[1] < stat.st_size and saved[2] == prefix
+                continuing = not needs_cw1h and saved and saved[0] == inode and saved[1] < stat.st_size and saved[2] == prefix
                 offset = saved[1] if continuing else 0
                 state = previous_state if continuing else {"provider": provider, "session": identity, "file": digest(provider, path.stem), "model": "未知"}
                 if cid:
@@ -739,6 +752,8 @@ class Collector:
                 offset = stat.st_size if hit_stale_io_error else stream.tell()
                 if time.monotonic() >= self.deadline and offset < stat.st_size:
                     self.scan_complete = False
+                if provider == "claude" and offset >= stat.st_size:
+                    state["cw1hScanned"] = True
                 state["mtimeNs"] = stat.st_mtime_ns
                 try:
                     stream.seek(0)
@@ -1111,19 +1126,19 @@ class ValuationLedger:
             self.complete = False
 
     @staticmethod
-    def without_transient_declines(rows):
+    def without_transient_declines(rows, tolerance=1, recovery_window=120):
         kept = []
         index = 0
         while index < len(rows):
             current = rows[index]
-            if not kept or current[3] + 1 >= kept[-1][3]:
+            if not kept or current[3] + tolerance >= kept[-1][3]:
                 kept.append(current)
                 index += 1
                 continue
             # 同一窗口的旧回执只有在短时间内恢复到原值后才排除
             # 固定首个低值的时间, 后续低值不能延长恢复期限
             previous_used = kept[-1][3]
-            deadline = current[2] + 120
+            deadline = current[2] + recovery_window
             recovery = index + 1
             while recovery < len(rows) and rows[recovery][2] <= deadline and rows[recovery][3] < previous_used:
                 recovery += 1
@@ -1135,17 +1150,18 @@ class ValuationLedger:
         return kept, False
 
     @classmethod
-    def build_windows(cls, rows):
+    def build_windows(cls, rows, decline_filter=None):
         groups = []
         for row in rows:
             if not groups or abs(groups[-1][0][1] - row[1]) > 2:
                 groups.append([])
             groups[-1].append(row)
         windows = []
+        checker = decline_filter or cls.without_transient_declines
         for group in groups:
             group.sort(key=lambda row: (row[2], row[3]))
             # 必须在日内首尾压缩前判断, 旧压缩缓存不足以证明中间的恢复过程
-            group, decreased = cls.without_transient_declines(group)
+            group, decreased = checker(group)
             first, last = group[0], group[-1]
             points = {}
             for _, _, at, used in group:
@@ -1243,7 +1259,8 @@ class TokenValueHistory(ValuationLedger):
     """独立的逐请求计价证据, 不改写设备统计与额度历史"""
 
     filename = "token-value-v1.sqlite"
-    max_records = 20000
+    max_records = 60000
+    context_version = 2
 
     def __init__(self, directory, home, budget, read_only=False):
         super().__init__(directory, home, budget, self.filename, read_only)
@@ -1256,18 +1273,25 @@ class TokenValueHistory(ValuationLedger):
                 CREATE INDEX IF NOT EXISTS usage_at ON usage(at);
                 CREATE TABLE IF NOT EXISTS token_state(key TEXT PRIMARY KEY,value TEXT);
                 CREATE TABLE IF NOT EXISTS request_inputs(id TEXT PRIMARY KEY, input_tokens INTEGER NOT NULL) WITHOUT ROWID;
+                CREATE TABLE IF NOT EXISTS thread_links(session TEXT PRIMARY KEY, parent TEXT NOT NULL) WITHOUT ROWID;
+                CREATE TABLE IF NOT EXISTS thread_speeds(session TEXT NOT NULL, at REAL NOT NULL, speed TEXT NOT NULL, PRIMARY KEY(session, at)) WITHOUT ROWID;
+                CREATE TABLE IF NOT EXISTS usage_turns(id TEXT PRIMARY KEY, session TEXT NOT NULL, turn_at REAL NOT NULL, local_speed_at REAL) WITHOUT ROWID;
+                CREATE INDEX IF NOT EXISTS usage_turns_session ON usage_turns(session);
             """)
         metadata = dict(self.connection.execute("SELECT key,value FROM token_state"))
         self.context_scanned = "contextScannedAt" in metadata
+        saved_version = int(metadata.get("contextVersion", "1" if self.context_scanned else "0"))
+        self.exported_context_version = saved_version if saved_version > 0 else None
         self.complete = metadata.get("contextComplete", metadata.get("complete")) == "true"
         self.scanned_at = float(metadata.get("contextScannedAt", metadata.get("scannedAt", 0)))
         self.has_request_inputs = not read_only or self.connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='request_inputs'").fetchone() is not None
+        self.has_turn_tables = not read_only
 
     @staticmethod
     def file_key(path):
         # 旧采集器也可能续写账本, 独立游标从原始请求补证且不会覆盖旧游标
-        return digest("token-value-turn-model", str(path))
+        return digest("token-value-turn-speed-v2", str(path))
 
     def scan_file(self, path):
         try:
@@ -1282,7 +1306,15 @@ class TokenValueHistory(ValuationLedger):
     def authentication(state):
         if state.get("auth") in ("oauth", "api"):
             return state["auth"]
+        if state.get("confirmedOauth") and state.get("provider", "unknown") in ("openai", "unknown"):
+            return "oauth"
         return "unknown" if state.get("provider", "unknown") in ("openai", "unknown") else "api"
+
+    @staticmethod
+    def normalize_service_tier(speed):
+        if speed is None or isinstance(speed, str):
+            return {None: "standard", "default": "standard", "priority": "fast"}.get(speed, text(speed, 40))
+        return "unsupported"
 
     def observe(self, row, state):
         payload = row.get("payload")
@@ -1294,60 +1326,105 @@ class TokenValueHistory(ValuationLedger):
         at = date.timestamp()
         if typ == "session_meta":
             state["session"] = digest("codex-session", payload.get("id", payload.get("session_id", state["session"])))
+            source = payload.get("source")
+            subagent = source.get("subagent") if isinstance(source, dict) else None
+            spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+            parent_id = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
+            if self.has_turn_tables and isinstance(parent_id, str) and parent_id:
+                parent_session = digest("codex-session", parent_id)
+                self.connection.execute("INSERT OR REPLACE INTO thread_links VALUES(?,?)", (state["session"], parent_session))
         if typ == "turn_context" and isinstance(payload.get("turn_id"), str) and payload["turn_id"]:
             turn = digest("codex-value-turn", payload["turn_id"])
             if state.get("turn") != turn:
-                state.pop("pending", None)
+                state["turnHadUsage"] = False
             state["turn"] = turn
+            state["turnStarts"] = (state.get("turnStarts", []) + [[state["session"], turn, at]])[-128:]
             model = text(payload.get("model"), 120)
             if model and model not in ("unknown", "未知"):
                 # 回执可能在下一轮开始后才落盘, 保留同一会话近期已生效的轮次模型
                 evidence = [state["session"], turn, at, model]
                 state["turnModels"] = (state.get("turnModels", []) + [evidence])[-128:]
+            bound_speed = self.normalize_service_tier(payload["service_tier"]) if "service_tier" in payload else state.get("speed")
+            bound_speed_at = at if "service_tier" in payload else state.get("speedAt")
+            if bound_speed is not None:
+                # 轮次开始时已生效的速度不会因轮次中途切换配置而改变当前轮计费
+                speed_evidence = [state["session"], turn, at, bound_speed, bound_speed_at]
+                state["turnSpeeds"] = (state.get("turnSpeeds", []) + [speed_evidence])[-128:]
         settings = payload.get("thread_settings", {}) if typ == "event_msg" and sub == "thread_settings_applied" else payload
         if isinstance(settings, dict) and (typ in ("session_meta", "turn_context") or sub == "thread_settings_applied"):
             provider = settings.get("model_provider_id", settings.get("model_provider"))
             if isinstance(provider, str) and provider != state.get("provider"):
                 state["provider"] = provider
-                for key in ("auth", "account", "pending", "speed"):
+                for key in ("auth", "account", "confirmedOauth", "confirmedAccount", "pending", "speed", "speedAt", "turnSpeeds"):
                     state.pop(key, None)
             mode = settings.get("auth_mode")
             if mode in ("chatgpt", "chatgptAuthTokens", "apiKey", "apikey", "api_key"):
                 auth = "oauth" if mode.startswith("chatgpt") else "api"
                 if state.get("auth") != auth:
                     state.pop("pending", None)
+                    state.pop("confirmedOauth", None)
+                    state.pop("confirmedAccount", None)
                 state["auth"] = auth
             if isinstance(settings.get("account_id"), str):
                 state["account"] = digest("codex-account", settings["account_id"])
             if isinstance(settings.get("model"), str):
                 state["model"] = text(settings["model"], 120)
             if "service_tier" in settings:
-                speed = settings["service_tier"]
-                state["speed"] = {None: "standard", "default": "standard", "priority": "fast"}.get(speed, text(speed, 40)) if speed is None or isinstance(speed, str) else "unsupported"
+                speed = self.normalize_service_tier(settings["service_tier"])
+                state["speed"] = speed
+                state["speedAt"] = at
+                if self.has_turn_tables and at >= self.cutoff:
+                    self.connection.execute("INSERT OR REPLACE INTO thread_speeds VALUES(?,?,?)", (state["session"], at, speed))
+                # 首轮 turn_context 可能紧接在 thread_settings_applied 前落盘, 尚无请求时补绑轮次速度
+                current_turn = state.get("turn")
+                if current_turn and not state.get("turnHadUsage"):
+                    existing = next((entry[3] for entry in reversed(state.get("turnSpeeds", []))
+                                     if entry[1] == current_turn and entry[0] == state["session"]), None)
+                    if existing is None:
+                        state["turnSpeeds"] = (state.get("turnSpeeds", []) + [[state["session"], current_turn, at, speed, at]])[-128:]
         if typ == "token_usage_record" and isinstance(payload.get("usage"), dict) and payload.get("response_id"):
             state["exactUsage"] = True
             identity = digest("codex-value-response", payload["response_id"])
             turn_id = payload.get("turn_id")
             turn_model = None
+            turn_speed = None
+            turn_speed_at = state.get("speedAt")
+            turn_at = at
             if isinstance(turn_id, str) and turn_id:
                 turn = digest("codex-value-turn", turn_id)
+                if turn == state.get("turn"):
+                    state["turnHadUsage"] = True
                 turn_model = next((model for session, key, observed, model in reversed(state.get("turnModels", []))
                                    if key == turn and session == state["session"] and observed <= at), None)
-            if self.record_usage(identity, payload["usage"], state, at, turn_model):
+                speed_match = next((entry for entry in reversed(state.get("turnSpeeds", []))
+                                    if entry[1] == turn and entry[0] == state["session"] and entry[2] <= at), None)
+                if speed_match is not None:
+                    turn_speed = speed_match[3]
+                    turn_speed_at = speed_match[4] if len(speed_match) > 4 else speed_match[2]
+                turn_at = next((observed for session, key, observed in reversed(state.get("turnStarts", []))
+                                if key == turn and session == state["session"] and observed <= at), at)
+            if self.record_usage(identity, payload["usage"], state, at, turn_model, turn_speed, turn_at, turn_speed_at):
                 supplied = payload["usage"].get("input_tokens")
                 if type(supplied) is int:
                     self.connection.execute("INSERT OR IGNORE INTO request_inputs VALUES(?,?)", (identity, supplied))
-                state["pending"] = (state.get("pending", []) + [identity])[-128:]
+                if self.authentication(state) == "unknown":
+                    state["pending"] = (state.get("pending", []) + [identity])[-512:]
         elif typ == "event_msg" and sub == "token_count":
             limits = payload.get("rate_limits")
             receipt = isinstance(limits, dict) and limits.get("limit_id") in (None, "codex") and isinstance(limits.get("plan_type"), str)
             receipt = receipt and bool(limits["plan_type"]) and self.authentication(state) != "api" and (state.get("provider") == "openai" or state.get("auth") == "oauth")
             account = limits.get("account_id") if isinstance(limits, dict) else None
-            account = digest("codex-account", account) if isinstance(account, str) and account else state.get("account")
-            pending = state.pop("pending", [])
+            account = digest("codex-account", account) if isinstance(account, str) and account else state.get("account") or state.get("confirmedAccount")
             if receipt:
+                pending = state.pop("pending", [])
+                state["confirmedOauth"] = True
+                if account:
+                    state["confirmedAccount"] = account
                 for identity in pending:
                     self.connection.execute("UPDATE usage SET auth='oauth',account=COALESCE(?,account) WHERE id=? AND auth='unknown'", (account, identity))
+            elif not state.get("confirmedOauth"):
+                # 尚未确认订阅身份的会话收到空回执时丢弃待配对记录, 避免后续无关回执误补
+                state.pop("pending", None)
             info = payload.get("info")
             total = info.get("total_token_usage") if isinstance(info, dict) else None
             if isinstance(total, dict):
@@ -1361,34 +1438,90 @@ class TokenValueHistory(ValuationLedger):
                     self.record_usage(digest("codex-value-cumulative", state["session"], total), delta, context, at)
                 state["total"] = {key: max(number(value), previous.get(key, 0)) for key, value in total.items()}
 
-    def record_usage(self, identity, usage, state, at, turn_model=None):
+    def record_usage(self, identity, usage, state, at, turn_model=None, turn_speed=None, turn_at=None, local_speed_at=None):
         values = [usage.get(key, 0) for key in ("input_tokens", "cached_input_tokens", "output_tokens")]
         if at < self.cutoff or not all(type(value) is int and 0 <= value <= 10**15 for value in values):
             return False
         supplied, cached, output = values
         if cached > supplied or supplied + output == 0:
             return False
+        resolved_speed = turn_speed if turn_speed is not None else state.get("speed")
+        account = state.get("account") or state.get("confirmedAccount")
         self.connection.execute("""INSERT INTO usage VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
             model=CASE WHEN usage.model='unknown' OR (usage.model=? AND usage.input=excluded.input
                        AND usage.cached=excluded.cached AND usage.output=excluded.output) THEN excluded.model ELSE usage.model END,
-            speed=COALESCE(usage.speed,excluded.speed),
+            speed=CASE WHEN usage.speed IS NULL OR (excluded.speed IS NOT NULL AND usage.input=excluded.input
+                       AND usage.cached=excluded.cached AND usage.output=excluded.output) THEN excluded.speed ELSE usage.speed END,
             auth=CASE WHEN excluded.auth!='unknown' THEN excluded.auth ELSE usage.auth END,
             account=COALESCE(excluded.account,usage.account)
-            """, (identity, at, turn_model or state.get("model", "unknown"), state.get("speed"), supplied - cached, cached, output,
-                  self.authentication(state), state.get("account"), state.get("model") if turn_model else None))
+            """, (identity, at, turn_model or state.get("model", "unknown"), resolved_speed, supplied - cached, cached, output,
+                  self.authentication(state), account, state.get("model") if turn_model else None))
+        if self.has_turn_tables:
+            self.connection.execute(
+                "INSERT OR REPLACE INTO usage_turns VALUES(?,?,?,?)",
+                (identity, state["session"], turn_at if turn_at is not None else at, local_speed_at)
+            )
         return True
+
+    def propagate_parent_speeds(self):
+        if not self.has_turn_tables:
+            return
+        links = dict(self.connection.execute("SELECT session,parent FROM thread_links"))
+        if not links:
+            return
+        speeds_by_session = {}
+        for session, at, speed in self.connection.execute("SELECT session,at,speed FROM thread_speeds ORDER BY session,at"):
+            speeds_by_session.setdefault(session, []).append((at, speed))
+        if not speeds_by_session:
+            return
+        updates = []
+        for session in links:
+            ancestors = []
+            current = links.get(session)
+            seen = {session}
+            while current and current not in seen and len(ancestors) < 8:
+                seen.add(current)
+                ancestors.append(current)
+                current = links.get(current)
+            ancestor_events = sorted(
+                event for ancestor in ancestors for event in speeds_by_session.get(ancestor, ())
+            )
+            if not ancestor_events:
+                continue
+            rows = self.connection.execute(
+                "SELECT id,turn_at,local_speed_at FROM usage_turns WHERE session=?", (session,)
+            ).fetchall()
+            for identity, turn_at, local_speed_at in rows:
+                floor_at = local_speed_at if local_speed_at is not None else -1.0
+                chosen = None
+                for event_at, speed in ancestor_events:
+                    if event_at > turn_at:
+                        break
+                    if event_at > floor_at:
+                        chosen = speed
+                if chosen is not None:
+                    updates.append((chosen, identity, chosen))
+        if updates:
+            self.connection.executemany(
+                "UPDATE usage SET speed=? WHERE id=? AND (speed IS NULL OR speed!=?)", updates
+            )
 
     def scan(self):
         self.complete = True
         super().scan()
+        self.propagate_parent_speeds()
         self.scanned_at = time.time()
         self.connection.execute("DELETE FROM usage WHERE at<?", (self.cutoff,))
         self.connection.execute("DELETE FROM request_inputs WHERE id NOT IN (SELECT id FROM usage)")
+        self.connection.execute("DELETE FROM usage_turns WHERE id NOT IN (SELECT id FROM usage)")
+        self.connection.execute("DELETE FROM thread_speeds WHERE at<?", (self.cutoff,))
         self.connection.executemany("INSERT OR REPLACE INTO token_state VALUES(?,?)",
                                     [("complete", encode(self.complete)), ("scannedAt", str(self.scanned_at)),
-                                     ("contextComplete", encode(self.complete)), ("contextScannedAt", str(self.scanned_at))])
+                                     ("contextComplete", encode(self.complete)), ("contextScannedAt", str(self.scanned_at)),
+                                     ("contextVersion", str(self.context_version))])
         self.connection.commit()
         self.context_scanned = True
+        self.exported_context_version = self.context_version
 
     def export(self, account_key):
         request_input = "(SELECT input_tokens FROM request_inputs WHERE id=usage.id)" if self.has_request_inputs else "NULL"
@@ -1400,7 +1533,7 @@ class TokenValueHistory(ValuationLedger):
             (self.cutoff, account_key)))
         return {"schema": 1, "ready": True, "complete": self.complete, "generatedAt": time.time(),
                 "scannedAt": self.scanned_at, "accountKey": codex_account_key(self.home),
-                "requestContextVersion": 1 if self.context_scanned else None,
+                "requestContextVersion": self.exported_context_version,
                 "truncated": len(rows) > self.max_records, "unattributedCount": sum(unknown_days.values()), "unattributedDays": unknown_days,
                 "records": [{"id": row[0], "at": row[1], "model": row[2], "speed": row[3],
                              "tokens": dict(zip(("input", "cached", "output"), row[4:7])),
@@ -1876,7 +2009,7 @@ class GeminiValuationLedger:
     """增量记录 Gemini 周限窗口与逐轮 Token, 支持单机与多节点汇总估值"""
 
     filename = "gemini-valuation-v1.sqlite"
-    max_records = 25000
+    max_records = 60000
 
     def __init__(self, directory, gemini_home, budget, read_only=False):
         self.directory = directory
@@ -2030,6 +2163,29 @@ class GeminiValuationLedger:
             (sample_id, session, float(reset), at, float(used), plan, account)
         )
 
+    @staticmethod
+    def without_transient_declines(rows):
+        # 与 Claude 一致按会话隔离重绘回执, 同时容忍 Gemini 上游 2% / 30 分钟内的短暂估算波动
+        sessions = {}
+        for row in rows:
+            sessions.setdefault(row[0], []).append(row)
+        cleaned = []
+        for samples in sessions.values():
+            kept, decreased = ValuationLedger.without_transient_declines(samples, tolerance=2, recovery_window=1800)
+            if decreased:
+                return rows, True
+            cleaned.extend(kept)
+        high = -1
+        points = []
+        for row in sorted(cleaned, key=lambda r: (r[2], r[3])):
+            if row[3] >= high:
+                high = row[3]
+                if points and points[-1][2] == row[2]:
+                    points[-1] = row
+                else:
+                    points.append(row)
+        return points, False
+
     def export(self, include_records=True):
         active, _, owners, _ = load_gemini_account_context(self.home, ledger_path=self.directory / self.filename)
         samples = self.connection.execute(
@@ -2038,7 +2194,10 @@ class GeminiValuationLedger:
             tagged = [r for r in samples if isinstance(r[5], str) and re.fullmatch(r"[0-9a-f]{64}", r[5])]
             active = max(tagged, key=lambda r: r[2])[5] if tagged else None
         selected = [r for r in samples if active and (r[5] or owners.get(r[0])) == active]
-        windows = ValuationLedger.build_windows([r[:4] for r in selected]) if selected else []
+        windows = ValuationLedger.build_windows(
+            [r[:4] for r in selected],
+            decline_filter=self.without_transient_declines
+        ) if selected else []
         plans = []
         for _, reset, at, _, plan, _ in sorted(selected, key=lambda r: r[2]):
             if plan and (not plans or plans[-1]["plan"] != plan or abs(plans[-1]["resetsAt"] - reset) > 2):

@@ -89,6 +89,10 @@ def valid_record(rec):
         val = rec.get(key)
         if type(val) is not int or not (0 <= val <= 10 ** 12):
             return False
+    if "cacheWrite1h" in rec:
+        cw1h = rec["cacheWrite1h"]
+        if type(cw1h) is not int or not (0 <= cw1h <= rec["cacheWrite"]):
+            return False
     return True
 
 
@@ -480,6 +484,11 @@ class HubStore:
                             rec.setdefault("accountKey", prev["accountKey"])
                         for k in COUNTERS:
                             rec[k] = max(rec[k], prev.get(k, 0))
+                        cw1h = min(max(rec.get("cacheWrite1h", 0), prev.get("cacheWrite1h", 0)), rec["cacheWrite"])
+                        if cw1h > 0:
+                            rec["cacheWrite1h"] = cw1h
+                        elif "cacheWrite1h" in rec:
+                            rec.pop("cacheWrite1h", None)
                         if rec["kind"] != "activity":
                             rec["observedAt"] = min(rec["observedAt"], prev["observedAt"])
                             rec["day"] = prev["day"]
@@ -621,10 +630,10 @@ class HubStore:
                 unique[r["id"]] = {"id": r["id"], "at": r["observedAt"], "model": r["model"],
                                    "tokens": {"input": r["input"], "cached": r["cacheRead"],
                                               "cacheWrite": r["cacheWrite"], "output": r["output"]}}
-                if len(unique) > 20000:
+                if len(unique) > 60000:
                     break
         return {"accountScoped": True, "accountKey": account, "windows": [w for e in evidence for w in e["windows"]],
-                "records": list(unique.values())[:20000], "truncated": len(unique) > 20000,
+                "records": list(unique.values())[:60000], "truncated": len(unique) > 60000,
                 "planTier": next((e["planTier"] for e in evidence if e["planTier"]), None)}
 
     def pull(self, epoch, cursor, limit, gemini_account=None):

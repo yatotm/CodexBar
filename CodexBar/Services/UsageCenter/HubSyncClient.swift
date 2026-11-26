@@ -388,7 +388,7 @@ actor HubSyncClient {
         }
         var result = Data()
         for try await byte in bytes {
-            guard result.count < 8 * 1024 * 1024 else {
+            guard result.count < 24 * 1024 * 1024 else {
                 throw UsageCenterError(message: "中枢响应超过大小限制")
             }
             result.append(byte)

@@ -109,14 +109,23 @@ nonisolated enum UsageLogValuation {
             let shortCost = rate.shortContext.dollars(for: tokens)
             let dollars = shortCost * factors.lowerBound ... shortCost * factors.upperBound
             let credits: ClosedRange<Double>?
+            let reportedCredits: Double?
             if let input = rate.creditInput, let cached = rate.creditCachedInput, let output = rate.creditOutput {
                 let amount = (Double(tokens.input) * input + Double(tokens.cached) * cached + Double(tokens.output) * output) / 1000000
                 credits = amount * factors.lowerBound ... amount * factors.upperBound
+                reportedCredits = record.speed.flatMap { rate.reportedCreditMultiplier(for: $0) }.map { amount * $0 }
             } else {
                 credits = nil
+                reportedCredits = nil
             }
             if let credits {
-                dailyCredits[day, default: UsageCreditPart()].record(credits, tokens: tokens, model: record.model)
+                dailyCredits[day, default: UsageCreditPart()].record(
+                    credits,
+                    tokens: tokens,
+                    model: record.model,
+                    speed: record.speed,
+                    reportedCredits: reportedCredits
+                )
             } else {
                 unpricedDays.insert(day)
             }

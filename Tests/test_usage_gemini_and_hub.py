@@ -761,6 +761,117 @@ class GeminiAndHubTests(unittest.TestCase):
             thread.join()
             store.close()
 
+    def test_claude_cache_write_1h_extraction_backfill_and_hub_sync(self):
+        proj = self.claude / "projects/demo"
+        proj.mkdir(parents=True)
+        path = proj / "sess-cw1h.jsonl"
+        row = {
+            "type": "assistant",
+            "sessionId": "sess-cw1h",
+            "cwd": "/tmp/demo",
+            "timestamp": self.now.isoformat(),
+            "message": {
+                "id": "msg_cw1h_1",
+                "model": "claude-opus-5-5",
+                "usage": {
+                    "input_tokens": 100,
+                    "cache_read_input_tokens": 2000,
+                    "cache_creation_input_tokens": 1000,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 300,
+                        "ephemeral_1h_input_tokens": 700
+                    },
+                    "output_tokens": 50
+                }
+            }
+        }
+        path.write_text(json.dumps(row) + "\n")
+        state = self.root / "cw1h_state"
+        db = collector.Database(state)
+        try:
+            col = collector.Collector(db, self.codex, self.claude, ["claude"], budget=10)
+            col.collect()
+            exp = db.export("", 0, 100, ["claude"])
+            usage = [r for r in exp["records"] if r["kind"] == "usage"]
+            self.assertEqual(len(usage), 1)
+            self.assertEqual(usage[0]["cacheWrite"], 1000)
+            self.assertEqual(usage[0]["cacheWrite1h"], 700)
+
+            # 模拟旧版采集库已扫过文件但未记录 cacheWrite1h 和 cw1hScanned, 升级后单次自动回填
+            file_id = collector.digest(str(path))
+            old_state = json.loads(db.connection.execute("SELECT state FROM files WHERE id=?", (file_id,)).fetchone()[0])
+            old_state.pop("cw1hScanned", None)
+            db.connection.execute("UPDATE files SET state=? WHERE id=?", (collector.encode(old_state), file_id))
+            old_rec = dict(usage[0])
+            old_rec.pop("cacheWrite1h", None)
+            db.connection.execute("UPDATE records SET payload=? WHERE id=?", (collector.encode(old_rec), old_rec["id"]))
+            db.connection.commit()
+
+            col2 = collector.Collector(db, self.codex, self.claude, ["claude"], budget=10)
+            col2.collect()
+            exp2 = db.export("", 0, 100, ["claude"])
+            usage2 = [r for r in exp2["records"] if r["kind"] == "usage"]
+            self.assertEqual(usage2[0]["cacheWrite1h"], 700)
+        finally:
+            db.connection.close()
+
+        # 验证 Hub 接收可选 cacheWrite1h, 兼容缺省旧记录并拒绝非法越界值
+        store = hub_mod.HubStore(self.root / "cw1h_hub")
+        try:
+            store.upsert_node({"id": "n1", "enabled": True, "enabledProviders": ["claude"], "signingKey": "1" * 64})
+            store.ingest_push({"id": "n1"}, {"records": usage2, "quotas": [], "liveTasks": []})
+            pulled = store.pull("", 0, 100)
+            self.assertEqual(pulled["records"][0]["cacheWrite1h"], 700)
+            legacy_rec = dict(usage2[0])
+            legacy_rec.pop("cacheWrite1h", None)
+            self.assertTrue(hub_mod.valid_record(legacy_rec))
+            bad_rec = dict(usage2[0], cacheWrite1h=1001)
+            self.assertFalse(hub_mod.valid_record(bad_rec))
+        finally:
+            store.close()
+
+    def test_gemini_weekly_tolerates_transient_jitter_and_cross_session_redraws(self):
+        state = self.root / "gem_jitter"
+        ledger = collector.GeminiValuationLedger(state, self.gemini, budget=10)
+        try:
+            acc = collector.digest("gemini-account", "ultra@example.com")
+            reset = int(self.now.timestamp()) + 5 * 86400
+            t0 = self.now.timestamp() - 3600
+            # 同会话出现 0.76% 且 11 分钟后恢复的波动, 以及另一会话重绘旧值, 均不得误判为 decreased
+            samples = [
+                ("s1", reset, t0 + 0, 3.86),
+                ("s1", reset, t0 + 60, 3.10),
+                ("s2", reset, t0 + 120, 2.40),
+                ("s1", reset, t0 + 720, 3.88),
+                ("s1", reset, t0 + 780, 4.06),
+            ]
+            for idx, (sess, rst, at, used) in enumerate(samples):
+                ledger.connection.execute(
+                    "INSERT INTO samples VALUES(?,?,?,?,?,?,?)",
+                    (f"id-{idx}", sess, float(rst), at, used, "Google AI Ultra", acc)
+                )
+            ledger.connection.commit()
+            with patch.object(collector, "load_gemini_account_context", return_value=(acc, {}, {}, {acc})):
+                exported = ledger.export(include_records=False)
+            self.assertEqual(len(exported["windows"]), 1)
+            self.assertFalse(exported["windows"][0]["decreased"])
+            self.assertAlmostEqual(exported["windows"][0]["lastUsed"], 4.06, places=2)
+
+            # 同会话出现超过 2% 且 30 分钟以上未恢复的真实额度下调时, 仍须保留 decreased=True
+            reset2 = reset + 7 * 86400
+            for idx, (at, used) in enumerate([(t0 + 1000, 80.0), (t0 + 1060, 40.0), (t0 + 3000, 45.0)]):
+                ledger.connection.execute(
+                    "INSERT INTO samples VALUES(?,?,?,?,?,?,?)",
+                    (f"drop-{idx}", "s1", float(reset2), at, used, "Google AI Ultra", acc)
+                )
+            ledger.connection.commit()
+            with patch.object(collector, "load_gemini_account_context", return_value=(acc, {}, {}, {acc})):
+                exported2 = ledger.export(include_records=False)
+            dropped = next(w for w in exported2["windows"] if abs(w["resetsAt"] - reset2) <= 2)
+            self.assertTrue(dropped["decreased"])
+        finally:
+            ledger.connection.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -168,6 +168,22 @@ nonisolated struct UsagePriceBook: Decodable {
             default: includedSpeed?[speed.lowercased()]
             }
         }
+
+        func reportedCreditMultiplier(for speed: String) -> Double? {
+            switch speed.lowercased() {
+            case "", "standard", "default": 1
+            case "priority": apiSpeed?["fast"] ?? includedSpeed?["fast"]
+            default: apiSpeed?[speed.lowercased()] ?? includedSpeed?[speed.lowercased()]
+            }
+        }
+
+        /// 官方日报按购买积分倍率记账, 方案 B 将其折算为订阅周限等效倍率
+        func creditSubscriptionAdjustment(for speed: String) -> Double {
+            guard let included = subscriptionMultiplier(for: speed),
+                  let reported = reportedCreditMultiplier(for: speed),
+                  reported > 0 else { return 1 }
+            return included / reported
+        }
     }
 
     let schema: Int
@@ -321,6 +337,9 @@ nonisolated struct UsageCreditPart {
     var tokens: AnalyticsTokens? = .zero
     var modelTokens: [String: AnalyticsTokens] = [:]
     var modelCredits: [String: ClosedRange<Double>] = [:]
+    /// 设备日志按官方日报速度倍率算出的积分, 用于按速度核对官方模型折叠后的调整系数
+    var speedSubscriptionCredits: [String: Double] = [:]
+    var speedReportedCredits: [String: Double] = [:]
 
     func scalingCredits(by factor: Double) -> Self {
         guard factor != 1 else { return self }
@@ -330,11 +349,22 @@ nonisolated struct UsageCreditPart {
         return result
     }
 
-    mutating func record(_ amount: ClosedRange<Double>, tokens count: AnalyticsTokens, model: String) {
+    mutating func record(
+        _ amount: ClosedRange<Double>,
+        tokens count: AnalyticsTokens,
+        model: String,
+        speed: String? = nil,
+        reportedCredits: Double? = nil
+    ) {
         credits = (credits.lowerBound + amount.lowerBound) ... (credits.upperBound + amount.upperBound)
         tokens = (tokens ?? .zero) + count
         modelTokens[model, default: .zero] += count
         addModelCredits(amount, for: model)
+        if let speed, let reportedCredits, amount.lowerBound == amount.upperBound {
+            let tier = Self.normalizedSpeed(speed)
+            speedSubscriptionCredits[tier, default: 0] += amount.lowerBound
+            speedReportedCredits[tier, default: 0] += reportedCredits
+        }
     }
 
     mutating func add(_ part: Self) {
@@ -347,6 +377,20 @@ nonisolated struct UsageCreditPart {
         }
         for (model, amount) in part.modelCredits {
             addModelCredits(amount, for: model)
+        }
+        for (tier, amount) in part.speedSubscriptionCredits {
+            speedSubscriptionCredits[tier, default: 0] += amount
+        }
+        for (tier, amount) in part.speedReportedCredits {
+            speedReportedCredits[tier, default: 0] += amount
+        }
+    }
+
+    static func normalizedSpeed(_ speed: String) -> String {
+        switch speed.lowercased() {
+        case "", "standard", "default": "standard"
+        case "priority": "fast"
+        default: speed.lowercased()
         }
     }
 
@@ -411,7 +455,16 @@ nonisolated struct GeminiStepTokens: Codable, Equatable {
     let input: Int64
     let cached: Int64
     let cacheWrite: Int64?
+    var cacheWrite1h: Int64?
     let output: Int64
+
+    init(input: Int64, cached: Int64, cacheWrite: Int64?, cacheWrite1h: Int64? = nil, output: Int64) {
+        self.input = input
+        self.cached = cached
+        self.cacheWrite = cacheWrite
+        self.cacheWrite1h = cacheWrite1h
+        self.output = output
+    }
 
     static let zero = GeminiStepTokens(input: 0, cached: 0, cacheWrite: 0, output: 0)
 
@@ -419,15 +472,25 @@ nonisolated struct GeminiStepTokens: Codable, Equatable {
         cacheWrite ?? 0
     }
 
+    var cw1h: Int64 {
+        min(max(cacheWrite1h ?? 0, 0), cw)
+    }
+
+    var cw5m: Int64 {
+        max(0, cw - cw1h)
+    }
+
     var promptTotal: Int64 {
         input + cached + cw
     }
 
     static func + (lhs: Self, rhs: Self) -> Self {
-        Self(
+        let total1h = lhs.cw1h + rhs.cw1h
+        return Self(
             input: lhs.input + rhs.input,
             cached: lhs.cached + rhs.cached,
             cacheWrite: lhs.cw + rhs.cw,
+            cacheWrite1h: total1h > 0 ? total1h : nil,
             output: lhs.output + rhs.output
         )
     }

@@ -57,6 +57,7 @@ actor UsageCenterStore {
         database = connection
         sqlite3_busy_timeout(connection, 2000)
         try migrateSourcesTableIfNeeded(connection: connection, dbPath: path)
+        try migrateRecordsTableIfNeeded(connection: connection)
         let schema = """
         PRAGMA journal_mode=WAL;
         PRAGMA temp_store=MEMORY;
@@ -75,7 +76,8 @@ actor UsageCenterStore {
             input INTEGER NOT NULL, output INTEGER NOT NULL, cacheRead INTEGER NOT NULL,
             cacheWrite INTEGER NOT NULL, reasoning INTEGER NOT NULL, turns INTEGER NOT NULL,
             tools INTEGER NOT NULL, permissions INTEGER NOT NULL, compactions INTEGER NOT NULL,
-            subagents INTEGER NOT NULL, durationMs INTEGER NOT NULL, PRIMARY KEY(source, id));
+            subagents INTEGER NOT NULL, durationMs INTEGER NOT NULL,
+            cacheWrite1h INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(source, id));
         CREATE INDEX IF NOT EXISTS usage_day ON records(day);
         CREATE INDEX IF NOT EXISTS usage_identity ON records(id);
         """
@@ -120,6 +122,34 @@ actor UsageCenterStore {
         }
         if !columns.contains("gemini_plan") {
             _ = sqlite3_exec(connection, "ALTER TABLE sources ADD COLUMN gemini_plan TEXT NOT NULL DEFAULT '';", nil, nil, nil)
+        }
+    }
+
+    private func migrateRecordsTableIfNeeded(connection: OpaquePointer) throws {
+        var tableCheck: OpaquePointer?
+        defer { sqlite3_finalize(tableCheck) }
+        guard sqlite3_prepare_v2(
+            connection,
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='records'",
+            -1,
+            &tableCheck,
+            nil
+        ) == SQLITE_OK, sqlite3_step(tableCheck) == SQLITE_ROW else {
+            return
+        }
+        var infoQuery: OpaquePointer?
+        defer { sqlite3_finalize(infoQuery) }
+        guard sqlite3_prepare_v2(connection, "PRAGMA table_info(records)", -1, &infoQuery, nil) == SQLITE_OK else {
+            return
+        }
+        var columns = Set<String>()
+        while sqlite3_step(infoQuery) == SQLITE_ROW {
+            if let raw = sqlite3_column_text(infoQuery, 1) {
+                columns.insert(String(cString: raw))
+            }
+        }
+        if !columns.contains("cacheWrite1h") {
+            _ = sqlite3_exec(connection, "ALTER TABLE records ADD COLUMN cacheWrite1h INTEGER NOT NULL DEFAULT 0;", nil, nil, nil)
         }
     }
 
@@ -232,12 +262,18 @@ actor UsageCenterStore {
                 try execute("DELETE FROM records WHERE source=?", [.text(source.id)])
             }
             for record in envelope.records {
-                try execute("INSERT OR REPLACE INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                try execute("""
+                INSERT OR REPLACE INTO records(
+                    source,id,provider,auth,day,session,model,project,kind,state,observed,
+                    input,output,cacheRead,cacheWrite,reasoning,turns,tools,permissions,compactions,subagents,durationMs,cacheWrite1h
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, [
                     .text(source.id), .text(record.id), .text(record.provider), .text(record.auth), .text(record.day),
                     .text(record.session), .text(record.model), .text(record.project), .text(record.kind), .text(record.state),
                     .real(record.observedAt), .integer(record.input), .integer(record.output), .integer(record.cacheRead),
                     .integer(record.cacheWrite), .integer(record.reasoning), .integer(record.turns), .integer(record.tools),
-                    .integer(record.permissions), .integer(record.compactions), .integer(record.subagents), .integer(record.durationMs)
+                    .integer(record.permissions), .integer(record.compactions), .integer(record.subagents), .integer(record.durationMs),
+                    .integer(record.cacheWrite1h ?? 0)
                 ])
             }
             let planValue = envelope.geminiPlan ?? ""
@@ -298,22 +334,24 @@ actor UsageCenterStore {
         defer { sqlite3_progress_handler(connection, 0, nil, nil) }
         let sql = """
         WITH ranked AS (
-            SELECT r.id,r.observed,r.model,r.input,r.cacheRead,r.cacheWrite,r.output,
-            ROW_NUMBER() OVER(PARTITION BY r.id ORDER BY (r.input+r.output+r.cacheRead+r.cacheWrite) DESC,r.observed DESC,r.source) AS pos
+            SELECT r.id,r.observed,r.model,r.input,r.cacheRead,r.cacheWrite,r.output,r.cacheWrite1h,
+            ROW_NUMBER() OVER(PARTITION BY r.id ORDER BY (r.input+r.output+r.cacheRead+r.cacheWrite) DESC,r.cacheWrite1h DESC,r.observed DESC,r.source) AS pos
             FROM records r JOIN sources s ON s.id=r.source
             WHERE s.enabled=1 AND s.claude=1 AND (?=0 OR s.id='local') AND r.provider='claude'
             AND r.kind='usage' AND r.auth!='api' AND r.observed>=?
         )
-        SELECT id,observed,model,input,cacheRead,cacheWrite,output FROM ranked WHERE pos=1
+        SELECT id,observed,model,input,cacheRead,cacheWrite,output,cacheWrite1h FROM ranked WHERE pos=1
         """
         let query = try statement(sql, values: [.integer(localOnly ? 1 : 0), .real(start)])
         defer { sqlite3_finalize(query) }
         while try nextRow(query) {
+            let cw1h = sqlite3_column_int64(query, 7)
             visit(GeminiStepUsageRecord(
                 id: string(query, 0), at: sqlite3_column_double(query, 1), model: string(query, 2),
                 tokens: GeminiStepTokens(
                     input: sqlite3_column_int64(query, 3), cached: sqlite3_column_int64(query, 4),
-                    cacheWrite: sqlite3_column_int64(query, 5), output: sqlite3_column_int64(query, 6)
+                    cacheWrite: sqlite3_column_int64(query, 5), cacheWrite1h: cw1h > 0 ? cw1h : nil,
+                    output: sqlite3_column_int64(query, 6)
                 )
             ))
         }
@@ -360,12 +398,18 @@ actor UsageCenterStore {
             }
             for record in records where record.isValid {
                 guard let nodeId = record.nodeId, !nodeId.isEmpty else { continue }
-                try execute("INSERT OR REPLACE INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+                try execute("""
+                INSERT OR REPLACE INTO records(
+                    source,id,provider,auth,day,session,model,project,kind,state,observed,
+                    input,output,cacheRead,cacheWrite,reasoning,turns,tools,permissions,compactions,subagents,durationMs,cacheWrite1h
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, [
                     .text(nodeId), .text(record.id), .text(record.provider), .text(record.auth), .text(record.day),
                     .text(record.session), .text(record.model), .text(record.project), .text(record.kind), .text(record.state),
                     .real(record.observedAt), .integer(record.input), .integer(record.output), .integer(record.cacheRead),
                     .integer(record.cacheWrite), .integer(record.reasoning), .integer(record.turns), .integer(record.tools),
-                    .integer(record.permissions), .integer(record.compactions), .integer(record.subagents), .integer(record.durationMs)
+                    .integer(record.permissions), .integer(record.compactions), .integer(record.subagents), .integer(record.durationMs),
+                    .integer(record.cacheWrite1h ?? 0)
                 ])
             }
             try execute("INSERT OR REPLACE INTO hub_state VALUES('epoch', ?)", [.text(epoch)])

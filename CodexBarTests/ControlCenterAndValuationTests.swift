@@ -318,7 +318,9 @@ struct ControlCenterAndValuationTests {
             SELECT 'vps','old',\(boundary),'oauth',200 UNION ALL
             SELECT 'vps','api',\(boundary - 1),'api',1000000
         )
-        INSERT INTO records SELECT source,id,'claude',auth,date(at,'unixepoch'),'s','claude-sonnet-5-5','p','usage','',at,
+        INSERT INTO records(source,id,provider,auth,day,session,model,project,kind,state,observed,
+        input,output,cacheRead,cacheWrite,reasoning,turns,tools,permissions,compactions,subagents,durationMs)
+        SELECT source,id,'claude',auth,date(at,'unixepoch'),'s','claude-sonnet-5-5','p','usage','',at,
         n,0,0,0,0,0,0,0,0,0,0 FROM events
         """
         try #require(sqlite3_exec(db, insert, nil, nil, nil) == SQLITE_OK)
@@ -452,5 +454,144 @@ struct ControlCenterAndValuationTests {
                 machineName: "本机"
             ) == "gpt-5.4 • xhigh • 本机"
         )
+    }
+
+    @Test
+    func geminiValuationUsesRequestPromoTimeAlignmentAndDriftCollapse() {
+        let promoEnd: Double = 1796083200
+        let now = Date(timeIntervalSince1970: promoEnd + 86400)
+        let resetAt = promoEnd + 2 * 86400
+        let account = String(repeating: "d", count: 64)
+
+        // 0% 漂移窗口与 41 秒后的首个非零窗口 (0.01%) 合并, 不产生幽灵提前重置周期
+        let driftZero = UsageObservedWindow(
+            resetsAt: resetAt - 41, firstAt: promoEnd - 4 * 86400, firstUsed: 0,
+            lastAt: promoEnd - 4 * 86400 + 30, lastUsed: 0, maxUsed: 0, decreased: false,
+            observations: [.init(at: promoEnd - 4 * 86400, used: 0), .init(at: promoEnd - 4 * 86400 + 30, used: 0)]
+        )
+        let activeWin = UsageObservedWindow(
+            resetsAt: resetAt, firstAt: promoEnd - 4 * 86400 + 41, firstUsed: 0.01,
+            lastAt: promoEnd + 3600, lastUsed: 10, maxUsed: 10, decreased: false,
+            observations: [.init(at: promoEnd - 4 * 86400 + 41, used: 0.01), .init(at: promoEnd + 3600, used: 10)]
+        )
+        let beforePromo = GeminiStepUsageRecord(
+            id: "g-before", at: promoEnd - 3600, model: "gemini-4-carbon-high",
+            tokens: GeminiStepTokens(input: 1000000, cached: 0, cacheWrite: 0, output: 0)
+        )
+        let afterPromo = GeminiStepUsageRecord(
+            id: "g-after", at: promoEnd + 1800, model: "gemini-4-carbon-high",
+            tokens: GeminiStepTokens(input: 1000000, cached: 0, cacheWrite: 0, output: 0)
+        )
+        // 晚于最后额度采样时间的请求不得计入分子, 保持分子与分母时间对齐
+        let afterQuotaObs = GeminiStepUsageRecord(
+            id: "g-late", at: promoEnd + 7200, model: "gemini-4-carbon-high",
+            tokens: GeminiStepTokens(input: 1000000, cached: 0, cacheWrite: 0, output: 0)
+        )
+        let gPeriods = GeminiValuationCalculator.computePeriods(
+            provider: "gemini",
+            evidences: [GeminiValuationEvidence(
+                accountKey: account, accountScoped: true, planTier: "Ultra",
+                windows: [driftZero, activeWin], records: [beforePromo, afterPromo, afterQuotaObs]
+            )],
+            liveWeeklyObservation: nil,
+            preferredGeminiAccount: account,
+            priceBook: .fallback,
+            now: now
+        ) { _, _ in }
+        #expect(gPeriods.count == 1)
+        #expect(abs(gPeriods[0].dollars - 6.0) < 0.001)
+        #expect(gPeriods[0].valuedThrough.timeIntervalSince1970 == promoEnd + 3600)
+        #expect(abs((gPeriods[0].projectedDollars ?? 0) - 60.0) < 0.01)
+    }
+
+    @Test
+    func claudeValuationSupportsCacheWrite1hAndOpus5Pricing() {
+        let promoEnd: Double = 1796083200
+        let now = Date(timeIntervalSince1970: promoEnd + 86400)
+        let resetAt = promoEnd + 2 * 86400
+        let claudeWin = UsageObservedWindow(
+            resetsAt: resetAt, firstAt: promoEnd - 3600, firstUsed: 0,
+            lastAt: promoEnd + 3600, lastUsed: 50, maxUsed: 50, decreased: false,
+            observations: [.init(at: promoEnd - 3600, used: 0), .init(at: promoEnd + 3600, used: 50)]
+        )
+        let opus55 = GeminiStepUsageRecord(
+            id: "c-55", at: promoEnd, model: "claude-opus-5-5",
+            tokens: GeminiStepTokens(input: 0, cached: 0, cacheWrite: 1000000, cacheWrite1h: 600000, output: 0)
+        )
+        let opus5 = GeminiStepUsageRecord(
+            id: "c-5", at: promoEnd + 10, model: "claude-opus-5",
+            tokens: GeminiStepTokens(input: 1000000, cached: 1000000, cacheWrite: 0, output: 1000000)
+        )
+        let synthetic = GeminiStepUsageRecord(id: "c-syn", at: promoEnd + 20, model: "<synthetic>", tokens: .zero)
+        let unknown = GeminiStepUsageRecord(
+            id: "c-unk", at: promoEnd + 30, model: "claude-future-9",
+            tokens: GeminiStepTokens(input: 1000000, cached: 0, cacheWrite: 0, output: 0)
+        )
+        let cPeriods = GeminiValuationCalculator.computePeriods(
+            provider: "claude",
+            evidences: [GeminiValuationEvidence(windows: [claudeWin], records: [])],
+            liveWeeklyObservation: nil,
+            priceBook: .fallback,
+            now: now
+        ) { _, visit in
+            for item in [opus55, opus5, synthetic, unknown] {
+                visit(item)
+            }
+        }
+        #expect(cPeriods.count == 1)
+        #expect(abs(cPeriods[0].dollars - 39.3) < 0.001)
+        #expect(!cPeriods[0].models.contains { $0.model == "<synthetic>" })
+        #expect(cPeriods[0].unknownModels == ["claude-future-9"])
+    }
+
+    @Test
+    func storeMigratesLegacyRecordsAndPersistsCacheWrite1h() async throws {
+        let temp = try TestDirectory()
+        defer { try? temp.remove() }
+        let dbURL = temp.url.appendingPathComponent("center-v1.sqlite")
+        var db: OpaquePointer?
+        #expect(sqlite3_open(dbURL.path, &db) == SQLITE_OK)
+        let legacyRecordsSQL = """
+        CREATE TABLE records (
+            source TEXT NOT NULL, id TEXT NOT NULL, provider TEXT NOT NULL, auth TEXT NOT NULL,
+            day TEXT NOT NULL, session TEXT NOT NULL, model TEXT NOT NULL, project TEXT NOT NULL,
+            kind TEXT NOT NULL, state TEXT NOT NULL, observed REAL NOT NULL,
+            input INTEGER NOT NULL, output INTEGER NOT NULL, cacheRead INTEGER NOT NULL,
+            cacheWrite INTEGER NOT NULL, reasoning INTEGER NOT NULL, turns INTEGER NOT NULL,
+            tools INTEGER NOT NULL, permissions INTEGER NOT NULL, compactions INTEGER NOT NULL,
+            subagents INTEGER NOT NULL, durationMs INTEGER NOT NULL, PRIMARY KEY(source, id));
+        """
+        #expect(sqlite3_exec(db, legacyRecordsSQL, nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+
+        let store = UsageCenterStore(directory: temp.url)
+        var node = UsageSource(id: "vps", name: "VPS", transport: .probe)
+        node.includesClaude = true
+        let liveNow = Date()
+        let liveTs = liveNow.timeIntervalSince1970
+        let liveDay = String(ISO8601DateFormatter().string(from: liveNow).prefix(10))
+        let liveWin = UsageObservedWindow(
+            resetsAt: liveTs + 3 * 86400, firstAt: liveTs - 3600, firstUsed: 0,
+            lastAt: liveTs, lastUsed: 50, maxUsed: 50, decreased: false,
+            observations: [.init(at: liveTs - 3600, used: 0), .init(at: liveTs, used: 50)]
+        )
+        let recData = try JSONSerialization.data(withJSONObject: [
+            "nodeId": "vps", "id": String(repeating: "c", count: 64), "session": String(repeating: "s", count: 64),
+            "provider": "claude", "auth": "oauth", "day": liveDay, "model": "claude-opus-5-5",
+            "project": "demo", "kind": "usage", "state": "", "observedAt": liveTs - 600,
+            "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 1000000, "cacheWrite1h": 1000000,
+            "reasoning": 0, "turns": 0, "tools": 0, "permissions": 0, "compactions": 0, "subagents": 0, "durationMs": 0
+        ])
+        let rec = try JSONDecoder().decode(UsageRecord.self, from: recData)
+        try await store.applyHubBatch(
+            epoch: UUID().uuidString, cursor: 1, reset: false, generatedAt: liveTs,
+            nodes: [node], nodeStatuses: [:], records: [rec]
+        )
+        let stored = try await store.claudeValuationPeriods(
+            evidences: [GeminiValuationEvidence(windows: [liveWin], records: [])],
+            weekly: nil, localOnly: false, prices: .fallback, now: liveNow
+        )
+        #expect(stored.count == 1)
+        #expect(abs(stored[0].dollars - 8.0) < 0.001)
     }
 }

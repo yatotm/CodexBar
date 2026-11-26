@@ -116,9 +116,12 @@ nonisolated enum UsageLogValuationSmoke {
         precondition(reported.dollars == 17 && reported.deviceEstimate?.apiDollars == 23.6 ... 23.6)
         var absolute = oneDay
         absolute.reportedCredits = 320
+        let officialOnly = periods(snapshot([absolute]), sources: [])[0].creditEstimate!
+        precondition(officialOnly.recorded.credits == 320 ... 320 && officialOnly.hasOfficial && !officialOnly.hasDevice)
+        precondition(officialOnly.recorded.modelCredits["gpt-6-astra"] == 320 ... 320, "百分比只分配已记录日总额")
         let withOfficial = periods(snapshot([absolute]), sources: [source([apiSample])])[0].creditEstimate!
         precondition(withOfficial.recorded.credits == 320 ... 320 && withOfficial.hasOfficial && !withOfficial.hasDevice)
-        precondition(withOfficial.recorded.modelCredits["gpt-6-astra"] == 320 ... 320, "百分比只分配已记录日总额")
+        precondition(withOfficial.recorded.modelCredits["gpt-6.2-astra"] == 320 ... 320, "官方折叠新模型时按核对后的设备模型展开")
         let late = AnalyticsDay(date: absolute.date, tokens: nil, models: [], reportedCredits: 0)
         let withLog = periods(snapshot([late]), sources: [source([apiSample])])[0].creditEstimate!
         precondition(withLog.hasDevice && !withLog.hasOfficial && withLog.recorded.credits == 320 ... 320)

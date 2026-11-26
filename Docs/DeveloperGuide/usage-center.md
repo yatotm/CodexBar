@@ -77,9 +77,9 @@ Mac 后台任务单轮分页和回填有上限，取消与超时会终止本轮�
 
 `UsageModelAllocation` 使用 Quota Compass 的混合单价反推：在同日各模型输入输出结构相同的假设下，以额度权重除以混合单价，归一化后分配各类 Token。整数分配使用最大余数法，保证日总数守恒；未知价格不套用平均单价。模型 Token 与 credits 均明确标为估算。
 
-`UsageAnalyticsValuation` 按实际重置时刻划分周期。每个已结算的 UTC 日只分配一次。跨期日先核对三类 Token 和请求权重，再尝试按相同档位内各周期的周限增量分摊。无法分摊时，只计有证据的设备估值，各段合计受官方日总额约束，其余留待补齐。
+`UsageAnalyticsValuation` 按实际重置时刻划分周期。每个已结算的 UTC 日只分配一次。官方日报的 `totals.credits` 按购买积分速度倍率记账，订阅估值将其按日内模型速度权重折算为订阅周限等效倍率；若官方把新模型折叠到旧模型名下且同日设备日志核对一致，则按设备真实模型的倍率与模型分布校正。跨期日先核对三类 Token（完全一致，或 Token 差额不超过 2% 且积分对齐在 5% 以内）与请求权重，再尝试按相同档位内各周期的周限增量分摊；自然满周到期后到下一次请求之间、且无设备活动的空闲间隙不阻断分摊。无法分摊时，只计有证据的设备估值，各段合计受折算后的官方日总额约束，其余留待补齐。
 
-已结束周期用全部可配对区段的 credits 之和除以这些区段的周限增量，再按 25 credits／美元折算。完整周期使用最后一条属于原窗口的额度回执。进行中优先使用完整日报覆盖且增量超过一个百分点的区段。当天及缺报日的设备用量进入已用明细，日报到齐后替换。
+进行中与已结束周期统一合并全部可配对区段的 credits 之和，除以这些区段的周限增量，再按 25 credits／美元折算，以便实时反映当日或跨期的真实价值变化。完整周期使用最后一条属于原窗口的额度回执。当天及缺报日的设备用量进入已用明细，日报到齐后替换。
 
 零用量时五分钟内的截止时间漂移仅在展示层合并，原始窗口仍保留。
 
@@ -99,9 +99,11 @@ SSH 设备改用新探针 ID 时，先核实两者是同一台机器，再运行
 
 `token-history` 使用独立的 `token-value-v1.sqlite`，保留最近 70 天的逐请求计价证据。Mac 经既有本机或 SSH 通道每十五分钟按需增量扫描，不新增常驻进程。缓存位于 `UsageTokenHistory`，账号和来源配置参与隔离；取消、睡眠和来源停用沿用历史采集控制器。
 
-逐请求记录优先使用 `token_usage_record`，旧格式按累计量求差，缓存输入从输入总数中扣出。请求带有 `turn_id` 时，优先采用同一会话、同一轮次在请求前记录的 `turn_context.model`。仅修改线程默认模型不会改写进行中的轮次。回放时只有请求标识、三类 Token 和被替换的默认模型均匹配，才纠正已知模型。估值库用独立文件游标回读原日志，在附表 `request_inputs` 保存已验证的单次输入长度。导出中的 `requestInputTokens` 为可选字段，缺失时只影响 API 价格范围。旧采集器仍可读写原用量表。`thread_settings_applied.thread_settings.service_tier` 记录速度切换，`priority` 对应 Fast，`default` 和明确的空值对应标准模式，缺失值保持未知。API 模式和提供商切换清除旧身份；无显式登录模式的请求需要对应订阅额度回执，账号不符的记录不导出。只传输哈希请求标识、时间、模型、速度和 Token 数，不传输鉴权或会话内容。
+逐请求记录优先使用 `token_usage_record`，旧格式按累计量求差，缓存输入从输入总数中扣出。请求带有 `turn_id` 时，优先采用同一会话、同一轮次在请求前记录的 `turn_context.model` 与轮次起点生效的 `service_tier`；轮次中途切换默认模型或速度档位不会改写进行中的轮次。子线程通过 `session_meta.source.subagent.thread_spawn.parent_thread_id` 记录父子关联，在附表 `thread_links`、`thread_speeds` 和 `usage_turns` 辅助下，将父线程在子线程轮次开始前的最新速度切换传播到后续子轮次。估值库用独立文件游标（`requestContextVersion = 2`）回读原日志，在附表 `request_inputs` 保存已验证的单次输入长度，导出中的 `requestInputTokens` 为可选字段，旧采集器仍可读写原用量表。`thread_settings_applied.thread_settings.service_tier` 记录速度切换，`priority` 对应 Fast，`default` 和明确的空值对应标准模式，缺失值保持未知。API 模式和提供商切换清除旧身份；同一会话经有效订阅回执确认 OAuth 身份后，在未切换提供商或登录模式前保持订阅归属，避免因轮次切换或中间空回执丢失记录；未确认身份且无显式登录模式的请求仍需对应订阅额度回执，账号不符的记录不导出。只传输哈希请求标识、时间、模型、速度和 Token 数，不传输鉴权或会话内容。
 
-`UsageLogValuation` 对同周期请求去重，按 UTC 日保留设备估算，供缺报和重置边界使用。活动周期取设备共同扫描时间与最近额度观察时间中的较早值；冲突或无法计价的日子不用于设备补算。单台设备最多导出最近 20,000 条。官方日报和设备记录不会重复计入同一段。
+`UsageLogValuation` 对同周期请求去重，按 UTC 日保留设备估算，供缺报和重置边界使用。活动周期取设备共同扫描时间与最近额度观察时间中的较早值；冲突或无法计价的日子不用于设备补算。单台设备最多导出最近 60,000 条（传输与缓存上限 24 MiB）。官方日报和设备记录不会重复计入同一段。
+
+Claude 与 Gemini 周限估值共用 `GeminiValuationCalculator`：每条请求按自身发生时刻 `record.at` 匹配促销期与长上下文单价，分子统计上限对齐至窗口最后有效额度采样时间 `window.lastAt`，并跳过零 Token 的合成记录、标记未收录模型。`GeminiPrices.json` 拆分 `claude-opus-5` 与 `claude-opus-5.5` 并为 Claude 模型补充 1 小时缓存写入单价（`2.0×`）；采集器与 `center-v1.sqlite` 通过可选字段/列 `cacheWrite1h` 保持向后兼容，并在升级后对近期仍在磁盘的 Claude 会话日志执行单次有界回填。`GeminiValuationLedger` 与 `ClaudeWeeklyLedger` 一致按会话隔离状态栏重绘，同时容忍 Gemini 上游 2% 或 30 分钟内恢复的短暂波动；零用量漂移窗口在 5 分钟内可并入首个非零窗口，Gemini 本地与 Hub 估值导出上限同步提升至 60,000 条（24 MiB）。
 
 Apple 对弹窗尺寸动画的说明见 [NSPopover.contentSize](https://developer.apple.com/documentation/appkit/nspopover/contentsize)
 

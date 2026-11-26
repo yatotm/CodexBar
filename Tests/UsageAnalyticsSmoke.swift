@@ -370,13 +370,13 @@ struct UsageAnalyticsSmoke {
         let records: [(Double, Int64)] = [(100, 1000000), (day + 100, 1000000), (2 * day + 100, 1000000)]
         let mixed = periods([daily(0, 150), daily(1, nil), daily(2, 9999)], [quota], logs: records, fetched: 2.5 * day)[0].creditEstimate!
         precondition(mixed.hasDevice && mixed.hasOfficial && mixed.recorded.credits == 550 ... 550)
-        precondition(abs(mixed.projected!.lowerBound - 150 / 0.10 / 25) < 1e-8)
+        precondition(abs(mixed.projected!.lowerBound - 550 / 0.30 / 25) < 1e-8, "进行中周期合并全部已观测区段外推")
         let settled = periods([daily(0, 150), daily(1, 300), daily(2, 9999)], [quota], logs: records, fetched: 2.5 * day)[0].creditEstimate!
         precondition(settled.recorded.credits == 650 ... 650, "日报只替换对应自然日, 当前日临时数不叠加")
-        precondition(settled.projected == 90 ... 90)
+        precondition(abs(settled.projected!.lowerBound - 650 / 0.30 / 25) < 1e-8)
         let sparse = window(0, [(0, 0), (day, 1), (2 * day, 20)])
         let tooLittle = periods([daily(0, 150)], [sparse], logs: Array(records.prefix(2)), fetched: 2 * day)[0].creditEstimate!
-        precondition(tooLittle.projected == 70 ... 70, "只有一个百分点的日报样本时才纳入设备样本外推")
+        precondition(tooLittle.projected == 70 ... 70, "合并已结算日报与次日设备样本外推")
         let missing = periods([daily(0, 100), daily(2, 300)], [quota], logs: [], fetched: 3 * day)[0].creditEstimate!
         precondition(
             missing.recorded.credits == 400 ... 400 && abs(missing.projected!.lowerBound - 400 / 0.30 / 25) < 1e-8,
@@ -424,6 +424,72 @@ struct UsageAnalyticsSmoke {
         let capped = periods([daily(0, 500)], [uncertain, last], logs: [(day / 2, 3000000), (0.8 * day, 2000000)], fetched: 2 * day)
         precondition(capped.allSatisfy { $0.creditEstimate?.hasOfficial == false })
         precondition(capped.reduce(0) { $0 + $1.creditEstimate!.recorded.credits.upperBound } <= 500, "部分设备估算加总不能超过已结算的日报")
+
+        // 方案 B: 官方日报按 2x 记账的 gpt-6-astra Fast 折算到订阅 2.5x 口径
+        let fastDay = AnalyticsDay(
+            date: "2026-11-01",
+            tokens: .init(input: 1000000, cached: 0, output: 0),
+            models: [
+                .init(model: "gpt-6-astra", speed: "standard", weight: 20),
+                .init(model: "gpt-6-astra", speed: "fast", weight: 80)
+            ],
+            reportedCredits: 1000
+        )
+        let adjustedFast = periods([fastDay], [quota], logs: [], fetched: 2 * day)[0].creditEstimate!
+        precondition(abs(adjustedFast.recorded.credits.lowerBound - 1200) < 1e-6, "Fast 权重部分需按 2.5/2.0 折算为订阅等效积分")
+
+        // 官方将 gpt-6.2-astra:fast 折叠为 gpt-6-astra:fast 时, 匹配设备日志不应误乘 1.25 且保留真实模型名
+        let foldedFastDay = AnalyticsDay(
+            date: "2026-11-01",
+            tokens: .init(input: 1000000, cached: 0, output: 0),
+            models: [.init(model: "gpt-6-astra", speed: "fast", weight: 100)],
+            reportedCredits: 400
+        )
+        let fastRecord = UsageTokenRecord(
+            id: "fast-62",
+            at: start + 100,
+            model: "gpt-6.2-astra",
+            speed: "fast",
+            tokens: .init(input: 1000000, cached: 0, output: 0)
+        )
+        let fastSource = UsageTokenSource(name: "Mac", evidence: .init(
+            schema: 1, ready: true, complete: true, generatedAt: start + 2 * day, scannedAt: start + 2 * day,
+            accountKey: nil, truncated: false, unattributedCount: 0, records: [fastRecord]
+        ))
+        let foldedSnapshot = UsageAnalyticsSnapshot(
+            schema: 1, accountKey: "a", emailKey: "e", fetchedAt: Date(timeIntervalSince1970: start + 2 * day),
+            queryStart: "2026-11-01", queryEnd: "2026-11-08", days: [foldedFastDay], windows: [quota],
+            importedHistory: false, readCreditReports: true
+        )
+        let unfolded = UsageAnalyticsValuation.periods(
+            snapshot: foldedSnapshot, prices: prices, now: Date(timeIntervalSince1970: start + 2 * day), tokenSources: [fastSource]
+        )[0].creditEstimate!
+        precondition(abs(unfolded.recorded.credits.lowerBound - 400) < 1e-6, "真实 gpt-6.2-astra:fast 的订阅与官方倍率一致, 不能误乘 1.25")
+        precondition(unfolded.recorded.modelCredits["gpt-6.2-astra"] == 400 ... 400, "折叠模型应采用核对后的设备真实模型名")
+
+        // 自然满周重置后的空闲间隙不应阻断跨期日按周限增量分摊, 间隙内存在设备请求时则拒绝整日分摊
+        let naturalEnd = window(-6.6 * day, [(-6.6 * day, 0), (0, 20), (0.4 * day - 1, 60)])
+        let reopened = window(0.6 * day, [(0.6 * day, 0), (day - 1, 10)])
+        let idleGapSplit = periods([daily(0, 500)], [naturalEnd, reopened], logs: [], fetched: 2 * day)
+        precondition(idleGapSplit.allSatisfy { $0.creditEstimate?.hasOfficial == true })
+        precondition(idleGapSplit.map { $0.creditEstimate!.recorded.credits.lowerBound } == [100, 400], "自然重置后的空闲间隙仍应按增量分摊")
+        let busyGap = periods(
+            [daily(0, 500, 2000000)],
+            [naturalEnd, reopened],
+            logs: [(0.1 * day, 500000), (0.5 * day, 500000), (0.7 * day, 500000)],
+            fetched: 2 * day
+        )
+        precondition(busyGap.allSatisfy { $0.creditEstimate?.hasOfficial == false }, "间隙内出现设备活动时不能视为空闲间隙")
+
+        // Token 接近 (<= 2%) 且积分对齐 (<= 5%) 时允许按设备请求份额拆分跨期日
+        let closeLogs: [(Double, Int64)] = [(100, 1980000), (day / 2 + 100, 7920000)]
+        let closeSplit = periods([daily(0, 2000, 10000000)], [early, restarted], logs: closeLogs, fetched: 2 * day)
+        precondition(closeSplit.allSatisfy { $0.creditEstimate?.hasOfficial == true })
+        precondition(
+            abs(closeSplit[0].creditEstimate!.recorded.credits.lowerBound - 1600) < 1e-6
+                && abs(closeSplit[1].creditEstimate!.recorded.credits.lowerBound - 400) < 1e-6,
+            "微小后台差额不影响按设备请求份额精准拆分"
+        )
     }
 
     private static func verifyCurrentCodexPricing(_ prices: UsagePriceBook) {

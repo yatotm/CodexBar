@@ -21,7 +21,7 @@ private actor UsageQuotaHistoryCache {
     }
 
     func readTokens(_ key: String) -> UsageSourceTokenEvidence? {
-        guard let data = try? Data(contentsOf: tokenDirectory.appendingPathComponent(key + ".json")), data.count <= 8 * 1024 * 1024,
+        guard let data = try? Data(contentsOf: tokenDirectory.appendingPathComponent(key + ".json")), data.count <= 24 * 1024 * 1024,
               let value = try? JSONDecoder().decode(UsageSourceTokenEvidence.self, from: data), value.isValid else { return nil }
         return value
     }
@@ -264,7 +264,7 @@ final class UsageQuotaHistoryController {
 
     private func refreshTokens(_ source: UsageSource, endpoint: UsageSource, account: String, key: String, generation expected: Int, force: Bool) async {
         guard !Task.isCancelled, generation == expected else { return }
-        if !force, let value = tokenEvidence[key], value.ready, value.complete, value.requestContextVersion == 1,
+        if !force, let value = tokenEvidence[key], value.ready, value.complete, value.requestContextVersion == 2,
            Date().timeIntervalSince1970 - value.scannedAt < 900 {
             return
         }

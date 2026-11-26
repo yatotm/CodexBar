@@ -70,10 +70,11 @@ nonisolated enum UsageAnalyticsValuation {
         var result: [UsageObservedWindow] = []
         for window in merge(windows, acrossSources: acrossSources) {
             // 零用量时重置时间可能在首次请求前后漂移, 原始证据保留在缓存中
-            if let previous = result.last, previous.maxUsed == 0, window.firstUsed == 0,
+            if let previous = result.last, previous.maxUsed == 0,
+               window.firstUsed == 0 || previous.firstAt <= window.firstAt,
                window.resetsAt - previous.resetsAt <= 300 {
                 var settled = window
-                settled.observations += previous.observations
+                settled.observations += previous.observations.filter { window.firstUsed == 0 || $0.at <= window.firstAt }
                 result[result.count - 1] = normalized(settled, detectsRegression: !acrossSources)
             } else {
                 result.append(window)
@@ -119,15 +120,21 @@ nonisolated enum UsageAnalyticsValuation {
             )
             return period
         }
-        let ledger = CreditLedger(
+        let deviceTimes = tokenSources
+            .filter(\.evidence.ready)
+            .flatMap { $0.evidence.records.map(\.at) }
+            .sorted()
+        let ledger = CreditLedger(.init(
             days: days,
             estimates: estimates,
+            prices: prices,
             contexts: contexts,
             periods: valued,
             plans: plans,
+            deviceTimes: deviceTimes,
             fetchedAt: cutoff,
             now: now.timeIntervalSince1970
-        )
+        ))
         let byReset = Dictionary(contexts.map { ($0.window.resetsAt, $0) }, uniquingKeysWith: { first, _ in first })
         return valued.reversed().map { value in
             var period = value
@@ -224,9 +231,23 @@ nonisolated enum UsageAnalyticsValuation {
     private struct SettledDay {
         let day: AnalyticsDay
         let credits: Double
+        let modelCredits: [String: Double]
         let shares: [Double: Double]
         let fallbackScale: Double
         let matchedTokens: Bool
+        let prefersDeviceModels: Bool
+    }
+
+    private struct CreditLedgerInput {
+        let days: [Int: AnalyticsDay]
+        let estimates: [Int: [UsageModelEstimate]?]
+        let prices: UsagePriceBook
+        let contexts: [PeriodWindow]
+        let periods: [UsageAnalyticsPeriod]
+        let plans: [UsagePlanObservation]
+        let deviceTimes: [Double]
+        let fetchedAt: Double
+        let now: Double
     }
 
     private struct CreditLedger {
@@ -234,20 +255,12 @@ nonisolated enum UsageAnalyticsValuation {
         let estimates: [Int: [UsageModelEstimate]?]
         let now: Double
 
-        init(
-            days: [Int: AnalyticsDay],
-            estimates: [Int: [UsageModelEstimate]?],
-            contexts: [PeriodWindow],
-            periods: [UsageAnalyticsPeriod],
-            plans: [UsagePlanObservation],
-            fetchedAt: Double,
-            now: Double
-        ) {
-            self.estimates = estimates
-            self.now = now
+        init(_ input: CreditLedgerInput) {
+            estimates = input.estimates
+            now = input.now
             var parts: [Int: [Double: UsageCreditPart]] = [:]
             var conflicts = Set<Int>()
-            for period in periods {
+            for period in input.periods {
                 guard let device = period.deviceEstimate else { continue }
                 conflicts.formUnion(device.conflictingDays)
                 for (key, part) in device.days {
@@ -255,44 +268,163 @@ nonisolated enum UsageAnalyticsValuation {
                 }
             }
             var settled: [Int: SettledDay] = [:]
-            for (key, day) in days {
-                let start = Double(key) * 86400
-                let end = start + 86400
-                guard end <= fetchedAt, let credits = day.reportedCredits, credits.isFinite, credits >= 0 else { continue }
-                let windows = contexts.filter { $0.start < end && $0.end > start }
-                let slices = parts[key] ?? [:]
-                var total = UsageCreditPart()
-                for part in slices.values {
-                    total.add(part)
+            for (key, day) in input.days {
+                if let resolved = Self.settleDay(
+                    key: key,
+                    day: day,
+                    slices: parts[key] ?? [:],
+                    hasConflict: conflicts.contains(key),
+                    input: input
+                ) {
+                    settled[key] = resolved
                 }
-                if credits == 0, (day.tokens?.total ?? 0) == 0,
-                   total.credits.upperBound > 0 || day.models.contains(where: { $0.weight > 0 }) || windows.contains(where: {
-                       (Self.delta($0, from: start, to: end) ?? 0) > 0
-                   }) {
-                    continue
-                }
-                if fetchedAt - end < 86400, !conflicts.contains(key), let local = total.tokens, let official = day.tokens,
-                   local != official, local.input >= official.input, local.cached >= official.cached, local.output >= official.output {
-                    continue
-                }
-                let matched = !conflicts.contains(key) && day.tokens != nil && total.tokens == day.tokens
-                let shares = Self.shares(windows: windows, day: start ..< end, parts: slices, total: total, matched: matched, plans: plans)
-                // 无法拆分的日报仍约束所有设备估算之和, 剩余金额留在未归属的报告日
-                let scale = total.credits.upperBound > credits ? credits / total.credits.upperBound : 1
-                settled[key] = SettledDay(day: day, credits: credits, shares: shares, fallbackScale: scale, matchedTokens: matched)
             }
             reports = settled
         }
 
+        private static func settleDay(
+            key: Int,
+            day: AnalyticsDay,
+            slices: [Double: UsageCreditPart],
+            hasConflict: Bool,
+            input: CreditLedgerInput
+        ) -> SettledDay? {
+            let start = Double(key) * 86400
+            let end = start + 86400
+            guard end <= input.fetchedAt, let rawCredits = day.reportedCredits, rawCredits.isFinite, rawCredits >= 0 else { return nil }
+            let indexedWindows = input.contexts.enumerated().filter { $0.element.start < end && $0.element.end > start }
+            let windows = indexedWindows.map(\.element)
+            var total = UsageCreditPart()
+            for part in slices.values {
+                total.add(part)
+            }
+            if rawCredits == 0, (day.tokens?.total ?? 0) == 0,
+               total.credits.upperBound > 0 || day.models.contains(where: { $0.weight > 0 }) || windows.contains(where: {
+                   (Self.delta($0, from: start, to: end) ?? 0) > 0
+               }) {
+                return nil
+            }
+            if input.fetchedAt - end < 86400, !hasConflict, let local = total.tokens, let official = day.tokens,
+               local != official, local.input >= official.input, local.cached >= official.cached, local.output >= official.output {
+                return nil
+            }
+            let exactTokens = !hasConflict && day.tokens != nil && total.tokens == day.tokens
+            let closeTokens = !hasConflict
+                && day.tokens.flatMap { official in total.tokens.map { Self.tokensClose($0, official) } } == true
+            let deviceKnownSpeed = !hasConflict && total.credits.lowerBound > 0
+                && total.credits.lowerBound == total.credits.upperBound
+            let adjusted = Self.adjustOfficialCredits(
+                raw: rawCredits,
+                day: day,
+                prices: input.prices,
+                device: closeTokens && deviceKnownSpeed ? total : nil
+            )
+            let credits = adjusted.total
+            let creditsAligned = deviceKnownSpeed && credits > 0
+                && abs(total.credits.lowerBound - credits) / credits <= 0.05
+            let matched = exactTokens || (closeTokens && creditsAligned)
+            let shares = Self.shares(
+                indexedWindows: indexedWindows,
+                day: start ..< end,
+                parts: slices,
+                total: total,
+                matched: matched,
+                input: input
+            )
+            let prefersDeviceModels = Self.shouldPreferDeviceModels(
+                day: day,
+                adjustedCredits: credits,
+                estimate: input.estimates[key] ?? nil,
+                device: total,
+                matched: matched,
+                creditsAligned: creditsAligned
+            )
+            // 无法拆分的日报仍约束所有设备估算之和, 统一使用折算后的订阅口径
+            let scale = total.credits.upperBound > credits ? credits / total.credits.upperBound : 1
+            return SettledDay(
+                day: day,
+                credits: credits,
+                modelCredits: adjusted.models,
+                shares: shares,
+                fallbackScale: scale,
+                matchedTokens: matched,
+                prefersDeviceModels: prefersDeviceModels
+            )
+        }
+
+        /// 方案 B 将官方日报中按购买倍率记账的 Fast 等速度项折算为订阅周限等效倍率
+        private static func adjustOfficialCredits(
+            raw: Double,
+            day: AnalyticsDay,
+            prices: UsagePriceBook,
+            device: UsageCreditPart?
+        ) -> (total: Double, models: [String: Double]) {
+            guard raw > 0 else { return (0, [:]) }
+            let active = day.models.filter { $0.weight > 0 }
+            let weightSum = active.reduce(0) { $0 + $1.weight }
+            guard weightSum > 0 else { return (raw, [:]) }
+            var total = 0.0
+            var perModel: [String: Double] = [:]
+            for item in active {
+                let officialPortion = raw * item.weight / weightSum
+                var factor = prices.rate(for: item.model)?.creditSubscriptionAdjustment(for: item.speed) ?? 1
+                if factor != 1, let device {
+                    // 官方可能把新模型折叠到旧模型名下, 同速设备证据完整时以设备真实模型的倍率为准
+                    let tier = UsageCreditPart.normalizedSpeed(item.speed)
+                    if let sub = device.speedSubscriptionCredits[tier],
+                       let rep = device.speedReportedCredits[tier],
+                       rep > 0 {
+                        factor = sub / rep
+                    }
+                }
+                let scaled = officialPortion * factor
+                total += scaled
+                perModel[item.model, default: 0] += scaled
+            }
+            return (total, perModel)
+        }
+
+        private static func tokensClose(_ local: AnalyticsTokens, _ official: AnalyticsTokens) -> Bool {
+            if local == official {
+                return true
+            }
+            guard official.total > 0 else { return false }
+            let total = Double(official.total)
+            guard abs(Double(local.total - official.total)) / total <= 0.02 else { return false }
+            let limit = max(total * 0.02, 1000)
+            return abs(Double(local.input - official.input)) <= limit
+                && abs(Double(local.cached - official.cached)) <= limit
+                && abs(Double(local.output - official.output)) <= limit
+        }
+
+        private static func shouldPreferDeviceModels(
+            day: AnalyticsDay,
+            adjustedCredits: Double,
+            estimate: [UsageModelEstimate]?,
+            device: UsageCreditPart,
+            matched: Bool,
+            creditsAligned: Bool
+        ) -> Bool {
+            guard matched, creditsAligned, !device.modelCredits.isEmpty else { return false }
+            let officialNames = Set(day.models.filter { $0.weight > 0 }.map(\.model))
+            let deviceNames = Set(device.modelCredits.keys)
+            guard officialNames != deviceNames else { return false }
+            guard let rows = estimate, !rows.isEmpty, rows.allSatisfy({ $0.credits != nil }), adjustedCredits > 0 else { return false }
+            let officialImplied = rows.reduce(0) { $0 + ($1.credits ?? 0) }
+            // 当官方标称模型的理论积分显著偏离实报积分, 而设备真实模型与之吻合时判定为模型折叠
+            return abs(officialImplied - adjustedCredits) / adjustedCredits > 0.10
+        }
+
         private static func shares(
-            windows: [PeriodWindow],
+            indexedWindows: [(offset: Int, element: PeriodWindow)],
             day: Range<Double>,
             parts: [Double: UsageCreditPart],
             total: UsageCreditPart,
             matched: Bool,
-            plans: [UsagePlanObservation]
+            input: CreditLedgerInput
         ) -> [Double: Double] {
-            if let single = windows.first, single.start <= day.lowerBound, single.end >= day.upperBound {
+            let windows = indexedWindows.map(\.element)
+            if windows.count == 1, let single = windows.first, single.start <= day.lowerBound, single.end >= day.upperBound {
                 return [single.window.resetsAt: 1]
             }
             if matched, total.credits.lowerBound > 0, total.credits.lowerBound == total.credits.upperBound {
@@ -300,10 +432,36 @@ nonisolated enum UsageAnalyticsValuation {
                     ($0.window.resetsAt, (parts[$0.window.resetsAt]?.credits.lowerBound ?? 0) / total.credits.lowerBound)
                 })
             }
-            // 只有完整覆盖报告日的相邻周期才能分走整笔日报, 周限比例必须使用同一档位
-            guard let first = windows.first, let last = windows.last, first.start <= day.lowerBound, last.end >= day.upperBound,
-                  zip(windows, windows.dropFirst()).allSatisfy({ $0.end == $1.start }),
-                  Set(plans.filter { entry in windows.contains { abs($0.window.resetsAt - entry.resetsAt) <= 2 } }.map(\.plan)).count <= 1 else { return [:] }
+            guard let firstEntry = indexedWindows.first, let lastEntry = indexedWindows.last else { return [:] }
+            let first = firstEntry.element
+            let last = lastEntry.element
+            let coversStart = first.start <= day.lowerBound || (
+                firstEntry.offset > 0 && isIdleGap(
+                    after: input.contexts[firstEntry.offset - 1],
+                    until: first.start,
+                    boundary: day.lowerBound,
+                    deviceTimes: input.deviceTimes
+                )
+            )
+            let coversEnd = last.end >= day.upperBound || (
+                lastEntry.offset + 1 < input.contexts.count && isIdleGap(
+                    after: last,
+                    until: input.contexts[lastEntry.offset + 1].start,
+                    boundary: day.upperBound,
+                    deviceTimes: input.deviceTimes
+                )
+            )
+            let contiguous = zip(windows, windows.dropFirst()).allSatisfy { lhs, rhs in
+                lhs.end == rhs.start || isIdleGap(after: lhs, until: rhs.start, boundary: nil, deviceTimes: input.deviceTimes)
+            }
+            // 只有完整覆盖报告日活跃时段的相邻周期才能分走整笔日报, 周限比例必须使用同一档位
+            guard coversStart, coversEnd, contiguous,
+                  Set(input.plans.filter { entry in windows.contains { abs($0.window.resetsAt - entry.resetsAt) <= 2 } }.map(\.plan)).count <= 1 else {
+                return [:]
+            }
+            if windows.count == 1 {
+                return [first.window.resetsAt: 1]
+            }
             var weights: [Double: Double] = [:]
             for context in windows {
                 guard let change = delta(context, from: day.lowerBound, to: day.upperBound) else { return [:] }
@@ -311,6 +469,37 @@ nonisolated enum UsageAnalyticsValuation {
             }
             let sum = weights.values.reduce(0, +)
             return sum > 0 ? weights.mapValues { $0 / sum } : [:]
+        }
+
+        /// 自然满周到期后到下一次请求开启新窗口之间的空闲间隙没有消耗, 不应阻断跨期日分摊
+        private static func isIdleGap(
+            after previous: PeriodWindow,
+            until nextStart: Double,
+            boundary: Double?,
+            deviceTimes: [Double]
+        ) -> Bool {
+            guard previous.end == previous.window.resetsAt, nextStart > previous.end, nextStart - previous.end < 604800 else {
+                return false
+            }
+            if let boundary, !(previous.end <= boundary && boundary <= nextStart) {
+                return false
+            }
+            return !hasDeviceActivity(in: previous.end ..< nextStart, times: deviceTimes)
+        }
+
+        private static func hasDeviceActivity(in range: Range<Double>, times: [Double]) -> Bool {
+            guard !times.isEmpty, range.lowerBound < range.upperBound else { return false }
+            var low = 0
+            var high = times.count
+            while low < high {
+                let mid = (low + high) / 2
+                if times[mid] < range.lowerBound {
+                    low = mid + 1
+                } else {
+                    high = mid
+                }
+            }
+            return low < times.count && times[low] < range.upperBound
         }
 
         private static func delta(_ context: PeriodWindow, from start: Double, to end: Double) -> Double? {
@@ -323,7 +512,6 @@ nonisolated enum UsageAnalyticsValuation {
             let limit = min(context.end, now)
             var recorded = UsageCreditPart(tokens: nil)
             var spans: [CreditSpan] = []
-            var settledWholeDays: [CreditSpan] = []
             var hasOfficial = false
             var hasDevice = false
             var dayStart = floor(context.start / 86400) * 86400
@@ -339,9 +527,6 @@ nonisolated enum UsageAnalyticsValuation {
                     part = official
                     through = upper
                     hasOfficial = true
-                    if lower == dayStart, upper == dayStart + 86400 {
-                        append(official.credits, from: lower, to: through, into: &settledWholeDays)
-                    }
                 } else if let device, let local = device.days[key], !device.conflictingDays.contains(key) {
                     part = local.scalingCredits(by: reports[key]?.fallbackScale ?? 1)
                     through = min(upper, device.valuedThrough.timeIntervalSince1970)
@@ -354,9 +539,8 @@ nonisolated enum UsageAnalyticsValuation {
                 append(part.credits, from: lower, to: through, into: &spans)
             }
             guard !spans.isEmpty else { return nil }
-            // 进行中的周期优先用完整日报预测, 已结束的周期结算所有有对应额度读数的区段
-            let settled = limit < context.end ? forecast(settledWholeDays, context: context, minimumChange: 1) : nil
-            let projected = settled ?? forecast(spans, context: context, minimumChange: 0)
+            // 进行中与已结束周期统一合并所有已观测区段外推, 及时反映当日与跨期变化
+            let projected = forecast(spans, context: context, minimumChange: 0)
             return UsageCreditEstimate(recorded: recorded, projected: projected, hasOfficial: hasOfficial, hasDevice: hasDevice)
         }
 
@@ -391,14 +575,14 @@ nonisolated enum UsageAnalyticsValuation {
             let day = report.day
             let amount = report.credits * share
             if report.matchedTokens, let device, device.credits.lowerBound > 0,
-               device.credits.lowerBound == device.credits.upperBound, report.shares.count > 1 {
+               device.credits.lowerBound == device.credits.upperBound,
+               report.shares.count > 1 || report.prefersDeviceModels {
                 return device.scalingCredits(by: amount / device.credits.lowerBound)
             }
             var part = UsageCreditPart(credits: amount ... amount, tokens: day.tokens.map { UsageModelAllocation.scaled($0, by: share) } ?? device?.tokens)
-            let weight = day.models.reduce(0) { $0 + $1.weight }
-            for model in day.models where model.weight > 0 && weight > 0 {
-                let modelAmount = amount * model.weight / weight
-                part.addModelCredits(modelAmount ... modelAmount, for: model.model)
+            for (model, modelAmount) in report.modelCredits where modelAmount > 0 {
+                let scaled = modelAmount * share
+                part.addModelCredits(scaled ... scaled, for: model)
             }
             for row in (estimates[key] ?? nil) ?? [] {
                 part.modelTokens[row.model, default: .zero] += UsageModelAllocation.scaled(row.tokens, by: share)
