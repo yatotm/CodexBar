@@ -57,17 +57,17 @@ struct AppServerSessionTests {
     @Test nonisolated func businessRetryCannotResetRequestDeadline() throws {
         let server = try SharedServerFixture { peer in
             let first = try peer.readMessage()
-            Thread.sleep(forTimeInterval: 0.08)
+            Thread.sleep(forTimeInterval: 0.30)
             try peer.send(["id": #require(first["id"]), "error": ["message": "temporarily unavailable"]])
             _ = try peer.readMessage()
             var byte: UInt8 = 0
             #expect(Darwin.read(peer.descriptor, &byte, 1) == 0)
         }
         defer { server.close() }
-        let session = try AppServerSession(socketURL: server.url, timeout: 0.15)
+        let session = try AppServerSession(socketURL: server.url, timeout: 0.60)
         let started = ContinuousClock.now
         #expect(throws: CodexStatusError.self) { let _: [String: String] = try session.request("probe", as: [String: String].self) }
-        #expect(started.duration(to: .now) < .milliseconds(220))
+        #expect(started.duration(to: .now) < .milliseconds(800))
         #expect(!session.isOpen)
         try server.finish()
     }

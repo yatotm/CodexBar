@@ -357,7 +357,11 @@ struct ControlCenterAndValuationTests {
         ]
         try JSONSerialization.data(withJSONObject: payload).write(to: cache.appendingPathComponent(".api_usage_cache.json"))
         let script = try #require(Bundle(for: AppUpdater.self).url(forResource: "UsageCollector", withExtension: "py"))
-        let data = try await UsageCommandRunner.run(executable: "/usr/bin/python3", arguments: [
+        let pythonCandidates = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":").map { "\($0)/python3" }
+            + ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+        let python = try #require(pythonCandidates.first { FileManager.default.isExecutableFile(atPath: $0) })
+        let data = try await UsageCommandRunner.run(executable: python, arguments: [
             "-B", script.path, "claude-valuation", "--claude-home", temp.url.path, "--state-dir", temp.url.appendingPathComponent("state").path
         ])
         let evidence = try JSONDecoder().decode(GeminiValuationEvidence.self, from: data)
