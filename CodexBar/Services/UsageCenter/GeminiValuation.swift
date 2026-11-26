@@ -144,6 +144,7 @@ nonisolated struct GeminiValuationEvidence: Codable {
     var generatedAt: Double?
     var scannedAt: Double?
     var accountKey: String?
+    var accountScoped: Bool?
     var planTier: String?
     var truncated: Bool?
     var windows: [UsageObservedWindow]
@@ -151,6 +152,12 @@ nonisolated struct GeminiValuationEvidence: Codable {
     var records: [GeminiStepUsageRecord]
 
     static let empty = GeminiValuationEvidence(windows: [], records: [])
+
+    var confirmedAccount: String? {
+        guard accountScoped == true, let accountKey,
+              accountKey.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { return nil }
+        return accountKey
+    }
 }
 
 nonisolated struct GeminiModelPeriodBreakdown: Identifiable, Equatable {
@@ -191,13 +198,21 @@ nonisolated enum GeminiValuationCalculator {
         evidences: [GeminiValuationEvidence],
         storeRecords: [GeminiStepUsageRecord] = [],
         liveWeeklyObservation: UsageQuotaObservation?,
+        preferredGeminiAccount: String? = nil,
         priceBook: GeminiPriceBook = .loadBundled(),
         now: Date = Date()
     ) -> [GeminiValuationPeriod] {
         let nowTs = now.timeIntervalSince1970
-        var rawWindows = evidences.flatMap(\.windows)
+        let isGemini = provider == "gemini"
+        let account = preferredGeminiAccount ?? evidences.compactMap(\.confirmedAccount).first ?? liveWeeklyObservation?.accountKey
+        if isGemini, account == nil {
+            return []
+        }
+        let selected = isGemini ? evidences.filter { $0.confirmedAccount == account } : evidences
+        var rawWindows = selected.flatMap(\.windows)
         if let obs = liveWeeklyObservation,
            obs.provider == provider,
+           !isGemini || obs.accountKey == account,
            let win = obs.windows.first(where: { $0.name == "7d" }),
            let reset = win.resetsAt,
            reset > obs.observedAt - 60 {
@@ -213,9 +228,9 @@ nonisolated enum GeminiValuationCalculator {
             ))
         }
         guard !rawWindows.isEmpty else { return [] }
-        let settled = UsageAnalyticsValuation.settledWindows(rawWindows, acrossSources: evidences.count > 1)
+        let settled = UsageAnalyticsValuation.settledWindows(rawWindows, acrossSources: selected.count > 1)
         var dedupRecords: [String: GeminiStepUsageRecord] = [:]
-        for item in storeRecords + evidences.flatMap(\.records) {
+        for item in (isGemini ? [] : storeRecords) + selected.flatMap(\.records) {
             if provider == "gemini" {
                 let low = item.model.lowercased()
                 if ["claude", "opus", "sonnet", "haiku", "fable", "mythos", "gpt"].contains(where: { low.contains($0) }) {
@@ -227,7 +242,7 @@ nonisolated enum GeminiValuationCalculator {
             }
         }
         let sortedRecords = dedupRecords.values.sorted { $0.at < $1.at }
-        let latestPlan = evidences.compactMap(\.planTier).first { !$0.isEmpty }
+        let latestPlan = selected.compactMap(\.planTier).first { !$0.isEmpty }
 
         return settled.enumerated().compactMap { index, window in
             let nextStart = settled.indices.contains(index + 1) ? (settled[index + 1].resetsAt - 604800) : window.resetsAt
@@ -256,7 +271,7 @@ nonisolated enum GeminiValuationCalculator {
         let endTs = min(window.resetsAt, nextStart)
         guard startTs < nowTs, endTs > startTs else { return nil }
         let valuedTs = min(endTs, max(window.lastAt, min(nowTs, endTs)))
-        let cycleRecords = sortedRecords.filter { $0.at >= startTs - 60 && $0.at <= valuedTs + 30 }
+        let cycleRecords = sortedRecords.filter { $0.at >= startTs && $0.at < endTs && $0.at <= valuedTs }
         let priceRefTs = endTs > nowTs ? nowTs : valuedTs
         var byModel: [String: GeminiModelPeriodBreakdown] = [:]
         var totalTokens = GeminiStepTokens.zero

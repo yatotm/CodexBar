@@ -54,6 +54,23 @@ def sanitize_text(value, limit=120):
     return "".join(ch for ch in value if ch.isprintable())[:limit]
 
 
+def account_key(value):
+    return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else None
+
+
+def valid_usage_window(win):
+    if not isinstance(win, dict) or not isinstance(win.get("decreased"), bool):
+        return False
+    for key in ("resetsAt", "firstAt", "lastAt", "firstUsed", "lastUsed", "maxUsed"):
+        v = win.get(key)
+        if type(v) not in (int, float) or not math.isfinite(v) or v < 0 or (key.endswith("Used") and v > 100):
+            return False
+    points = win.get("observations")
+    return isinstance(points, list) and all(
+        isinstance(p, dict) and type(p.get("at")) in (int, float) and math.isfinite(p["at"]) and p["at"] > 0
+        and type(p.get("used")) in (int, float) and 0 <= p["used"] <= 100 for p in points)
+
+
 def valid_record(rec):
     if not isinstance(rec, dict):
         return False
@@ -118,24 +135,13 @@ def valid_live_task(task):
 
 def build_bundled_probe_script():
     here = pathlib.Path(__file__).resolve().parent
-    collector_candidates = [here / "UsageCollector.py", here.parent / "CodexBar/Resources/UsageCollector.py"]
-    probe_candidates = [here / "CodexBarProbe.py", here.parent / "CodexBar/Resources/CodexBarProbe.py"]
-    collector_path = next((p for p in collector_candidates if p.is_file()), None)
-    probe_path = next((p for p in probe_candidates if p.is_file()), None)
-    if not collector_path or not probe_path:
-        raise FileNotFoundError("缺少探针脚本资源")
-    collector_src = collector_path.read_text(encoding="utf-8")
-    probe_src = probe_path.read_text(encoding="utf-8")
-    b64_src = base64.encodebytes(collector_src.encode("utf-8")).decode("ascii")
-    header = (
-        "#!/usr/bin/env python3\n"
-        "# -*- coding: utf-8 -*-\n"
-        "import base64\n"
-        "import shutil\n"
-        'EMBEDDED_USAGE_COLLECTOR = base64.b64decode("""\n'
-        + b64_src
-        + '""").decode("utf-8")\n'
-    )
+    if not (here / "CodexBarProbe.py").is_file():
+        here = here.parent / "CodexBar/Resources"
+    header = "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\nimport base64\n"
+    for module, filename in (("EMBEDDED_USAGE_COLLECTOR", "UsageCollector.py"), ("EMBEDDED_SHARED_CODEX", "SharedCodexCollector.py")):
+        encoded = base64.encodebytes((here / filename).read_bytes()).decode("ascii")
+        header += module + ' = base64.b64decode("""\n' + encoded + '""").decode("utf-8")\n'
+    probe_src = (here / "CodexBarProbe.py").read_text(encoding="utf-8")
     stripped_probe = "\n".join(
         line for line in probe_src.splitlines()
         if not line.startswith("#!") and "coding: utf-8" not in line
@@ -207,6 +213,7 @@ class HubStore:
         self.nonces = {}
         self.auth_failures = {}
         self.conn = sqlite3.connect(str(self.db_path), timeout=5, check_same_thread=False)
+        self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript("""
             PRAGMA user_version=1;
@@ -257,6 +264,13 @@ class HubStore:
                 payload TEXT NOT NULL,
                 PRIMARY KEY(node, reset)
             );
+            CREATE TABLE IF NOT EXISTS gemini_node_scope(
+                node TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+                account TEXT NOT NULL, observed REAL NOT NULL, evidence TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS gemini_usage_accounts(
+                node TEXT NOT NULL, id TEXT NOT NULL, account TEXT NOT NULL, at REAL NOT NULL,
+                PRIMARY KEY(node,id), FOREIGN KEY(node,id) REFERENCES records(node,id) ON DELETE CASCADE);
+            CREATE INDEX IF NOT EXISTS gemini_usage_by_account ON gemini_usage_accounts(account,at);
             CREATE TABLE IF NOT EXISTS claude_val_windows(
                 node TEXT NOT NULL,
                 reset REAL NOT NULL,
@@ -380,6 +394,13 @@ class HubStore:
                     providers=excluded.providers,
                     bridge_statusline=excluded.bridge_statusline
             """, (node_id, name, signing_key, enabled, ",".join(providers), bridge))
+            allowed = set(providers) if enabled else set()
+            for tid, raw in self.conn.execute("SELECT id,payload FROM live_tasks WHERE node=?", (node_id,)).fetchall():
+                if json.loads(raw).get("provider") not in allowed:
+                    self.conn.execute("DELETE FROM live_tasks WHERE node=? AND id=?", (node_id, tid))
+            stored = self.conn.execute("SELECT quotas FROM nodes WHERE id=?", (node_id,)).fetchone()
+            quotas = [q for q in json.loads(stored[0] or "[]") if q.get("provider") in allowed]
+            self.conn.execute("UPDATE nodes SET quotas=? WHERE id=?", (encode_json(quotas), node_id))
             live_rev = int(self.get_meta("liveRevision", "0")) + 1
             self.set_meta("liveRevision", live_rev)
             self.conn.commit()
@@ -430,17 +451,33 @@ class HubStore:
         with self.lock:
             self.conn.execute("BEGIN IMMEDIATE")
             try:
-                prev_node = self.conn.execute("SELECT quotas, gemini_plan FROM nodes WHERE id=?", (node_id,)).fetchone()
-                old_quotas_json = prev_node[0] if prev_node else "[]"
+                # 验签与入库之间管理员可能已停用或移除节点, 写事务内以当前配置为准
+                prev_node = self.conn.execute("SELECT quotas,enabled,providers,bridge_statusline FROM nodes WHERE id=?", (node_id,)).fetchone()
+                if not prev_node:
+                    raise ValueError("节点已移除")
+                allowed = [p for p in prev_node[2].split(",") if p in VALID_PROVIDERS] if prev_node[1] else []
+                reply = {"ok": True, "desiredProviders": allowed, "bridgeStatusLine": bool(prev_node[3])}
+                if not allowed:
+                    self.conn.execute("UPDATE nodes SET last_seen=? WHERE id=?", (now, node_id))
+                    self.conn.commit()
+                    return reply
+                records = [r for r in records if r["provider"] in allowed]
+                quotas = [q for q in quotas if q["provider"] in allowed]
+                live_tasks = [t for t in live_tasks if t["provider"] in allowed]
+                old_quotas_json = prev_node[0]
+                scope_changed = False
                 new_quotas_json = encode_json(quotas)
                 rev = int(self.get_meta("revision", "0"))
                 if payload.get("reset") is True:
-                    self.conn.execute("DELETE FROM records WHERE node=?", (node_id,))
+                    self.conn.executemany("DELETE FROM records WHERE node=? AND payload LIKE ?",
+                                          [(node_id, '%"provider":"' + provider + '"%') for provider in allowed])
                     rev += 1
                 for rec in records:
                     existing = self.conn.execute("SELECT payload FROM records WHERE node=? AND id=?", (node_id, rec["id"])).fetchone()
                     if existing:
                         prev = json.loads(existing[0])
+                        if "geminiAccountKey" not in payload and rec["provider"] == "gemini" and account_key(prev.get("accountKey")):
+                            rec.setdefault("accountKey", prev["accountKey"])
                         for k in COUNTERS:
                             rec[k] = max(rec[k], prev.get(k, 0))
                         if rec["kind"] != "activity":
@@ -453,6 +490,9 @@ class HubStore:
                         "INSERT OR REPLACE INTO records VALUES(?, ?, ?, ?, ?)",
                         (node_id, rec["id"], rec["day"], rev, encode_json(rec))
                     )
+                    acc = account_key(rec.get("accountKey"))
+                    if acc and rec["provider"] == "gemini" and rec["kind"] == "usage" and rec["auth"] == "oauth":
+                        self.conn.execute("INSERT INTO gemini_usage_accounts VALUES(?,?,?,?)", (node_id, rec["id"], acc, rec["observedAt"]))
                 self.set_meta("revision", rev)
 
                 old_tasks = [r[0] for r in self.conn.execute("SELECT payload FROM live_tasks WHERE node=? ORDER BY id", (node_id,)).fetchall()]
@@ -464,26 +504,26 @@ class HubStore:
                     )
                 new_tasks = [encode_json(t) for t in sorted(live_tasks, key=lambda x: x["id"])]
 
-                gval = payload.get("geminiValuation")
-                if isinstance(gval, dict):
-                    self.conn.execute("DELETE FROM gemini_val_windows WHERE node=?", (node_id,))
-                    for win in (gval.get("windows") or [])[:40]:
-                        if isinstance(win, dict) and isinstance(win.get("resetsAt"), (int, float)):
-                            self.conn.execute(
-                                "INSERT OR REPLACE INTO gemini_val_windows VALUES(?, ?, ?)",
-                                (node_id, float(win["resetsAt"]), encode_json(win))
-                            )
-                    if gval.get("complete") is True and not gval.get("truncated"):
-                        self.conn.execute("DELETE FROM gemini_val_usage WHERE node=?", (node_id,))
-                    for item in (gval.get("records") or [])[:1000]:
-                        if isinstance(item, dict) and isinstance(item.get("id"), str) and re.fullmatch(r"[0-9a-f]{64}", item["id"]) and isinstance(item.get("at"), (int, float)):
-                            self.conn.execute(
-                                "INSERT OR REPLACE INTO gemini_val_usage VALUES(?, ?, ?, ?)",
-                                (node_id, item["id"], float(item["at"]), encode_json(item))
-                            )
-
+                if "gemini" in allowed:
+                    active = account_key(payload.get("geminiAccountKey"))
+                    scope = self.conn.execute("SELECT account,observed FROM gemini_node_scope WHERE node=?", (node_id,)).fetchone()
+                    scope_changed = (scope[0] if scope else None) != active
+                    if scope_changed:
+                        self.conn.execute("DELETE FROM gemini_node_scope WHERE node=?", (node_id,))
+                        if active:
+                            self.conn.execute("INSERT INTO gemini_node_scope VALUES(?,?,?,?)",
+                                              (node_id, active, now, encode_json({"windows": [], "planTier": None})))
+                    evidence = payload.get("geminiValuation")
+                    if active and isinstance(evidence, dict) and evidence.get("accountScoped") is True and evidence.get("accountKey") == active:
+                        windows = evidence.get("windows", [])
+                        if not isinstance(windows, list) or len(windows) > 1000 or not all(valid_usage_window(w) for w in windows):
+                            raise ValueError("Gemini 周限窗口无效")
+                        latest = max((w["lastAt"] for w in windows), default=0)
+                        data = {"windows": windows, "planTier": sanitize_text(evidence.get("planTier"), 40) or None}
+                        self.conn.execute("INSERT OR REPLACE INTO gemini_node_scope VALUES(?,?,?,?)",
+                                          (node_id, active, latest, encode_json(data)))
                 cval = payload.get("claudeValuation")
-                if isinstance(cval, dict):
+                if "claude" in allowed and isinstance(cval, dict):
                     for win in (cval.get("windows") or [])[:40]:
                         if isinstance(win, dict) and isinstance(win.get("resetsAt"), (int, float)):
                             self.conn.execute(
@@ -494,24 +534,25 @@ class HubStore:
                 self.conn.execute("""
                     UPDATE nodes SET
                         detected_providers=?, probe_version=?, platform=?, last_seen=?,
-                        warnings=?, quotas=?, gemini_plan=CASE WHEN ?!='' THEN ? ELSE gemini_plan END,
+                        warnings=?, quotas=?, gemini_plan=CASE WHEN ? OR ?!='' THEN ? ELSE gemini_plan END,
                         codex_auth=CASE WHEN ?!='unknown' THEN ? ELSE codex_auth END
                     WHERE id=?
                 """, (
                     encode_json(clean_detected), probe_ver, plat, now,
                     encode_json(clean_warnings), new_quotas_json,
-                    gemini_plan, gemini_plan, codex_auth, codex_auth, node_id
+                    scope_changed, gemini_plan, gemini_plan, codex_auth, codex_auth, node_id
                 ))
                 self.conn.execute("DELETE FROM records WHERE day<?", (cutoff_day,))
                 self.conn.execute("DELETE FROM gemini_val_usage WHERE at<?", (now - 70 * 86400,))
 
-                if old_quotas_json != new_quotas_json or old_tasks != new_tasks:
+                if scope_changed or old_quotas_json != new_quotas_json or old_tasks != new_tasks:
                     live_rev = int(self.get_meta("liveRevision", "0")) + 1
                     self.set_meta("liveRevision", live_rev)
                     self.conn.commit()
                     self.condition.notify_all()
                 else:
                     self.conn.commit()
+                return reply
             except Exception:
                 self.conn.rollback()
                 raise
@@ -559,7 +600,34 @@ class HubStore:
             grouped.setdefault(node_id, []).append(task)
         return grouped
 
-    def pull(self, epoch, cursor, limit):
+    def _gemini_evidence(self, requested):
+        scopes = self.conn.execute("""
+            SELECT s.account,s.evidence FROM gemini_node_scope s JOIN nodes n ON n.id=s.node
+            WHERE n.enabled=1 AND instr(','||n.providers||',', ',gemini,')>0
+            ORDER BY s.observed DESC,s.node
+        """).fetchall()
+        account = requested or (scopes[0][0] if scopes else None)
+        evidence = [json.loads(raw) for key, raw in scopes if key == account]
+        rows = self.conn.execute("""
+            SELECT r.payload FROM gemini_usage_accounts a JOIN records r ON r.node=a.node AND r.id=a.id
+            JOIN nodes n ON n.id=a.node JOIN gemini_node_scope s ON s.node=a.node
+            WHERE a.account=? AND a.at>=? AND n.enabled=1 AND instr(','||n.providers||',', ',gemini,')>0
+            ORDER BY a.at DESC,a.id,a.node
+        """, (account, time.time() - 70 * 86400))
+        unique = {}
+        for (raw,) in rows:
+            r = json.loads(raw)
+            if r["id"] not in unique:
+                unique[r["id"]] = {"id": r["id"], "at": r["observedAt"], "model": r["model"],
+                                   "tokens": {"input": r["input"], "cached": r["cacheRead"],
+                                              "cacheWrite": r["cacheWrite"], "output": r["output"]}}
+                if len(unique) > 20000:
+                    break
+        return {"accountScoped": True, "accountKey": account, "windows": [w for e in evidence for w in e["windows"]],
+                "records": list(unique.values())[:20000], "truncated": len(unique) > 20000,
+                "planTier": next((e["planTier"] for e in evidence if e["planTier"]), None)}
+
+    def pull(self, epoch, cursor, limit, gemini_account=None):
         with self.lock:
             actual_epoch = self.get_meta("epoch")
             revision = int(self.get_meta("revision", "0"))
@@ -578,23 +646,10 @@ class HubStore:
                 item = json.loads(raw)
                 item["nodeId"] = node_id
                 records.append(item)
-            win_rows = self.conn.execute("""
-                SELECT w.node, w.payload FROM gemini_val_windows w
-                JOIN nodes n ON n.id=w.node WHERE n.enabled=1
-            """).fetchall()
-            val_usage_rows = self.conn.execute("""
-                SELECT u.node, u.payload FROM gemini_val_usage u
-                JOIN nodes n ON n.id=u.node WHERE n.enabled=1
-                ORDER BY u.at DESC LIMIT 20000
-            """).fetchall()
             cwin_rows = self.conn.execute("""
                 SELECT w.node, w.payload FROM claude_val_windows w
-                JOIN nodes n ON n.id=w.node WHERE n.enabled=1
+                JOIN nodes n ON n.id=w.node WHERE n.enabled=1 AND instr(','||n.providers||',', ',claude,')>0
             """).fetchall()
-            dedup_usage = {}
-            for _, raw in val_usage_rows:
-                item = json.loads(raw)
-                dedup_usage.setdefault(item["id"], item)
             return {
                 "protocol": HUB_PROTOCOL,
                 "epoch": actual_epoch,
@@ -607,10 +662,7 @@ class HubStore:
                 "nodes": self._nodes_list_locked(),
                 "records": records,
                 "liveTasks": self._live_tasks_locked(),
-                "geminiValuation": {
-                    "windows": [json.loads(r[1]) for r in win_rows],
-                    "records": list(dedup_usage.values())
-                },
+                "geminiValuation": self._gemini_evidence(gemini_account),
                 "claudeValuation": {
                     "windows": [json.loads(r[1]) for r in cwin_rows],
                     "records": []
@@ -629,6 +681,11 @@ class HubStore:
                 "protocol": HUB_PROTOCOL,
                 "liveRevision": int(self.get_meta("liveRevision", "0")),
                 "sentAt": time.time(),
+                "geminiAccountKey": next((r[0] for r in self.conn.execute("""
+                    SELECT s.account FROM gemini_node_scope s JOIN nodes n ON n.id=s.node
+                    WHERE n.enabled=1 AND instr(','||n.providers||',', ',gemini,')>0
+                    ORDER BY s.observed DESC,s.node LIMIT 1
+                """)), None),
                 "nodes": self._nodes_list_locked(),
                 "liveTasks": self._live_tasks_locked()
             }
@@ -746,7 +803,10 @@ class HubHandler(http.server.BaseHTTPRequestHandler):
                 epoch = query.get("epoch", [""])[0]
                 if not (0 <= cursor <= 2 ** 62) or not (1 <= limit <= 3000) or len(epoch) > 40:
                     raise ValueError()
-                self.respond(200, self.server.store.pull(epoch, cursor, limit))
+                account = query.get("geminiAccount", [None])[0]
+                if account is not None and not account_key(account):
+                    raise ValueError()
+                self.respond(200, self.server.store.pull(epoch, cursor, limit, account))
             except ValueError:
                 self.respond(400, {"error": "invalid_query"})
             return
@@ -792,12 +852,7 @@ class HubHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body)
                 if not isinstance(payload, dict) or payload.get("protocol") != HUB_PROTOCOL:
                     raise ValueError("协议版本不匹配")
-                self.server.store.ingest_push(node_info, payload)
-                self.respond(200, {
-                    "ok": True,
-                    "desiredProviders": node_info["providers"] if node_info["enabled"] else [],
-                    "bridgeStatusLine": node_info["bridgeStatusLine"]
-                })
+                self.respond(200, self.server.store.ingest_push(node_info, payload))
             except (ValueError, TypeError) as err:
                 self.respond(400, {"error": str(err)[:160]})
             return
@@ -831,17 +886,17 @@ def run_server(args):
     if args.read_token_file:
         raw = args.read_token_file.read_text().strip()
         if len(raw) < 24:
-            raise ValueError("读取令牌长度不足")
+            raise ValueError("管理密钥长度不足")
         token_hash = hash_read_token(raw)
     elif os.environ.get("CODEXBAR_HUB_READ_TOKEN"):
         token_hash = hash_read_token(os.environ["CODEXBAR_HUB_READ_TOKEN"])
     if token_hash and not re.fullmatch(r"[0-9a-f]{64}", token_hash):
-        raise ValueError("读取令牌摘要格式无效")
+        raise ValueError("管理密钥摘要格式无效")
 
     store = HubStore(args.state_dir, read_token_hash=token_hash or None)
     if not store.get_meta("readTokenHash"):
         store.close()
-        raise ValueError("中枢尚未配置读取密钥摘要")
+        raise ValueError("中枢尚未配置管理密钥摘要")
     server = HubHTTPServer((args.listen, args.port), store, behind_local_proxy=(args.listen == "127.0.0.1"))
 
     def shutdown_handler(signum, frame):
@@ -862,8 +917,8 @@ def main():
     p.add_argument("--state-dir", type=pathlib.Path, default=pathlib.Path("/var/lib/codexbar-hub"))
     p.add_argument("--listen", default="127.0.0.1")
     p.add_argument("--port", type=int, default=18765)
-    p.add_argument("--read-token-file", type=pathlib.Path)
-    p.add_argument("--read-token-hash", default="")
+    p.add_argument("--read-token-file", type=pathlib.Path, help="控制中心管理密钥文件")
+    p.add_argument("--read-token-hash", default="", help="控制中心管理密钥的 SHA-256 哈希")
     args = p.parse_args()
     if args.command == "generate-read-token":
         raw = "cbr_" + secrets.token_hex(24)

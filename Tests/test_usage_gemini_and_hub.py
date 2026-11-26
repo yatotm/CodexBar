@@ -12,6 +12,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
@@ -31,9 +32,19 @@ PROBE_SPEC.loader.exec_module(probe_mod)
 
 class GeminiAndHubTests(unittest.TestCase):
     def setUp(self):
-        self.saved_proxies = {k: os.environ.pop(k) for k in list(os.environ) if k.lower() in ("http_proxy", "https_proxy", "all_proxy")}
         self.temp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.temp.name)
+        paths = patch.dict(os.environ, {
+            "XDG_CONFIG_HOME": str(self.root / "config"),
+            "XDG_DATA_HOME": str(self.root / "share"),
+            "XDG_STATE_HOME": str(self.root / "state-home"),
+            "PYTHONDONTWRITEBYTECODE": "1"
+        })
+        paths.start()
+        self.addCleanup(paths.stop)
+        for key in list(os.environ):
+            if key.lower() in ("http_proxy", "https_proxy", "all_proxy"):
+                os.environ.pop(key)
         self.codex = self.root / "codex"
         self.claude = self.root / "claude"
         self.gemini = self.root / "gemini"
@@ -43,7 +54,6 @@ class GeminiAndHubTests(unittest.TestCase):
         self.now = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=2)
 
     def tearDown(self):
-        os.environ.update(self.saved_proxies)
         self.temp.cleanup()
 
     def create_gemini_summary_db(self, cid, workspace_uri, parent_id="", status="CASCADE_RUN_STATUS_IDLE"):
@@ -244,6 +254,8 @@ class GeminiAndHubTests(unittest.TestCase):
                 {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "created_at": self.now.isoformat(),
                  "model": "gemini-4-carbon-high", "input_tokens": 4000, "cache_read_tokens": 1000, "output_tokens": 300}
             ])
+            collector.capture_gemini(json.dumps({"conversation_id": cid, "email": "node-owner@example.invalid",
+                                                 "plan_tier": "Pro"}).encode(), self.gemini)
 
             probe_cfg = self.root / "probe_cfg/config.json"
             probe_state = self.root / "probe_state"
@@ -254,6 +266,7 @@ class GeminiAndHubTests(unittest.TestCase):
                 "--config", str(probe_cfg), "--state-dir", str(probe_state),
                 "--codex-home", str(self.codex), "--claude-home", str(self.claude), "--gemini-home", str(self.gemini)
             ], env=env, check=True, capture_output=True)
+            self.assertEqual((self.root / "share/codexbar-probe/probe.py").read_bytes(), bundled_bytes)
 
             subprocess.run([
                 sys.executable, str(bundled_file), "once",
@@ -295,6 +308,9 @@ class GeminiAndHubTests(unittest.TestCase):
             self.assertTrue(node1_info["online"])
             self.assertIn("gemini", node1_info["detectedProviders"])
             self.assertTrue(any(r["provider"] == "gemini" and r["nodeId"] == "node-1" for r in pulled["records"]))
+            self.assertEqual(pulled["geminiValuation"]["accountKey"], collector.digest("gemini-account", "node-owner@example.invalid"))
+            normal_ids = {r["id"] for r in pulled["records"] if r["provider"] == "gemini" and r["kind"] == "usage"}
+            self.assertEqual(normal_ids, {r["id"] for r in pulled["geminiValuation"]["records"]})
             self.assertEqual(pulled["liveTasks"]["node-1"][0]["state"], "running")
             self.assertEqual(pulled["liveTasks"]["node-1"][0]["modelName"], "gemini-4-carbon-high")
             self.assertEqual(pulled["geminiValuation"]["records"], [{"id": pulled["geminiValuation"]["records"][0]["id"],
@@ -542,6 +558,96 @@ class GeminiAndHubTests(unittest.TestCase):
         self.assertAlmostEqual(val_export["windows"][0]["resetsAt"], reset_b, delta=2)
         self.assertEqual(len(val_export["records"]), 1)
         self.assertEqual(val_export["records"][0]["tokens"]["input"], 12000)
+
+    def test_idle_claude_uses_actual_end_time_or_omits_the_row(self):
+        now = time.time()
+        sessions = self.claude / "sessions"
+        sessions.mkdir()
+        path = sessions / f"{os.getpid()}.json"
+        idle = dict(pid=os.getpid(), sessionId="test-session", status="idle", startedAt=(now-7200)*1000)
+        path.write_text(json.dumps(idle))
+        self.assertEqual(probe_mod.read_claude_live_tasks(self.claude, collector, now), [])
+        path.write_text(json.dumps(dict(idle, statusUpdatedAt=(now-90)*1000)))
+        for ts in (now, now+300):
+            task, = probe_mod.read_claude_live_tasks(self.claude, collector, ts)
+            self.assertEqual(task["state"], "completed")
+            self.assertAlmostEqual(task["updatedAt"], now-90, places=4)
+        self.assertEqual(probe_mod.read_claude_live_tasks(self.claude, collector, now+511), [])
+
+    def test_confirmed_history_backfills_and_pause_only_sends_control_heartbeats(self):
+        cfg = self.root / "node.json"
+        state = self.root / "node-state"
+        store = hub_mod.HubStore(self.root / "hub")
+        server = hub_mod.HubHTTPServer(("127.0.0.1", 0), store)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            nid, signing = "test-node", "1" * 64
+            settings = dict(id=nid, enabled=True, enabledProviders=["gemini"], bridgeStatusLine=False, signingKey=signing)
+            store.upsert_node(settings)
+            cfg.write_text(json.dumps(dict(nodeID=nid, signingKey=signing, bridgeStatusLine=False, enabledProviders=["gemini"],
+                                           hubURL=f"http://127.0.0.1:{server.server_port}", geminiHome=str(self.gemini),
+                                           claudeHome=str(self.claude), codexHome=str(self.codex))))
+            agent = probe_mod.ProbeAgent(cfg, state)
+            source = collector.Database(state / "usage")
+            col = collector.Collector(source, self.codex, self.claude, ["gemini"], gemini_home=self.gemini)
+            def record(cid, step):
+                col.emit(dict(provider="gemini", session=collector.digest("gemini-session", cid),
+                              model="gemini-4-neon", auth="oauth"), "usage", [cid, step], self.now, input=90000)
+            def login(cid, email):
+                collector.capture_gemini(json.dumps({"conversation_id": cid, "email": email, "plan_tier": "Pro",
+                    "quota": {"gemini-weekly": {"remaining_fraction": 0.8, "reset_in_seconds": 86400}}}).encode(), self.gemini)
+            try:
+                with source.connection:
+                    for step in range(701):
+                        record("session-a", step)
+                    record("unidentified", 0)
+                previous = source.export("", 0, 1000)
+                legacy = dict(records=previous["records"], quotas=[], liveTasks=[], warnings=[],
+                              geminiValuation=dict(records=[{"id": "a"*64}], windows=[]))
+                store.ingest_push({"id": nid}, legacy)
+                agent.write_sync_cursor(dict(epoch=previous["epoch"], cursor=previous["cursor"], valuationAt=time.time()))
+                self.assertEqual(store.pull("", 0, 1500)["geminiValuation"]["records"], [])
+                login("session-a", "a@example.invalid")
+                agent.push_once(force_scan=True)
+                a = store.pull("", 0, 1500)
+                normal = [r["id"] for r in a["records"] if r["kind"] == "usage" and r["session"] == collector.digest("gemini-session", "session-a")]
+                valued = [r["id"] for r in a["geminiValuation"]["records"]]
+                self.assertEqual(len(valued), 701)
+                self.assertCountEqual(normal, valued)
+                login("session-b", "b@example.invalid")
+                with source.connection:
+                    record("session-b", 1)
+                agent.push_once(force_scan=True)
+                b = store.pull("", 0, 1500)
+                self.assertEqual(b["geminiValuation"]["accountKey"], collector.digest("gemini-account", "b@example.invalid"))
+                self.assertEqual(len(b["geminiValuation"]["records"]), 1)
+                self.assertEqual(len([r for r in b["records"] if r["kind"] == "usage"]), 703)
+                store.upsert_node(dict(settings, enabled=False))
+                before = store.get_meta("revision")
+                with source.connection:
+                    record("session-b", 2)
+                agent.push_once(force_scan=True)
+                self.assertEqual(agent.config["enabledProviders"], [])
+                self.assertEqual(store.get_meta("revision"), before)
+                paused = probe_mod.ProbeAgent(cfg, state)
+                self.assertEqual(paused.config["enabledProviders"], [])
+                with patch.object(paused, "run_usage_scan", side_effect=AssertionError("停用时不得扫描")), \
+                     patch.object(probe_mod, "detect_installed_providers", side_effect=AssertionError("停用时不得探测")):
+                    paused.push_once(force_scan=True)
+                    self.assertEqual(store.get_meta("revision"), before)
+                store.upsert_node(settings)
+                paused.push_once(force_scan=True)
+                self.assertEqual(paused.config["enabledProviders"], ["gemini"])
+                paused.push_once(force_scan=True)
+                self.assertEqual(len([r for r in store.pull("", 0, 1500)["records"] if r["kind"] == "usage"]), 704)
+            finally:
+                source.connection.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+            store.close()
 
 
 if __name__ == "__main__":

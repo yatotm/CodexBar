@@ -198,12 +198,30 @@ def load_gemini_metadata(home):
     return result
 
 
-def load_gemini_account_context(gemini_home, meta_map=None):
+def load_gemini_account_context(gemini_home, meta_map=None, ledger_path=None):
     home = gemini_home.expanduser()
     cid_owners = {}
     session_owners = {}
     known_accounts = set()
     active_account = None
+
+    def associate(session, account):
+        previous = session_owners.get(session)
+        session_owners[session] = account if previous is None or previous == account else ""
+        known_accounts.add(account)
+
+    if ledger_path and ledger_path.is_file():
+        conn = None
+        try:
+            conn = sqlite3.connect(ledger_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
+            for session, account in conn.execute("SELECT DISTINCT session,account FROM samples WHERE account IS NOT NULL"):
+                if isinstance(account, str) and re.fullmatch(r"[0-9a-f]{64}", account):
+                    associate(session, account)
+        except sqlite3.Error:
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
 
     cache_path = home / "cache/statusline_v2_cache.json"
     if cache_path.is_file() and not cache_path.is_symlink():
@@ -215,7 +233,7 @@ def load_gemini_account_context(gemini_home, meta_map=None):
                     if isinstance(cid, str) and cid and isinstance(raw_email, str) and raw_email.strip():
                         acc = digest("gemini-account", raw_email.strip().lower())
                         cid_owners[cid] = acc
-                        session_owners[digest("gemini-session", cid)] = acc
+                        associate(digest("gemini-session", cid), acc)
                         known_accounts.add(acc)
         except (OSError, ValueError, TypeError):
             pass
@@ -234,7 +252,7 @@ def load_gemini_account_context(gemini_home, meta_map=None):
                     for cid, acc in live_owners.items():
                         if isinstance(cid, str) and cid and isinstance(acc, str) and re.fullmatch(r"[0-9a-f]{64}", acc):
                             cid_owners[cid] = acc
-                            session_owners[digest("gemini-session", cid)] = acc
+                            associate(digest("gemini-session", cid), acc)
                             known_accounts.add(acc)
         except (OSError, ValueError):
             pass
@@ -260,7 +278,7 @@ def load_gemini_account_context(gemini_home, meta_map=None):
                         known_accounts.add(acc)
                         sess = obj.get("session")
                         if isinstance(sess, str) and len(sess) == 64:
-                            session_owners[sess] = acc
+                            associate(sess, acc)
                         parsed_ts = timestamp(obj.get("timestamp"))
                         ts_val = parsed_ts.timestamp() if parsed_ts else 0.0
                         if ts_val >= latest_sig_ts:
@@ -294,7 +312,7 @@ def load_gemini_account_context(gemini_home, meta_map=None):
             while isinstance(parent, str) and parent and depth < 8:
                 if parent in cid_owners:
                     cid_owners[cid] = cid_owners[parent]
-                    session_owners[digest("gemini-session", cid)] = cid_owners[parent]
+                    associate(digest("gemini-session", cid), session_owners.get(digest("gemini-session", parent), ""))
                     break
                 parent = (meta_map.get(parent) or {}).get("parent")
                 depth += 1
@@ -406,6 +424,7 @@ class Collector:
         self.warnings = set()
         self.scan_complete = True
         self.quotas = {q["provider"]: q for q in json.loads(database.get("quotas", "[]"))}
+        self.gemini_session_owners = {}
         self.gemini_meta = {}
         self.gemini_auth = "oauth"
 
@@ -419,6 +438,10 @@ class Collector:
                        "model": context.get("model", "未知"), "project": context.get("project", "未知"),
                        "kind": kind, "state": "", "observedAt": date.timestamp()})
         record.update(values)
+        if context["provider"] == "gemini" and kind == "usage":
+            account = self.gemini_session_owners.get(record["session"])
+            if account and record["auth"] == "oauth":
+                record["accountKey"] = account
         self.db.put(record)
 
     def observe_quota(self, provider, windows, observed_at):
@@ -443,6 +466,8 @@ class Collector:
         if not sanitized:
             return
         observation = {"provider": provider, "observedAt": observed_at, "windows": sanitized}
+        if provider == "gemini" and getattr(self, "gemini_active_account", None):
+            observation["accountKey"] = self.gemini_active_account
         previous = self.quotas.get(provider, {})
         if provider in ("claude", "gemini"):
             # 有效的 5h 完整快照优先, 用量与时间始终保留在同一份观察中
@@ -642,7 +667,7 @@ class Collector:
         activity_state = row.get("activityState")
         if activity_state in ("running", "waiting", "completed", "ended"):
             self.emit(state, "activity", session, date, state=activity_state)
-        if not is_foreign_account and row.get("event") == "statusline" and isinstance(row.get("rateLimits"), dict):
+        if not is_foreign_account and (not active_acc or sig_account == active_acc) and row.get("event") == "statusline" and isinstance(row.get("rateLimits"), dict):
             self.observe_quota("gemini", row["rateLimits"], date.timestamp())
 
     def scan_file(self, path, provider, cid=""):
@@ -745,7 +770,9 @@ class Collector:
                 self.warnings.add("未找到 Claude 会话目录, 请检查来源路径")
         if "gemini" in self.providers:
             self.gemini_meta = load_gemini_metadata(self.gemini_home)
-            self.gemini_active_account, _, _, _ = load_gemini_account_context(self.gemini_home, self.gemini_meta)
+            self.gemini_active_account, _, self.gemini_session_owners, _ = load_gemini_account_context(
+                self.gemini_home, self.gemini_meta, self.db.directory / GeminiValuationLedger.filename)
+
             auth = gemini_authentication_type(self.gemini_home)
             self.gemini_auth = auth if auth != "unknown" else "oauth"
             signal_roots.append((self.gemini_home / "codexbar-usage/signals", "gemini"))
@@ -754,6 +781,12 @@ class Collector:
         roots = signal_roots + roots
         try:
             self.db.connection.execute("BEGIN IMMEDIATE")
+            if "gemini" in self.providers:
+                if self.db.get("geminiActiveAccount") != (self.gemini_active_account or ""):
+                    self.quotas.pop("gemini", None)
+                    self.db.set("geminiPlan", "")
+                self.db.set("geminiActiveAccount", self.gemini_active_account or "")
+                self.backfill_gemini_owners()
             if "claude" in self.providers:
                 self.read_claude_quota_cache()
             for root, provider in roots:
@@ -791,6 +824,36 @@ class Collector:
         except Exception:
             self.db.connection.rollback()
             raise
+
+    def backfill_gemini_owners(self):
+        # 使用普通用量账本原有的请求 ID 和增量游标, 已同步过的历史请求也可以补上账号
+        fingerprint = digest(sorted(self.gemini_session_owners.items()))
+        previous = json.loads(self.db.get("geminiOwnerBackfill", "{}"))
+        cursor = previous.get("cursor", "") if previous.get("fingerprint") == fingerprint else ""
+        if cursor is None:
+            return
+        cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=70)).date().isoformat()
+        deadline = min(self.deadline, time.monotonic() + 1)
+        while time.monotonic() < deadline:
+            rows = self.db.connection.execute("SELECT id,payload FROM records WHERE id>? AND day>=? "
+                                              "AND payload LIKE ? ORDER BY id LIMIT 256",
+                                              (cursor, cutoff, '%"provider":"gemini"%')).fetchall()
+            for cursor, raw in rows:
+                record = json.loads(raw)
+                if record["kind"] != "usage" or record["auth"] != "oauth":
+                    continue
+                account = self.gemini_session_owners.get(record["session"], record.get("accountKey"))
+                if (account or None) != record.get("accountKey"):
+                    record.pop("accountKey", None)
+                    if account:
+                        record["accountKey"] = account
+                    self.db.put(record)
+            if len(rows) < 256:
+                cursor = None
+                break
+        self.db.set("geminiOwnerBackfill", encode(dict(fingerprint=fingerprint, cursor=cursor)))
+        if cursor is not None:
+            self.scan_complete = False
 
     def collect_gemini_brains(self):
         brain_root = self.gemini_home / "brain"
@@ -1724,6 +1787,8 @@ def capture_gemini(raw, gemini_home):
     bridge_dir = gemini_home.expanduser() / "codexbar-usage"
     bridge_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     latest_gemini_quota = format_quota_windows("gemini", rate_limits, now_ts)
+    if latest_gemini_quota and account_hash:
+        latest_gemini_quota["accountKey"] = account_hash
     should_write_signal = True
     try:
         entry = None
@@ -1779,6 +1844,7 @@ class GeminiValuationLedger:
     max_records = 25000
 
     def __init__(self, directory, gemini_home, budget, read_only=False):
+        self.directory = directory
         self.home = gemini_home.expanduser()
         self.deadline = time.monotonic() + budget
         self.cutoff = time.time() - 70 * 86400
@@ -1791,6 +1857,7 @@ class GeminiValuationLedger:
             self.connection.close()
             raise ValueError("不支持的 Gemini 价值统计缓存")
         if not read_only:
+            # 保留旧版本的估值缓存, 新估值使用普通账本中已确认账号的请求
             self.connection.executescript("""
                 PRAGMA journal_mode=WAL;
                 PRAGMA user_version=1;
@@ -1816,11 +1883,17 @@ class GeminiValuationLedger:
         self.complete = metadata.get("complete") == "true"
         self.scanned_at = float(metadata.get("scannedAt", "0"))
 
-    def scan(self):
+    def scan(self, usage_collected=False):
         self.complete = True
-        auth = gemini_authentication_type(self.home)
-        if auth == "unknown":
-            auth = "oauth"
+        if not usage_collected:
+            usage = Database(self.directory)
+            try:
+                collector = Collector(usage, self.home, self.home, ["gemini"],
+                                      max(0, self.deadline - time.monotonic()), gemini_home=self.home)
+                collector.collect()
+                self.complete = collector.scan_complete
+            finally:
+                usage.connection.close()
         try:
             self.connection.execute("BEGIN IMMEDIATE")
             signals = self.home / "codexbar-usage/signals"
@@ -1829,19 +1902,7 @@ class GeminiValuationLedger:
                     if time.monotonic() >= self.deadline:
                         self.complete = False
                         break
-                    self._scan_file(path, "signal", auth)
-            brain_root = self.home / "brain"
-            if brain_root.is_dir() and not brain_root.is_symlink():
-                entries = [e for e in os.scandir(brain_root) if e.is_dir(follow_symlinks=False)]
-                entries.sort(key=lambda e: e.name, reverse=True)
-                for entry in entries:
-                    if time.monotonic() >= self.deadline:
-                        self.complete = False
-                        break
-                    transcript = pathlib.Path(entry.path) / ".system_generated/logs/transcript.jsonl"
-                    if transcript.is_file() and not transcript.is_symlink():
-                        self._scan_file(transcript, "transcript", auth, cid=entry.name)
-            self.connection.execute("DELETE FROM usage WHERE at<?", (self.cutoff,))
+                    self._scan_file(path)
             self.connection.execute("DELETE FROM samples WHERE at<?", (self.cutoff,))
             self.scanned_at = time.time()
             self.connection.executemany(
@@ -1853,7 +1914,7 @@ class GeminiValuationLedger:
             self.connection.rollback()
             raise
 
-    def _scan_file(self, path, mode, default_auth, cid=""):
+    def _scan_file(self, path):
         try:
             stat = path.lstat()
             if not S_ISREG(stat.st_mode) or stat.st_mtime < self.cutoff:
@@ -1889,10 +1950,7 @@ class GeminiValuationLedger:
                     try:
                         row = json.loads(line)
                         if isinstance(row, dict):
-                            if mode == "signal":
-                                self._observe_signal(row)
-                            else:
-                                self._observe_transcript(row, state, cid, default_auth)
+                            self._observe_signal(row)
                     except (ValueError, TypeError, AttributeError):
                         continue
                 if stream.tell() < stat.st_size:
@@ -1937,128 +1995,44 @@ class GeminiValuationLedger:
             (sample_id, session, float(reset), at, float(used), plan, account)
         )
 
-    def _observe_transcript(self, row, state, cid, default_auth):
-        parsed = timestamp(row.get("created_at") or row.get("timestamp"))
-        if not parsed:
-            return
-        at = parsed.timestamp()
-        if at < self.cutoff or at > time.time() + 60:
-            return
-        typ = row.get("type")
-        if typ == "USER_INPUT":
-            content = row.get("content")
-            if isinstance(content, str) and "<USER_SETTINGS_CHANGE>" in content and "Model Selection" in content:
-                matched = GEMINI_SWITCH_RE.search(content)
-                if matched:
-                    state["model"] = text(matched.group(2).strip(), 120) or state.get("model", "gemini-4-carbon")
-            return
-        if typ not in ("PLANNER_RESPONSE", "CHECKPOINT"):
-            return
-        model = text(row.get("model"), 120) or state.get("model", "gemini-4-carbon")
-        state["model"] = model
-        # 仅统计属于 Gemini 共享池的模型请求, 排除第三方 Claude/GPT 独立池
-        low = model.lower()
-        if any(token in low for token in ("claude", "opus", "sonnet", "haiku", "fable", "mythos", "gpt")):
-            return
-        in_t = number(row.get("input_tokens"))
-        cr_t = number(row.get("cache_read_tokens"))
-        cw_t = number(row.get("cache_creation_tokens"))
-        out_t = number(row.get("output_tokens"))
-        if in_t + cr_t + cw_t + out_t <= 0:
-            return
-        step = number(row.get("step_index"))
-        rec_id = digest("gemini-value-step", cid, typ, step)
-        self.connection.execute(
-            "INSERT OR REPLACE INTO usage VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (rec_id, at, model, in_t, cr_t, cw_t, out_t, default_auth, cid or "")
-        )
-
-    def export(self):
-        meta_map = load_gemini_metadata(self.home)
-        active_account, cid_owners, session_owners, known_accounts = load_gemini_account_context(self.home, meta_map)
-        all_samples = self.connection.execute(
-            "SELECT session, reset, at, used, plan, account FROM samples ORDER BY reset, at, used"
-        ).fetchall()
-        for sess, _, _, _, _, acc in all_samples:
-            if isinstance(acc, str) and len(acc) == 64:
-                known_accounts.add(acc)
-                if isinstance(sess, str) and len(sess) == 64:
-                    session_owners.setdefault(sess, acc)
-        if not active_account:
-            acct_samples = [r for r in all_samples if isinstance(r[5], str) and len(r[5]) == 64]
-            if acct_samples:
-                active_account = max(acct_samples, key=lambda r: r[2])[5]
-
-        multi_account_strict = len(known_accounts) > 1
-        if active_account:
-            if multi_account_strict:
-                sample_rows = [r[:5] for r in all_samples if r[5] == active_account]
-            else:
-                sample_rows = [r[:5] for r in all_samples if r[5] in (None, "", active_account)]
-        else:
-            sample_rows = [r[:5] for r in all_samples]
-
-        windows = ValuationLedger.build_windows([r[:4] for r in sample_rows]) if sample_rows else []
+    def export(self, include_records=True):
+        active, _, owners, _ = load_gemini_account_context(self.home, ledger_path=self.directory / self.filename)
+        samples = self.connection.execute(
+            "SELECT session,reset,at,used,plan,account FROM samples ORDER BY reset,at,used").fetchall()
+        if not active:
+            tagged = [r for r in samples if isinstance(r[5], str) and re.fullmatch(r"[0-9a-f]{64}", r[5])]
+            active = max(tagged, key=lambda r: r[2])[5] if tagged else None
+        selected = [r for r in samples if active and (r[5] or owners.get(r[0])) == active]
+        windows = ValuationLedger.build_windows([r[:4] for r in selected]) if selected else []
         plans = []
-        for _, reset, at, _, plan in sorted(sample_rows, key=lambda r: r[2]):
+        for _, reset, at, _, plan, _ in sorted(selected, key=lambda r: r[2]):
             if plan and (not plans or plans[-1]["plan"] != plan or abs(plans[-1]["resetsAt"] - reset) > 2):
                 plans.append({"at": at, "resetsAt": reset, "plan": plan})
+        records = []
+        path = self.directory / "usage-v1.sqlite"
+        if active and include_records and path.is_file():
+            db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
+            try:
+                cutoff_day = dt.datetime.fromtimestamp(self.cutoff, dt.timezone.utc).date().isoformat()
+                rows = db.execute("SELECT payload FROM records WHERE day>=? AND payload LIKE ? ORDER BY day DESC",
+                                  (cutoff_day, '%"accountKey":"' + active + '"%'))
+                for (raw,) in rows:
+                    rec = json.loads(raw)
+                    if (rec["provider"] == "gemini" and rec["kind"] == "usage" and rec["auth"] == "oauth"
+                            and rec.get("accountKey") == active and rec["observedAt"] >= self.cutoff):
+                        records.append(gemini_value_record(rec))
+            finally:
+                db.close()
+        records.sort(key=lambda r: (r["at"], r["id"]), reverse=True)
+        return {"schema": 1, "ready": True, "complete": self.complete, "generatedAt": time.time(),
+                "scannedAt": self.scanned_at, "accountKey": active, "accountScoped": True,
+                "planTier": plans[-1]["plan"] if plans else None, "plans": plans[-500:],
+                "windows": windows, "records": records[:self.max_records], "truncated": len(records) > self.max_records}
 
-        usage_cols = {r[1] for r in self.connection.execute("PRAGMA table_info(usage)").fetchall()}
-        if "cid" in usage_cols:
-            raw_usage_rows = self.connection.execute(
-                "SELECT id, at, model, input, cached, cache_write, output, cid FROM usage WHERE auth='oauth' AND at>=? ORDER BY at DESC, id",
-                (self.cutoff,)
-            ).fetchall()
-        else:
-            raw_usage_rows = [
-                (*r, "") for r in self.connection.execute(
-                    "SELECT id, at, model, input, cached, cache_write, output FROM usage WHERE auth='oauth' AND at>=? ORDER BY at DESC, id",
-                    (self.cutoff,)
-                ).fetchall()
-            ]
 
-        filtered_usage = []
-        for r in raw_usage_rows:
-            cid_val = r[7]
-            owner = None
-            if cid_val:
-                owner = cid_owners.get(cid_val) or session_owners.get(digest("gemini-session", cid_val))
-            if active_account:
-                if multi_account_strict:
-                    if owner != active_account:
-                        continue
-                elif owner and owner != active_account:
-                    continue
-            filtered_usage.append(r)
-            if len(filtered_usage) > self.max_records:
-                break
-
-        latest_plan = plans[-1]["plan"] if plans else None
-        if not latest_plan:
-            plan_row = self.connection.execute("SELECT value FROM meta WHERE key='planTier'").fetchone()
-            latest_plan = plan_row[0] if plan_row else None
-        return {
-            "schema": 1,
-            "ready": True,
-            "complete": self.complete,
-            "generatedAt": time.time(),
-            "scannedAt": self.scanned_at,
-            "accountKey": active_account,
-            "planTier": latest_plan,
-            "truncated": len(filtered_usage) > self.max_records,
-            "windows": windows,
-            "plans": plans[-500:],
-            "records": [
-                {
-                    "id": r[0],
-                    "at": r[1],
-                    "model": r[2],
-                    "tokens": {"input": r[3], "cached": r[4], "cacheWrite": r[5], "output": r[6]}
-                }
-                for r in filtered_usage[:self.max_records]
-            ]
-        }
+def gemini_value_record(record):
+    return {"id": record["id"], "at": record["observedAt"], "model": record["model"],
+            "tokens": {"input": record["input"], "cached": record["cacheRead"], "cacheWrite": record["cacheWrite"], "output": record["output"]}}
 
 
 def scan_claude_weekly_windows(claude_home, budget=4):
@@ -2296,7 +2270,7 @@ def main():
         try:
             ledger = GeminiValuationLedger(directory, args.gemini_home, remaining)
             try:
-                ledger.scan()
+                ledger.scan(usage_collected=True)
             finally:
                 ledger.connection.close()
         except (OSError, ValueError, sqlite3.Error):

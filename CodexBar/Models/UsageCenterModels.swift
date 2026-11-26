@@ -309,6 +309,7 @@ nonisolated struct UsageQuotaObservation: Codable, Identifiable, Equatable {
     let provider: String
     let observedAt: Double
     let windows: [Window]
+    var accountKey: String?
     var id: String {
         provider
     }
@@ -322,6 +323,9 @@ nonisolated struct UsageQuotaObservation: Codable, Identifiable, Equatable {
     }
 
     func isPreferred(over other: UsageQuotaObservation, at now: Double) -> Bool {
+        if provider == "gemini", other.provider == provider, accountKey != other.accountKey {
+            return observedAt >= other.observedAt
+        }
         if ["claude", "gemini"].contains(provider), other.provider == provider {
             let complete = hasCurrentFiveHourReset(at: now)
             let otherComplete = other.hasCurrentFiveHourReset(at: now)

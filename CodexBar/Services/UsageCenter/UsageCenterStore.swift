@@ -353,7 +353,7 @@ actor UsageCenterStore {
                 ON CONFLICT(id) DO UPDATE SET
                     payload=excluded.payload,name=excluded.name,enabled=excluded.enabled,
                     codex=excluded.codex,claude=excluded.claude,gemini=excluded.gemini,
-                    gemini_plan=CASE WHEN excluded.gemini_plan!='' THEN excluded.gemini_plan ELSE sources.gemini_plan END,
+                    gemini_plan=excluded.gemini_plan,
                     collected=CASE WHEN excluded.collected>0 THEN excluded.collected ELSE sources.collected END,
                     warnings=excluded.warnings,quotas=excluded.quotas
                 """, [

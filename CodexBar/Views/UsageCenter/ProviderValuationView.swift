@@ -95,7 +95,9 @@ struct ProviderValuationView: View {
             Image(systemName: "clock.badge.questionmark")
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
-            Text(isRefreshing ? "正在计算周期估值…" : "等待包含 7d 重置时间的额度记录与模型样本; 新开交互式会话即可自动捕获")
+            Text(isRefreshing ? "正在计算周期估值…" : provider == "gemini"
+                ? "等待已确认账号的 7d 额度与模型用量"
+                : "等待包含 7d 重置时间的额度记录与模型样本")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         }

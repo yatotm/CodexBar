@@ -3,6 +3,21 @@ import SQLite3
 import Testing
 
 struct ControlCenterAndValuationTests {
+    @Test func localSnapshotLeavesBundledResourcesUntouched() async throws {
+        let temp = try TestDirectory()
+        defer { try? temp.remove() }
+        let resources = Bundle(for: AppUpdater.self)
+        for name in ["CodexBarProbe", "UsageCollector"] {
+            let src = try #require(resources.url(forResource: name, withExtension: "py"))
+            try FileManager.default.copyItem(at: src, to: temp.url.appendingPathComponent(name + ".py"))
+        }
+        var source = UsageSource.local
+        source.claudeHome = temp.url.appendingPathComponent("claude").path
+        let probe = temp.url.appendingPathComponent("CodexBarProbe.py")
+        _ = try await UsageCollectorClient().fetchLocalZeroHookSnapshot(source: source, probeURL: probe)
+        #expect(!FileManager.default.fileExists(atPath: temp.url.appendingPathComponent("__pycache__").path))
+    }
+
     @Test
     func menuScopeIncludesRespectsEnabledAndProviderToggles() {
         var local = UsageSource.local
@@ -25,6 +40,7 @@ struct ControlCenterAndValuationTests {
         let now = Date(timeIntervalSince1970: 1780000000)
         let resetAt = now.timeIntervalSince1970 + 86400 * 3
         let stepTs = now.timeIntervalSince1970 - 3600
+        let account = String(repeating: "a", count: 64)
 
         let geminiObs = UsageQuotaObservation(
             provider: "gemini",
@@ -32,7 +48,7 @@ struct ControlCenterAndValuationTests {
             windows: [
                 .init(name: "5h", usedPercent: 15, resetsAt: now.timeIntervalSince1970 + 7200),
                 .init(name: "7d", usedPercent: 25, resetsAt: resetAt)
-            ]
+            ], accountKey: account
         )
         let geminiRecord = GeminiStepUsageRecord(
             id: "gem-1",
@@ -42,7 +58,17 @@ struct ControlCenterAndValuationTests {
         )
         let geminiPeriods = GeminiValuationCalculator.computePeriods(
             provider: "gemini",
-            evidences: [GeminiValuationEvidence(planTier: "Ultra", windows: [], records: [geminiRecord])],
+            evidences: [
+                GeminiValuationEvidence(accountKey: account, accountScoped: true, planTier: "Ultra", windows: [], records: [geminiRecord]),
+                GeminiValuationEvidence(accountKey: account, accountScoped: true, windows: [], records: [geminiRecord]),
+                GeminiValuationEvidence(
+                    accountKey: String(repeating: "b", count: 64),
+                    accountScoped: true,
+                    windows: [],
+                    records: [.init(id: "other", at: stepTs, model: geminiRecord.model, tokens: geminiRecord.tokens)]
+                )
+            ],
+            storeRecords: [.init(id: "legacy", at: stepTs, model: geminiRecord.model, tokens: geminiRecord.tokens)],
             liveWeeklyObservation: geminiObs,
             priceBook: .fallback,
             now: now
@@ -53,6 +79,7 @@ struct ControlCenterAndValuationTests {
         #expect(gPeriod.projectedDollars != nil)
         #expect(abs((gPeriod.projectedDollars ?? 0) - 24.0) < 0.01)
         #expect(gPeriod.planTitle == "Ultra")
+        #expect(gPeriod.tokens == geminiRecord.tokens)
 
         let claudeObs = UsageQuotaObservation(
             provider: "claude",

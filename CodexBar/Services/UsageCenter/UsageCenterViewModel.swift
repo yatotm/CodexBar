@@ -83,6 +83,7 @@ final class UsageCenterViewModel: ObservableObject {
     private var hubEventTask: Task<Void, Never>?
     private var localLiveTask: Task<Void, Never>?
     private var localGeminiEvidence = GeminiValuationEvidence.empty
+    private var localLiveGeminiAccount: String?
     private var hubGeminiEvidence = GeminiValuationEvidence.empty
     private var localClaudeEvidence = GeminiValuationEvidence.empty
     private var hubClaudeEvidence = GeminiValuationEvidence.empty
@@ -132,8 +133,17 @@ final class UsageCenterViewModel: ObservableObject {
         latestQuota(for: "gemini", scope: .gemini)
     }
 
+    private var currentLocalGeminiAccount: String? {
+        guard effectiveSources.contains(where: { $0.id == "local" && UsageMenuScope.gemini.includes($0) }) else { return nil }
+        return localLiveGeminiAccount ?? localGeminiEvidence.confirmedAccount
+    }
+
     var latestGeminiPlan: String? {
+        let active = currentLocalGeminiAccount ?? latestGeminiQuota?.accountKey
         for source in effectiveSources where UsageMenuScope.gemini.includes(source) {
+            if let active, statuses[source.id]?.quotas.contains(where: { $0.provider == "gemini" && $0.accountKey == active }) != true {
+                continue
+            }
             if let plan = statuses[source.id]?.geminiPlan, !plan.isEmpty {
                 return plan
             }
@@ -356,7 +366,7 @@ final class UsageCenterViewModel: ObservableObject {
             let trimmed = remoteHubURL.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
             guard let token = await hubClient.loadSecret(account: "remote-hub", isNodeToken: false), !token.isEmpty else {
-                throw UsageCenterError(message: "请在节点与部署页填写常驻中枢读取密钥")
+                throw UsageCenterError(message: "请在节点与部署页填写常驻中枢管理密钥")
             }
             return ActiveHubEndpoint(url: trimmed, token: token, allowHTTP: false)
         }
@@ -378,7 +388,8 @@ final class UsageCenterViewModel: ObservableObject {
                     readToken: endpoint.token,
                     epoch: cursor.epoch,
                     cursor: cursor.revision,
-                    allowHTTP: endpoint.allowHTTP
+                    allowHTTP: endpoint.allowHTTP,
+                    geminiAccount: currentLocalGeminiAccount
                 )
                 hubLiveRevision = max(hubLiveRevision, pulled.liveRevision)
                 try await applyPulledHubData(pulled)
@@ -478,6 +489,11 @@ final class UsageCenterViewModel: ObservableObject {
                         isOnline: true,
                         emitLiveNotifications: true
                     )
+                    if let account = snapshot.geminiAccountKey, account != localLiveGeminiAccount {
+                        localLiveGeminiAccount = account
+                        statuses["local"]?.quotas.removeAll { $0.provider == "gemini" && $0.accountKey != account }
+                        recalculateGeminiValuation()
+                    }
                     applyLocalLiveQuotas(snapshot.quotas)
                 }
                 do { try await Task.sleep(for: .seconds(3)) } catch { return }
@@ -545,12 +561,18 @@ final class UsageCenterViewModel: ObservableObject {
 
     private func applyLiveEventFrame(_ events: HubEventsResponse) {
         hubHealthy = true
+        if currentLocalGeminiAccount == nil, events.geminiAccountKey != hubGeminiEvidence.confirmedAccount {
+            hubGeminiEvidence = .empty
+            if automaticRefresh, events.geminiAccountKey != nil {
+                refresh(manual: false)
+            }
+        }
         for remote in events.nodes {
             var st = statuses[remote.id] ?? UsageSourceStatus()
             st.lastSuccess = remote.lastSeenAt.map { Date(timeIntervalSince1970: $0) } ?? st.lastSuccess
             st.quotas = remote.quotas
             st.warnings = remote.warnings
-            st.geminiPlan = remote.geminiPlan ?? st.geminiPlan
+            st.geminiPlan = remote.geminiPlan
             statuses[remote.id] = st
             if let idx = sources.firstIndex(where: { $0.id == remote.id }) {
                 sources[idx].isOnline = remote.online
@@ -654,7 +676,7 @@ final class UsageCenterViewModel: ObservableObject {
             hubURL: externalURL,
             nodeID: source.id,
             rawWriteToken: rawToken,
-            providers: source.enabledProviderNames,
+            providers: source.isEnabled ? source.enabledProviderNames : [],
             bridgeStatusLine: source.bridgeStatusLine
         )
     }
@@ -688,11 +710,10 @@ final class UsageCenterViewModel: ObservableObject {
 
     private func applySourceMutation(_ updated: UsageSource) async {
         do {
-            try await store.save(updated)
-            sources = try await store.sources()
-            if updated.transport == .local {
-                await reconcileLocalBridges(for: updated)
-            } else if updated.transport == .probe, let endpoint = try await activeHubEndpoint() {
+            if updated.transport == .probe {
+                guard let endpoint = try await activeHubEndpoint() else {
+                    throw UsageCenterError(message: "需要连接中枢才能修改探针配置")
+                }
                 try await hubClient.upsertNode(
                     hubURL: endpoint.url,
                     readToken: endpoint.token,
@@ -700,6 +721,11 @@ final class UsageCenterViewModel: ObservableObject {
                     signingKey: nil,
                     allowHTTP: endpoint.allowHTTP
                 )
+            }
+            try await store.save(updated)
+            sources = try await store.sources()
+            if updated.transport == .local {
+                await reconcileLocalBridges(for: updated)
             }
             recalculateGeminiValuation()
             reloadDashboard()
@@ -802,8 +828,12 @@ final class UsageCenterViewModel: ObservableObject {
     private func latestQuota(for provider: String, scope: UsageMenuScope) -> UsageQuotaObservation? {
         var latest: UsageQuotaObservation?
         let now = Date().timeIntervalSince1970
+        let geminiAccount = currentLocalGeminiAccount ?? (topologyMode == .localOnly ? nil : hubGeminiEvidence.confirmedAccount)
         for source in effectiveSources where scope.includes(source) {
             for quota in statuses[source.id]?.quotas ?? [] where quota.provider == provider {
+                if provider == "gemini", let account = geminiAccount, quota.accountKey != account {
+                    continue
+                }
                 if latest.map({ quota.isPreferred(over: $0, at: now) }) ?? true {
                     latest = quota
                 }
@@ -821,22 +851,19 @@ final class UsageCenterViewModel: ObservableObject {
         let cEvidences = (localSource?.isEnabled == true && localSource?.includesClaude == true ? [localClaudeEvidence] : [])
             + (localOnly ? [] : [hubClaudeEvidence])
         let liveG = latestGeminiQuota
+        let geminiAccount = currentLocalGeminiAccount ?? liveG?.accountKey ?? (localOnly ? nil : hubGeminiEvidence.confirmedAccount)
         let liveC = latestClaudeQuota
         let book = geminiPriceBook
 
         valuationTask = Task { [weak self] in
             guard let self else { return }
-            let hasAccountScopedGemini = gEvidences.contains { ($0.accountKey?.isEmpty == false) && !$0.records.isEmpty }
-            let gRecords = hasAccountScopedGemini
-                ? []
-                : await (try? store.valuationUsageRecords(provider: "gemini", localOnly: localOnly)) ?? []
             let cRecords = await (try? store.valuationUsageRecords(provider: "claude", localOnly: localOnly)) ?? []
             guard !Task.isCancelled else { return }
             geminiPeriods = GeminiValuationCalculator.computePeriods(
                 provider: "gemini",
                 evidences: gEvidences,
-                storeRecords: gRecords,
                 liveWeeklyObservation: liveG,
+                preferredGeminiAccount: geminiAccount,
                 priceBook: book
             )
             claudePeriods = GeminiValuationCalculator.computePeriods(

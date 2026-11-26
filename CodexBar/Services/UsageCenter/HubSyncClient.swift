@@ -46,6 +46,7 @@ nonisolated struct HubEventsResponse: Decodable {
     let `protocol`: Int
     let liveRevision: Int64
     let sentAt: Double
+    let geminiAccountKey: String?
     let nodes: [HubNodeRemoteDTO]
     let liveTasks: [String: [RemoteActivityTask]]
 }
@@ -84,7 +85,7 @@ nonisolated enum HubCrypto {
 
     static func probeInstallCommand(hubURL: String, nodeID: String, rawWriteToken: String, providers: [String], bridgeStatusLine: Bool) -> String {
         let trimmedHub = hubURL.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
-        let provList = (providers.isEmpty ? ["codex", "claude", "gemini"] : providers).joined(separator: ",")
+        let provList = providers.joined(separator: ",")
         let extra = bridgeStatusLine ? "" : " --pure-readonly"
         let fetchInstall = "(curl --noproxy '*' -fsSL \"\(trimmedHub)/install.sh\" 2>/dev/null || curl -fsSL \"\(trimmedHub)/install.sh\")"
         return "env CODEXBAR_TOKEN='\(shellEscape(rawWriteToken))' sh -c '\(fetchInstall) | sh -s -- --hub \"\(trimmedHub)\" --node \"\(shellEscape(nodeID))\" --providers \"\(provList)\"\(extra)'"
@@ -238,7 +239,7 @@ actor HubSyncClient {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: python)
         proc.arguments = [
-            scriptURL.path, "serve",
+            "-B", scriptURL.path, "serve",
             "--state-dir", stateDir.path,
             "--listen", "0.0.0.0",
             "--port", String(port),
@@ -267,12 +268,15 @@ actor HubSyncClient {
         return (obj?["protocol"] as? Int) == 2
     }
 
-    func pull(hubURL: String, readToken: String, epoch: String, cursor: Int64, allowHTTP: Bool) async throws -> HubPullResponse {
-        let query = [
+    func pull(hubURL: String, readToken: String, epoch: String, cursor: Int64, allowHTTP: Bool, geminiAccount: String? = nil) async throws -> HubPullResponse {
+        var query = [
             URLQueryItem(name: "epoch", value: epoch),
             URLQueryItem(name: "cursor", value: String(cursor)),
             URLQueryItem(name: "limit", value: "1500")
         ]
+        if let geminiAccount {
+            query.append(URLQueryItem(name: "geminiAccount", value: geminiAccount))
+        }
         let url = try endpointURL(hubURL: hubURL, path: "/v1/pull", query: query, allowLoopbackHTTP: allowHTTP)
         let data = try await sendRequest(url: url, method: "GET", bearer: readToken, body: nil, timeout: 25)
         guard let decoded = try? JSONDecoder().decode(HubPullResponse.self, from: data), decoded.isValid else {
@@ -378,7 +382,7 @@ actor HubSyncClient {
         }
         guard http.statusCode == 200 else {
             if http.statusCode == 401 {
-                throw UsageCenterError(message: "中枢读取密钥校验未通过 (401), 请核对控制中心密钥")
+                throw UsageCenterError(message: "中枢管理密钥校验未通过 (401), 请核对控制中心密钥")
             }
             throw UsageCenterError(message: "中枢返回 HTTP \(http.statusCode)")
         }

@@ -22,6 +22,9 @@ spec.loader.exec_module(shared)
 usage_spec = importlib.util.spec_from_file_location("shared_usage_import", Path(__file__).resolve().parents[1] / "CodexBar/Resources/UsageCollector.py")
 usage_collector = importlib.util.module_from_spec(usage_spec)
 usage_spec.loader.exec_module(usage_collector)
+probe_spec = importlib.util.spec_from_file_location("probe", Path(shared.__file__).with_name("CodexBarProbe.py"))
+probe = importlib.util.module_from_spec(probe_spec)
+probe_spec.loader.exec_module(probe)
 
 
 def wire_usage(count):
@@ -908,6 +911,60 @@ class ObserverTests(unittest.TestCase):
 
 
 class WebSocketTests(unittest.TestCase):
+    def test_probe_consumes_shared_state_table_and_uses_websocket_without_inventing_idle_tasks(self):
+        loaded = []
+        def serve(connection):
+            while True:
+                try:
+                    _, request = self.receive(connection)
+                except EOFError:
+                    return
+                method = request["method"]
+                if method == "initialized":
+                    continue
+                if method == "initialize":
+                    result = {"userAgent": "codex/0.170.0 test"}
+                elif method == "thread/loaded/list":
+                    result = {"data": ["idle", "active"]}
+                else:
+                    tid = request["params"]["threadId"]
+                    loaded.append(tid)
+                    if method in ("thread/read", "thread/resume"):
+                        result = {"thread": dict(id=tid, cwd="/test/rpc", source="cli", model="test-model",
+                                                 status=dict(type="active" if tid == "active" else "idle", activeFlags=[]))}
+                    elif method == "thread/turns/list":
+                        result = {"data": [dict(id="real-turn", status="inProgress", startedAt=now-40)] if tid == "active" else []}
+                    else:
+                        raise AssertionError(method)
+                self.send(connection, dict(id=request["id"], result=result))
+
+        now = time.time()
+        sock, errors = self.server(serve)
+        home = sock.parent
+        codex = home / ".codex"
+        endpoint = codex / "app-server-control/app-server-control.sock"
+        endpoint.parent.mkdir(parents=True)
+        endpoint.symlink_to(sock)
+        store = shared.StateStore(home / ".local/state/codexbar-shared-codex")
+        self.addCleanup(store.close)
+        store.history_home(codex)
+        store.save(active_graph(now-20), version="0.170.0", now=now)
+        session = probe.CodexProbeSession()
+        try:
+            with patch.object(Path, "home", return_value=home):
+                cached, = session.read(codex, usage_collector, now)
+                self.assertEqual(cached["id"], shared.digest("codex", "root", "turn"))
+                self.assertFalse(loaded)
+                self.assertIsNone(probe.cached_codex_tasks(home / "different-profile", usage_collector, now))
+                direct, = session.read(codex, usage_collector, now+76)
+                self.assertEqual((direct["id"], direct["state"], direct["modelName"]),
+                                 (shared.digest("codex", "active", "real-turn"), "running", "test-model"))
+                self.assertEqual(direct["startedAt"], now-40)
+                self.assertEqual(set(loaded), {"idle", "active"})
+        finally:
+            session.close()
+        self.assertFalse(errors)
+
     def server(self, callback):
         temporary = tempfile.TemporaryDirectory(prefix="cb-shared-", dir="/tmp")
         path = Path(temporary.name) / "server.sock"

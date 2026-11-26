@@ -5,7 +5,6 @@
 import argparse
 import hashlib
 import hmac
-import importlib.util
 import json
 import math
 import os
@@ -14,9 +13,9 @@ import platform
 import plistlib
 import re
 import secrets
+import shutil
 import shlex
 import signal
-import socket
 import sqlite3
 import ssl
 import subprocess
@@ -28,7 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-PROBE_VERSION = "2.0.0"
+PROBE_VERSION = "2.1.0"
 VALID_PROVIDERS = ("codex", "claude", "gemini")
 
 
@@ -42,20 +41,20 @@ def sign_request(signing_key, node_id, timestamp_str, nonce, body_bytes):
     return hmac.new(signing_key.encode(), message, hashlib.sha256).hexdigest()
 
 
-def load_collector_module():
-    embedded = globals().get("EMBEDDED_USAGE_COLLECTOR")
+def probe_module(name, embedded):
+    module = types.ModuleType(name)
     if isinstance(embedded, str) and embedded:
-        module = types.ModuleType("UsageCollector")
-        module.CODEXBAR_SCRIPT_SOURCE = embedded.encode()
-        exec(compile(embedded, "<UsageCollector>", "exec"), module.__dict__)
-        return module
-    candidate = pathlib.Path(__file__).resolve().with_name("UsageCollector.py")
-    if not candidate.is_file():
-        candidate = pathlib.Path(__file__).resolve().parents[1] / "CodexBar/Resources/UsageCollector.py"
-    spec = importlib.util.spec_from_file_location("UsageCollector", candidate)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+        source = embedded.encode("utf-8")
+    else:
+        source = pathlib.Path(__file__).with_name(name + ".py").read_bytes()
+    module.__file__ = str(pathlib.Path(__file__).with_name(name + ".py"))
+    module.CODEXBAR_SCRIPT_SOURCE = source
+    exec(compile(source, module.__file__, "exec"), module.__dict__)
     return module
+
+
+def load_collector_module():
+    return probe_module("UsageCollector", globals().get("EMBEDDED_USAGE_COLLECTOR"))
 
 
 def config_directory():
@@ -108,104 +107,154 @@ def pid_alive(pid):
         return False
 
 
-def read_codex_live_tasks(codex_home, collector_mod, now_ts):
-    # 优先读取本机已运行的共享采集库, 未安装时直接只读查询官方 app-server socket
-    shared_db = pathlib.Path.home() / ".local/state/codexbar-shared-codex/shared-activity-v1.sqlite"
-    if shared_db.is_file() and not shared_db.is_symlink():
-        conn = None
-        try:
-            conn = sqlite3.connect(shared_db.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2)
-            row = conn.execute("SELECT payload FROM snapshot WHERE id=1").fetchone()
-            if row:
-                frame = json.loads(row[0])
-                if isinstance(frame, dict) and now_ts - float(frame.get("sentAt", 0)) < 120:
-                    tasks = frame.get("tasks")
-                    if isinstance(tasks, list):
-                        return [t for t in tasks if isinstance(t, dict) and t.get("provider") == "codex"]
-        except (OSError, sqlite3.Error, ValueError):
-            pass
-        finally:
-            if conn is not None:
-                conn.close()
-    sock_path = codex_home / "app-server-control/app-server-control.sock"
-    if not sock_path.exists() or sock_path.is_symlink():
-        return []
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(1.2)
-    try:
-        sock.connect(str(sock_path))
-        init_req = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                    "params": {"clientInfo": {"name": "codexbar-probe", "version": PROBE_VERSION}}}
-        sock.sendall((json.dumps(init_req) + "\n").encode())
-        buf = b""
-        while b"\n" not in buf and len(buf) < 65536:
-            chunk = sock.recv(16384)
-            if not chunk:
-                return []
-            buf += chunk
-        sock.sendall((json.dumps({"jsonrpc": "2.0", "method": "initialized", "params": {}}) + "\n").encode())
-        sock.sendall((json.dumps({"jsonrpc": "2.0", "id": 2, "method": "thread/loaded/list", "params": {}}) + "\n").encode())
-        _, _, buf = buf.partition(b"\n")
-        deadline = time.monotonic() + 1.2
-        while time.monotonic() < deadline and len(buf) < 512 * 1024:
-            while b"\n" in buf:
-                line, _, buf = buf.partition(b"\n")
-                msg = json.loads(line)
-                if msg.get("id") == 2 and isinstance(msg.get("result"), dict):
-                    data = msg["result"].get("data") or []
-                    tasks = []
-                    for item in data[:64]:
-                        if not isinstance(item, str) or not item:
-                            continue
-                        tid = collector_mod.digest("codex-probe-task", item)
-                        tasks.append({
-                            "id": tid,
-                            "provider": "codex",
-                            "state": "running",
-                            "project": "Codex",
-                            "startedAt": now_ts - 5,
-                            "updatedAt": now_ts,
-                            "stateChangedAt": now_ts - 5
-                        })
-                    return tasks
-            chunk = sock.recv(16384)
-            if not chunk:
-                break
-            buf += chunk
-    except (OSError, ValueError):
-        return []
-    finally:
-        try:
-            sock.close()
-        except OSError:
-            pass
-    return []
-
-
-def read_live_quota(home_dir, provider):
-    live_path = home_dir / "codexbar-usage/live-state.json"
-    if not live_path.is_file() or live_path.is_symlink():
+def session_time(value, now):
+    if type(value) not in (int, float) or not math.isfinite(value):
         return None
+    seconds = value / 1000 if value > 1e11 else value
+    return seconds if 0 < seconds <= now + 2 else None
+
+
+def cached_codex_tasks(codex_home, collector_mod, now):
+    state = pathlib.Path.home() / ".local/state/codexbar-shared-codex"
+    manifest = pathlib.Path.home() / ".local/share/codexbar-shared-codex/installation.json"
+    conn = None
     try:
-        raw = json.loads(live_path.read_text())
-        q = raw.get("latestQuota") if isinstance(raw, dict) else None
-        if isinstance(q, dict) and q.get("provider") == provider and isinstance(q.get("windows"), list) and q["windows"]:
-            return q
-    except (OSError, ValueError):
+        if manifest.is_file():
+            config = json.loads(manifest.read_bytes())
+            if pathlib.Path(config["codexHome"]).resolve() != codex_home.resolve():
+                return None
+            state = pathlib.Path(config["stateDirectory"])
+        db = state / "shared-activity-v1.sqlite"
+        if not db.is_file() or db.is_symlink():
+            return None
+        conn = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2)
+        meta = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_meta'").fetchone()
+        home = conn.execute("SELECT value FROM history_meta WHERE key='codexHomeKey'").fetchone() if meta else None
+        if home and home[0] != collector_mod.digest("codex-home", str(codex_home.resolve())):
+            return None
+        if not home and not manifest.is_file() and codex_home.resolve() != (pathlib.Path.home() / ".codex").resolve():
+            return None
+        row = conn.execute("SELECT payload,saved FROM state WHERE id=1").fetchone()
+        if row:
+            frame = json.loads(row[0])
+            if frame.get("backend") == "sharedCodex" and isinstance(frame.get("tasks"), list):
+                tasks = [t for t in frame["tasks"] if isinstance(t, dict) and t.get("provider") == "codex"]
+                return tasks, frame.get("sourceAvailable") is True and 0 <= now - row[1] <= 75
+    except (OSError, sqlite3.Error, ValueError, KeyError, TypeError):
         pass
+    finally:
+        if conn is not None:
+            conn.close()
     return None
 
 
-def merge_quotas_with_live(exported_quotas, homes, enabled, collector_mod, now_ts):
+class CodexProbeSession:
+    def __init__(self):
+        self.shared = None
+        self.rpc = None
+        self.observer = None
+        self.next_check = 0
+        self.retry_at = 0
+        self.last_tasks = []
+
+    def close(self):
+        if self.rpc:
+            self.rpc.close()
+        self.rpc = self.observer = None
+        self.next_check = 0
+
+    def read(self, home, collector, now):
+        cached = cached_codex_tasks(home, collector, now)
+        if cached is not None:
+            tasks, healthy = cached
+            if healthy:
+                self.close()
+                self.retry_at = 0
+                self.last_tasks = tasks
+                return tasks
+            if not self.last_tasks:
+                self.last_tasks = tasks
+        clock = time.monotonic()
+        endpoint = home / "app-server-control/app-server-control.sock"
+        # 官方控制端点可以是符号链接, WebSocket 会核对目标确为当前用户的 Unix socket
+        if clock >= self.retry_at and endpoint.is_socket():
+            if self.shared is None:
+                self.shared = probe_module("SharedCodexCollector", globals().get("EMBEDDED_SHARED_CODEX"))
+            try:
+                if self.rpc is None:
+                    graph = self.shared.TaskGraph()
+                    self.rpc = self.shared.RPC(str(endpoint), graph.consume)
+                    self.rpc.initialize()
+                    self.observer = self.shared.Observer(self.rpc, graph)
+                graph = self.observer.graph
+                for _ in range(128):
+                    message = self.rpc.transport.receive(0)
+                    if not message:
+                        break
+                    graph.consume(message)
+                if clock >= self.next_check:
+                    self.observer.reconcile()
+                    self.next_check = clock + 5
+                self.last_tasks = graph.tasks(now)
+                graph.events.clear()
+                return self.last_tasks
+            except (self.shared.CollectorError, OSError, ValueError):
+                self.close()
+                self.retry_at = clock + 5
+        else:
+            self.close()
+        # 连接中断只撤销运行状态的可信度, 后台恢复后再按真实轮次对账
+        return [dict(t, state="unknown", stage="unknown", hasBlockingInputRequest=False, lifecycleComplete=False)
+                if t["state"] in ("running", "waiting") else t
+                for t in self.last_tasks if t["updatedAt"] >= now - 86400]
+
+
+def read_codex_live_tasks(codex_home, collector_mod, now_ts):
+    reader = CodexProbeSession()
+    try:
+        return reader.read(codex_home, collector_mod, now_ts)
+    finally:
+        reader.close()
+
+
+def read_live_state(home_dir):
+    live_path = home_dir / "codexbar-usage/live-state.json"
+    if not live_path.is_file() or live_path.is_symlink():
+        return {}
+    try:
+        raw = json.loads(live_path.read_text())
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def read_live_quota(home_dir, provider, state=None):
+    raw = read_live_state(home_dir) if state is None else state
+    quota = raw.get("latestQuota")
+    if isinstance(quota, dict) and quota.get("provider") == provider and isinstance(quota.get("windows"), list) and quota["windows"]:
+        if provider == "gemini" and raw.get("activeAccount") and quota.get("accountKey") != raw["activeAccount"]:
+            return None
+        return quota
+    return None
+
+
+def merge_quotas_with_live(exported_quotas, homes, enabled, collector_mod, now_ts, gemini_state=None):
     by_provider = {q["provider"]: q for q in (exported_quotas or []) if isinstance(q, dict) and q.get("provider")}
     for provider in ("claude", "gemini"):
         if provider not in enabled:
             continue
-        live_q = read_live_quota(homes[provider], provider)
+        if provider == "gemini":
+            if gemini_state is None:
+                gemini_state = read_live_state(homes[provider])
+            active = gemini_state.get("activeAccount")
+            if active and by_provider.get(provider, {}).get("accountKey") != active:
+                by_provider.pop(provider, None)
+        live_q = read_live_quota(homes[provider], provider, gemini_state if provider == "gemini" else None)
         if not live_q:
             continue
         prev_q = by_provider.get(provider, {})
-        if not prev_q or collector_mod.claude_quota_priority(live_q, now_ts) >= collector_mod.claude_quota_priority(prev_q, now_ts):
+        switched = provider == "gemini" and live_q.get("accountKey") and live_q.get("accountKey") != prev_q.get("accountKey")
+        if not prev_q or switched or collector_mod.claude_quota_priority(live_q, now_ts) >= collector_mod.claude_quota_priority(prev_q, now_ts):
             by_provider[provider] = live_q
     return list(by_provider.values())
 
@@ -216,31 +265,32 @@ def read_claude_transcript_model(claude_home, raw_sid, collector_mod):
         return None
     target_name = f"{raw_sid}.jsonl"
     try:
-        for proj_entry in os.scandir(projects):
-            if not proj_entry.is_dir(follow_symlinks=False):
-                continue
-            cand = pathlib.Path(proj_entry.path) / target_name
-            if not cand.is_file() or cand.is_symlink():
-                continue
-            size = cand.stat().st_size
-            with cand.open("rb") as f:
-                if size > 49152:
-                    f.seek(size - 49152)
-                    f.readline()
-                model = None
-                for raw_line in f:
-                    if b'"model"' not in raw_line:
-                        continue
-                    try:
-                        obj = json.loads(raw_line)
-                    except ValueError:
-                        continue
-                    msg = obj.get("message") if isinstance(obj, dict) else None
-                    m_val = (msg.get("model") if isinstance(msg, dict) else None) or (obj.get("model") if isinstance(obj, dict) else None)
-                    if isinstance(m_val, str) and m_val and not m_val.startswith("<"):
-                        model = collector_mod.text(m_val, 100)
-                if model:
-                    return model
+        with os.scandir(projects) as entries:
+            for proj_entry in entries:
+                if not proj_entry.is_dir(follow_symlinks=False):
+                    continue
+                cand = pathlib.Path(proj_entry.path) / target_name
+                if not cand.is_file() or cand.is_symlink():
+                    continue
+                size = cand.stat().st_size
+                with cand.open("rb") as f:
+                    if size > 49152:
+                        f.seek(size - 49152)
+                        f.readline()
+                    model = None
+                    for raw_line in f:
+                        if b'"model"' not in raw_line:
+                            continue
+                        try:
+                            obj = json.loads(raw_line)
+                        except ValueError:
+                            continue
+                        msg = obj.get("message") if isinstance(obj, dict) else None
+                        m_val = (msg.get("model") if isinstance(msg, dict) else None) or (obj.get("model") if isinstance(obj, dict) else None)
+                        if isinstance(m_val, str) and m_val and not m_val.startswith("<"):
+                            model = collector_mod.text(m_val, 100)
+                    if model:
+                        return model
     except OSError:
         pass
     return None
@@ -262,7 +312,7 @@ def read_claude_live_tasks(claude_home, collector_mod, now_ts):
     if sessions_dir.is_dir() and not sessions_dir.is_symlink():
         try:
             for entry in os.scandir(sessions_dir):
-                if not entry.name.endswith(".json") or entry.is_symlink():
+                if not re.fullmatch(r"[1-9][0-9]{0,9}\.json", entry.name) or entry.is_symlink():
                     continue
                 try:
                     info = json.loads(pathlib.Path(entry.path).read_text())
@@ -273,20 +323,21 @@ def read_claude_live_tasks(claude_home, collector_mod, now_ts):
                 pid = info.get("pid")
                 sid_raw = info.get("sessionId")
                 status = info.get("status")
-                if not isinstance(sid_raw, str) or not sid_raw or not pid_alive(pid):
+                if not isinstance(sid_raw, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", sid_raw) or pid != int(entry.name[:-5]) or not pid_alive(pid):
                     continue
                 sid = collector_mod.digest("claude-session", sid_raw)
                 cwd = info.get("cwd")
                 proj = pathlib.PurePath(cwd.rstrip("/")).name if isinstance(cwd, str) and cwd.strip() else ""
-                raw_started = info.get("startedAt")
-                started_sec = None
-                if isinstance(raw_started, (int, float)) and not isinstance(raw_started, bool) and raw_started > 0:
-                    started_sec = float(raw_started) / 1000.0 if raw_started > 1e11 else float(raw_started)
+                changed = session_time(info.get("statusUpdatedAt"), now_ts)
+                previous = active_sessions.get(sid)
+                if previous and (previous["changedAt"] or 0) >= (changed or 0):
+                    continue
                 active_sessions[sid] = {
                     "status": status,
                     "rawSid": sid_raw,
                     "project": collector_mod.text(proj, 100),
-                    "startedAt": started_sec
+                    "startedAt": session_time(info.get("startedAt"), now_ts),
+                    "changedAt": changed
                 }
         except OSError:
             pass
@@ -296,26 +347,38 @@ def read_claude_live_tasks(claude_home, collector_mod, now_ts):
         base = tasks_by_id.get(sid, {})
         proc_info = active_sessions.get(sid)
         proc_status = proc_info["status"] if proc_info else None
-        updated = float(base.get("updatedAt", now_ts))
-        started = float(base.get("startedAt") or (proc_info["startedAt"] if proc_info and proc_info["startedAt"] else max(1.0, updated - 1)))
-        if started > 1e11:
-            started = started / 1000.0
-        if proc_status == "shell":
-            state, stage, event_name = "running", "background-shell", "BackgroundShell"
-            updated = now_ts
-        elif proc_status == "busy":
-            state, stage, event_name = "running", "thinking", "UserPromptSubmit"
-            updated = now_ts
-        elif proc_status == "idle":
+        updated = session_time(base.get("updatedAt"), now_ts)
+        changed = proc_info["changedAt"] if proc_info else None
+        started = session_time(base.get("startedAt"), now_ts) or (proc_info and proc_info["startedAt"])
+        if proc_status == "idle":
+            # 状态栏重绘和轮询都不是完成事件, 缺少终态时间就不生成最近完成记录
+            ended = changed or (updated if base.get("state") in ("completed", "ended") else None)
+            if ended is None or (started and ended < started) or now_ts - ended >= 600:
+                continue
+            updated = changed = ended
             state, stage, event_name = "completed", None, "Stop"
+        elif proc_status in ("shell", "busy"):
+            updated = max(filter(None, (updated, changed, started)), default=None)
+            if proc_status == "shell":
+                state, stage, event_name = "running", "background-shell", "BackgroundShell"
+            else:
+                state, stage, event_name = "running", "thinking", "UserPromptSubmit"
         else:
+            if updated is None:
+                continue
             age = now_ts - updated
-            if age <= 45 and base.get("state") == "running":
-                state, stage, event_name = "running", base.get("stage"), base.get("eventName")
-            elif age <= 900:
-                state, stage, event_name = "completed", None, "Stop"
+            state = base.get("state")
+            if state in ("running", "waiting") and age <= 45:
+                stage, event_name = base.get("stage"), base.get("eventName")
+            elif state in ("completed", "ended") and age < 600:
+                stage, event_name = None, "Stop"
+            elif state in ("running", "waiting", "unknown") and age <= 900:
+                state, stage, event_name = "unknown", None, None
             else:
                 continue
+        if updated is None:
+            continue
+        started = min(started or updated, updated)
         base_proj = collector_mod.text(base.get("project") or "", 100)
         proc_proj = proc_info["project"] if proc_info else ""
         if proc_proj and (not base_proj or base_proj in ("未知", "tmp", "Claude")):
@@ -330,9 +393,9 @@ def read_claude_live_tasks(claude_home, collector_mod, now_ts):
             "provider": "claude",
             "state": state,
             "project": chosen_proj,
-            "startedAt": min(started, updated),
-            "updatedAt": max(started, updated),
-            "stateChangedAt": float(base.get("stateChangedAt", min(started, updated))),
+            "startedAt": started,
+            "updatedAt": updated,
+            "stateChangedAt": changed or session_time(base.get("stateChangedAt"), now_ts) or started,
             "modelName": model_name
         }
         if stage:
@@ -603,9 +666,24 @@ def read_gemini_live_tasks(gemini_home, collector_mod, now_ts):
     return result[:120]
 
 
+def wire_windows(windows):
+    windows = windows[-128:]
+    if len(json.dumps(windows, separators=(",", ":"))) <= 48 * 1024:
+        return windows
+    # 周限只使用首末值及峰值, 真实回落已在节点单独标记
+    result = []
+    for win in windows:
+        points = win["observations"]
+        if len(points) > 3:
+            points = [points[0], max(points, key=lambda p: p["used"]), points[-1]]
+        result.append(dict(win, observations=points))
+    return result
+
+
 class ProbeAgent:
     def __init__(self, config_path=None, state_dir=None):
         self.collector_mod = load_collector_module()
+        self.codex_session = CodexProbeSession()
         self.config_path = config_path or (config_directory() / "config.json")
         self.state_dir = state_dir or probe_state_directory()
         self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -620,6 +698,8 @@ class ProbeAgent:
         self.last_push_mono = 0.0
         self.last_live_fingerprint = ""
         self.was_active = False
+        self.gemini_account = None
+        self.gemini_scope = None
 
     def _load_config(self):
         data = json.loads(self.config_path.read_text())
@@ -631,14 +711,14 @@ class ProbeAgent:
         if not hub or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", node_id) or not re.fullmatch(r"[0-9a-f]{64}", signing_key):
             raise ValueError("探针配置缺少有效的中枢地址, 节点标识或签名密钥")
         providers = data.get("enabledProviders")
-        if not isinstance(providers, list) or not providers:
+        if not isinstance(providers, list):
             providers = list(VALID_PROVIDERS)
         providers = [p for p in providers if p in VALID_PROVIDERS]
         return {
             "hubURL": hub,
             "nodeID": node_id,
             "signingKey": signing_key,
-            "enabledProviders": providers or list(VALID_PROVIDERS),
+            "enabledProviders": providers,
             "bridgeStatusLine": bool(data.get("bridgeStatusLine", True)),
             "codexHome": data.get("codexHome", ""),
             "claudeHome": data.get("claudeHome", ""),
@@ -648,7 +728,15 @@ class ProbeAgent:
     def _save_config_updates(self, enabled_providers, bridge_statusline):
         changed = False
         valid = [p for p in enabled_providers if p in VALID_PROVIDERS]
-        if valid and valid != self.config["enabledProviders"]:
+        if valid != self.config["enabledProviders"]:
+            if set(valid) - set(self.config["enabledProviders"]):
+                sync = self.read_sync_cursor()
+                sync["cursor"] = 0
+                self.write_sync_cursor(sync)
+            if "codex" not in valid:
+                self.codex_session.close()
+                self.codex_session.last_tasks = []
+            self.last_scan_mono = 0
             self.config["enabledProviders"] = valid
             changed = True
         if isinstance(bridge_statusline, bool) and bridge_statusline != self.config["bridgeStatusLine"]:
@@ -660,9 +748,9 @@ class ProbeAgent:
             self.reconcile_bridges()
 
     def reconcile_bridges(self):
-        detected = set(detect_installed_providers(self.homes))
         enabled = set(self.config["enabledProviders"])
         bridge = self.config["bridgeStatusLine"]
+        detected = set(detect_installed_providers(self.homes)) if enabled and bridge else set()
         if "claude" in detected or (self.homes["claude"] / "codexbar-usage/installation.json").exists():
             try:
                 should_install = bridge and ("claude" in enabled) and ("claude" in detected)
@@ -681,12 +769,20 @@ class ProbeAgent:
         enabled = set(self.config["enabledProviders"])
         tasks = []
         if "codex" in enabled:
-            tasks.extend(read_codex_live_tasks(self.homes["codex"], self.collector_mod, now_ts))
+            tasks.extend(self.codex_session.read(self.homes["codex"], self.collector_mod, now_ts))
         if "claude" in enabled:
             tasks.extend(read_claude_live_tasks(self.homes["claude"], self.collector_mod, now_ts))
         if "gemini" in enabled:
             tasks.extend(read_gemini_live_tasks(self.homes["gemini"], self.collector_mod, now_ts))
-        return tasks
+        recent = [t for t in tasks if t["state"] not in ("completed", "ended") or now_ts - t["updatedAt"] < 600]
+        ordered = sorted(recent, key=lambda t: (t["state"] in ("running", "waiting"), t["updatedAt"]), reverse=True)
+        result, size = [], 0
+        for task in ordered[:200]:
+            size += len(self.collector_mod.encode(task).encode()) + 1
+            if size > 128 * 1024:
+                break
+            result.append(task)
+        return result
 
     def run_usage_scan(self):
         enabled = self.config["enabledProviders"]
@@ -704,7 +800,9 @@ class ProbeAgent:
             try:
                 ledger = self.collector_mod.GeminiValuationLedger(self.state_dir / "usage", self.homes["gemini"], budget=6)
                 try:
-                    ledger.scan()
+                    ledger.scan(usage_collected=True)
+                    self.gemini_scope = ledger.export(include_records=False)
+                    self.gemini_account = self.gemini_scope.get("accountKey")
                 finally:
                     ledger.connection.close()
             except (OSError, ValueError, sqlite3.Error):
@@ -729,15 +827,15 @@ class ProbeAgent:
         just_finished = self.was_active and not currently_active
         self.was_active = currently_active
         did_scan = False
-        if force_scan or just_finished or (now_mono - self.last_scan_mono >= 60) or self.last_scan_mono == 0.0:
+        if self.config["enabledProviders"] and (force_scan or just_finished or (now_mono - self.last_scan_mono >= 60) or self.last_scan_mono == 0.0):
             self.run_usage_scan()
             self.last_scan_mono = time.monotonic()
             did_scan = True
 
         enabled = self.config["enabledProviders"]
         usage_dir = self.state_dir / "usage"
-        detected = detect_installed_providers(self.homes)
-        codex_auth = self.collector_mod.codex_authentication_type(self.homes["codex"]) if "codex" in detected else "unknown"
+        detected = detect_installed_providers(self.homes) if enabled else []
+        codex_auth = self.collector_mod.codex_authentication_type(self.homes["codex"]) if "codex" in enabled and "codex" in detected else "unknown"
 
         for page_idx in range(6):
             sync = self.read_sync_cursor()
@@ -745,44 +843,40 @@ class ProbeAgent:
             if (usage_dir / "usage-v1.sqlite").is_file() and enabled:
                 db = self.collector_mod.Database(usage_dir, writable=False)
                 try:
-                    exported = db.export(sync.get("epoch", ""), int(sync.get("cursor", 0)), 800, enabled)
+                    limit = 400
+                    while True:
+                        exported = db.export(sync.get("epoch", ""), int(sync.get("cursor", 0)), limit, enabled)
+                        if limit == 1 or len(self.collector_mod.encode(exported["records"]).encode()) <= 192 * 1024:
+                            break
+                        limit //= 2
                 finally:
                     db.connection.close()
 
             now_ts = time.time()
-            merged_quotas = merge_quotas_with_live(exported.get("quotas", []), self.homes, enabled, self.collector_mod, now_ts)
+            gemini_state = read_live_state(self.homes["gemini"]) if "gemini" in enabled else {}
+            merged_quotas = merge_quotas_with_live(exported.get("quotas", []), self.homes, enabled, self.collector_mod, now_ts, gemini_state)
 
             gemini_val = None
+            if page_idx == 0 and did_scan and "gemini" in enabled and self.gemini_scope:
+                gemini_val = {k: self.gemini_scope[k] for k in ("accountScoped", "accountKey", "planTier")}
+                gemini_val["windows"] = wire_windows(self.gemini_scope["windows"])
             claude_val = None
             if page_idx == 0 and did_scan:
-                if "gemini" in enabled and (usage_dir / self.collector_mod.GeminiValuationLedger.filename).is_file():
-                    ledger = self.collector_mod.GeminiValuationLedger(usage_dir, self.homes["gemini"], budget=2, read_only=True)
-                    try:
-                        val_export = ledger.export()
-                        last_val_at = float(sync.get("valuationAt", 0.0))
-                        fresh_records = [r for r in val_export["records"] if float(r["at"]) >= last_val_at - 5][:600]
-                        gemini_val = {
-                            "planTier": val_export.get("planTier"),
-                            "windows": val_export.get("windows", [])[-20:],
-                            "plans": val_export.get("plans", [])[-50:],
-                            "records": fresh_records
-                        }
-                    finally:
-                        ledger.connection.close()
                 if "claude" in enabled:
                     try:
                         c_export = self.collector_mod.scan_claude_weekly_windows(self.homes["claude"], budget=2)
                         if c_export.get("windows"):
-                            claude_val = {"windows": c_export["windows"][-20:]}
+                            claude_val = {"windows": wire_windows(c_export["windows"])}
                     except Exception:
                         pass
 
             live_fp = hashlib.sha256(self.collector_mod.encode({
                 "tasks": [{k: v for k, v in t.items() if k != "updatedAt"} for t in live_tasks],
-                "quotas": merged_quotas
+                "quotas": merged_quotas,
+                "geminiAccountKey": gemini_state.get("activeAccount")
             }).encode()).hexdigest()
             has_records = bool(exported.get("records")) or bool(exported.get("reset"))
-            if page_idx == 0 and not force_scan and not has_records and live_fp == self.last_live_fingerprint and (now_mono - self.last_push_mono < 30):
+            if page_idx == 0 and not did_scan and not force_scan and not has_records and live_fp == self.last_live_fingerprint and (now_mono - self.last_push_mono < 30):
                 return True
 
             clean_warnings = [w for w in exported.get("warnings", []) if w != "首次或增量扫描尚未完成, 下次刷新继续"]
@@ -803,6 +897,12 @@ class ProbeAgent:
                 "geminiValuation": gemini_val,
                 "claudeValuation": claude_val
             }
+            if "gemini" in enabled:
+                payload["geminiAccountKey"] = gemini_state.get("activeAccount") or self.gemini_account
+                if gemini_val and gemini_val.get("accountKey") != payload["geminiAccountKey"]:
+                    payload["geminiValuation"] = None
+                if payload["geminiAccountKey"] != self.gemini_account:
+                    payload["geminiPlan"] = None
             body = self.collector_mod.encode(payload).encode()
 
             def send_signed_push(bypass_proxy):
@@ -849,20 +949,14 @@ class ProbeAgent:
                 reply = send_signed_push(bypass_proxy=False)
             self.last_push_mono = time.monotonic()
             self.last_live_fingerprint = live_fp
-            new_sync = {
-                "epoch": exported.get("epoch", sync.get("epoch", "")),
-                "cursor": exported.get("cursor", sync.get("cursor", 0)),
-                "valuationAt": max(
-                    [float(sync.get("valuationAt", 0.0))]
-                    + [float(r["at"]) for r in (gemini_val or {}).get("records", [])]
-                )
-            }
-            self.write_sync_cursor(new_sync)
-            if isinstance(reply, dict):
-                desired = reply.get("desiredProviders")
-                bridge_sl = reply.get("bridgeStatusLine")
-                if isinstance(desired, list):
-                    self._save_config_updates(desired, bridge_sl)
+            if not isinstance(reply, dict) or reply.get("ok") is not True or not isinstance(reply.get("desiredProviders"), list):
+                raise ValueError("中枢未确认本次同步")
+            desired = reply["desiredProviders"]
+            if enabled and set(desired) == set(enabled):
+                self.write_sync_cursor({"epoch": exported["epoch"], "cursor": exported["cursor"]})
+            self._save_config_updates(desired, reply.get("bridgeStatusLine"))
+            if set(desired) != set(enabled):
+                break
             if not exported.get("hasMore"):
                 break
         return True
@@ -912,7 +1006,7 @@ def install_service_files(probe_script_path, config_path):
         subprocess.run(["/bin/launchctl", "bootstrap", f"gui/{uid}", str(plist_path)], check=False, capture_output=True)
         return f"launchd:{label}"
 
-    if shutil.which("systemctl") if "shutil" in globals() else pathlib.Path("/bin/systemctl").exists() or pathlib.Path("/usr/bin/systemctl").exists():
+    if shutil.which("systemctl"):
         systemctl = "/usr/bin/systemctl" if pathlib.Path("/usr/bin/systemctl").exists() else "/bin/systemctl"
         unit_body = "\n".join([
             "[Unit]",
@@ -986,7 +1080,9 @@ def install_probe(args):
     hub = args.hub.rstrip("/")
     if not (hub.startswith("https://") or hub.startswith("http://")):
         raise ValueError("中枢地址必须以 https:// 或 http:// 开头")
-    providers = collector_mod.parse_providers(args.providers) if args.providers else existing.get("enabledProviders", list(VALID_PROVIDERS))
+    providers = existing.get("enabledProviders", list(VALID_PROVIDERS))
+    if args.providers is not None:
+        providers = collector_mod.parse_providers(args.providers) if args.providers else []
     config = {
         "hubURL": hub,
         "nodeID": args.node,
@@ -1037,7 +1133,7 @@ def build_arg_parser():
     p.add_argument("command", choices=("install", "uninstall", "run", "once", "status"))
     p.add_argument("--hub", default="")
     p.add_argument("--node", default="")
-    p.add_argument("--providers", default="codex,claude,gemini")
+    p.add_argument("--providers")
     p.add_argument("--pure-readonly", action="store_true", help="纯只读文件模式, 不包裹 statusLine")
     p.add_argument("--no-service", action="store_true", help="仅写入配置与桥接, 不注册后台服务")
     p.add_argument("--config", type=pathlib.Path)

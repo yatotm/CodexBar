@@ -350,11 +350,11 @@ actor UsageCollectorClient {
     nonisolated struct LocalZeroHookSnapshot: Decodable {
         let tasks: [RemoteActivityTask]
         let quotas: [UsageQuotaObservation]
+        var geminiAccountKey: String?
     }
 
-    func fetchLocalZeroHookSnapshot(source: UsageSource) async throws -> LocalZeroHookSnapshot {
-        guard source.transport == .local,
-              let probeURL = Bundle.main.url(forResource: "CodexBarProbe", withExtension: "py") else {
+    func fetchLocalZeroHookSnapshot(source: UsageSource, probeURL: URL? = Bundle.main.url(forResource: "CodexBarProbe", withExtension: "py")) async throws -> LocalZeroHookSnapshot {
+        guard source.transport == .local, let probeURL else {
             return LocalZeroHookSnapshot(tasks: [], quotas: [])
         }
         let candidates = (CodexCLIResolver.environment["PATH"] ?? "").split(separator: ":").map { "\($0)/python3" }
@@ -376,21 +376,24 @@ actor UsageCollectorClient {
         now = time.time()
         tasks = []
         quotas = []
+        account = None
         if "claude" in enabled:
             tasks.extend(mod.read_claude_live_tasks(homes["claude"], col, now))
             q = mod.read_live_quota(homes["claude"], "claude")
             if q: quotas.append(q)
         if "gemini" in enabled:
             tasks.extend(mod.read_gemini_live_tasks(homes["gemini"], col, now))
-            q = mod.read_live_quota(homes["gemini"], "gemini")
+            state = mod.read_live_state(homes["gemini"])
+            account = state.get("activeAccount")
+            q = mod.read_live_quota(homes["gemini"], "gemini", state)
             if q: quotas.append(q)
-        print(json.dumps({"tasks": tasks, "quotas": quotas}))
+        print(json.dumps({"tasks": tasks, "quotas": quotas, "geminiAccountKey": account}))
         """
         let wanted = [source.includesClaude ? "claude" : nil, source.includesGemini ? "gemini" : nil].compactMap(\.self).joined(separator: ",")
         guard !wanted.isEmpty else { return LocalZeroHookSnapshot(tasks: [], quotas: []) }
         let data = try await UsageCommandRunner.run(
             executable: python,
-            arguments: ["-c", snippet, probeURL.path, source.claudeHome, source.geminiHome, wanted],
+            arguments: ["-B", "-c", snippet, probeURL.path, source.claudeHome, source.geminiHome, wanted],
             timeout: 8
         )
         return try JSONDecoder().decode(LocalZeroHookSnapshot.self, from: data)

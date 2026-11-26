@@ -209,7 +209,7 @@ struct ControlCenterDeploymentView: View {
         VStack(alignment: .leading, spacing: 14) {
             ControlCenterSectionHeader(
                 title: "自建常驻中枢连接",
-                subtitle: "控制中心持有只读密钥 (cbr_), 外部探针各自持有独立单写密钥 (cbw_), 权限严格单向隔离",
+                subtitle: "管理密钥 (cbr_) 可以读取统计, 配置和删除节点. 每台探针使用自己的上报密钥 (cbw_)",
                 symbol: "lock.shield.fill",
                 tint: ControlCenterPalette.codex
             ) {
@@ -218,7 +218,7 @@ struct ControlCenterDeploymentView: View {
                     readTokenDraft = generated
                     copyText(generated, badgeID: "gen-cbr")
                 } label: {
-                    Label(copiedBadgeID == "gen-cbr" ? "已复制新密钥" : "生成新读取密钥", systemImage: "key.fill")
+                    Label(copiedBadgeID == "gen-cbr" ? "已复制新密钥" : "生成新管理密钥", systemImage: "key.fill")
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .buttonStyle(.bordered)
@@ -228,7 +228,7 @@ struct ControlCenterDeploymentView: View {
                 TextField("中枢 HTTPS 地址 (例如 https://hub.example.com:65120)", text: $hubURLDraft)
                     .textFieldStyle(.roundedBorder)
                 SecureField(
-                    hasSavedToken ? "读取密钥已安全保存, 留空保持不变" : "粘贴 HUB_READ_TOKEN (cbr_...)",
+                    hasSavedToken ? "管理密钥已保存, 留空沿用" : "粘贴中枢管理密钥 (cbr_...)",
                     text: $readTokenDraft
                 )
                 .textFieldStyle(.roundedBorder)
@@ -610,15 +610,15 @@ private struct HubBootstrapGuideView: View {
 
     private var sampleToken: String {
         let trimmed = readTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "<你的_HUB_READ_TOKEN>" : trimmed
+        return trimmed.isEmpty ? "<中枢管理密钥>" : trimmed
     }
 
     private var tokenHashNote: String {
         let trimmed = readTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return "提示: 先点击右上角「生成新读取密钥」, 下方命令会自动填入对应的 SHA-256 校验哈希"
+            return "先点击「生成新管理密钥」, 下方命令会自动填入对应的 SHA-256 哈希"
         }
-        return "已根据上方输入的读取密钥自动计算 SHA-256 哈希, 服务端仅保存哈希值"
+        return "已根据管理密钥计算 SHA-256 哈希, 服务端仅保存哈希值"
     }
 
     private var serverCommand: String {
@@ -628,7 +628,7 @@ private struct HubBootstrapGuideView: View {
             : HubCrypto.hashReadToken(rawReadToken: trimmed)
         return """
         sudo mkdir -p /opt/codexbar-hub /var/lib/codexbar-hub
-        # 将仓库 CodexBar/Resources 下的 CodexBarHub.py, CodexBarProbe.py, UsageCollector.py 上传至 /opt/codexbar-hub/
+        # 将 CodexBar/Resources 下的 CodexBarHub.py, CodexBarProbe.py, UsageCollector.py 和 SharedCodexCollector.py 上传至 /opt/codexbar-hub/
         python3 /opt/codexbar-hub/CodexBarHub.py serve \\
             --state-dir /var/lib/codexbar-hub \\
             --listen 127.0.0.1 --port 18765 \\
