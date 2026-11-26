@@ -221,7 +221,7 @@ final class UsageQuotaHistoryController {
             tokenEvidence[key] = saved
             onUpdate?()
         }
-        if !force, let value = tokenEvidence[key], value.ready, value.complete,
+        if !force, let value = tokenEvidence[key], value.ready, value.complete, value.requestContextVersion == 1,
            Date().timeIntervalSince1970 - value.scannedAt < 900 {
             return
         }

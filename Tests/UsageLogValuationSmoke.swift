@@ -56,6 +56,39 @@ nonisolated enum UsageLogValuationSmoke {
         precondition(result.projected == 153 ... 391 && result.usedPercent == 50)
         precondition(result.unknownSpeedCount == 1 && !result.incomplete)
         precondition(result.credits == 1912.5 ... 4887.5, "缺失速度只对对应记录给出范围")
+        var verified = record("same", speed: nil)
+        verified.requestInputTokens = sample.input + sample.cached
+        let legacy = record("same", speed: "standard")
+        let old = periods(snapshot(), sources: [source([legacy])])[0].logEstimate!
+        precondition(old.dollars == 17 ... 17 && old.apiDollars == 17 ... 31.5 && old.models[0].uncertainContextCount == 1)
+        for sources in [[source([verified]), source([legacy])], [source([legacy]), source([verified])]] {
+            let priced = periods(snapshot(), sources: sources)[0].logEstimate!
+            precondition(priced.tokens == sample && priced.unknownSpeedCount == 0 && priced.models[0].longRequestCount == 1)
+            precondition(priced.dollars == 17 ... 17 && priced.projected == 34 ... 34 && priced.credits == 425 ... 425)
+            precondition(priced.apiDollars == 31.5 ... 31.5 && priced.projectedAPI == 63 ... 63)
+        }
+        let astra = prices.rate(for: "gpt-6.2-astra")!
+        for count: Int64 in [272000, 272001] {
+            let t = AnalyticsTokens(input: 1, cached: count - 1, output: 1000)
+            let r = UsageTokenRecord(id: "bound", at: start, model: astra.model, speed: "priority", tokens: t, requestInputTokens: count)
+            let standard = (count > 272000 ? astra.longContext! : astra.shortContext).dollars(for: t)
+            precondition(astra.apiCost(for: r, plan: nil) == (2 * standard) ... (2 * standard))
+        }
+        let solar = prices.rate(for: "gpt-6.2-sol")!
+        let promoEnd = solar.apiUltrafastPromo!.endExclusive
+        for (timestamp, factor) in [(promoEnd - 1, 3.0), (promoEnd, 6.0)] {
+            let request = UsageTokenRecord(
+                id: "promo",
+                at: timestamp,
+                model: solar.model,
+                speed: "ultrafast",
+                tokens: sample,
+                requestInputTokens: sample.input + sample.cached
+            )
+            let amount = solar.longContext!.dollars(for: sample) * factor
+            precondition(solar.apiCost(for: request, plan: .pro20x) == amount ... amount)
+            precondition(solar.subscriptionMultiplier(for: "ultrafast") == 6)
+        }
         let accelerated = periods(snapshot(), sources: [source([
             record("astra", speed: "priority", model: "gpt-6.2-astra"), record("sol", speed: "ultrafast", model: "gpt-6.2-sol")
         ])])[0].logEstimate!
@@ -75,6 +108,16 @@ nonisolated enum UsageLogValuationSmoke {
         )
         let restored = periods(snapshot([official]), sources: [source(logs)])[0]
         precondition(restored.logEstimate == nil && restored.dollars == 51, "官方补齐后整段替换, 不与日志相加")
+        precondition(restored.deviceEstimate?.apiDollars != nil && restored.deviceEstimate?.replacesOfficial == false)
+        var apiSample = record("priced", speed: "standard", model: "gpt-6.2-astra")
+        apiSample.requestInputTokens = sample.input + sample.cached
+        let oneDay = AnalyticsDay(date: "2026-10-01", tokens: sample, models: official.models)
+        let reported = periods(snapshot([oneDay]), sources: [source([apiSample])])[0]
+        let comparison = reported.deviceEstimate!.dayComparisons[0]
+        precondition(reported.logEstimate == nil && reported.dollars == 17 && comparison.officialDollars == 17)
+        precondition(comparison.deviceDollars == 12.8 ... 12.8 && comparison.deviceTokens == comparison.officialTokens)
+        precondition(comparison.deviceModels == ["gpt-6.2-astra"] && comparison.reportedModels == ["gpt-6-astra"])
+        precondition(reported.deviceEstimate?.apiDollars == 23.6 ... 23.6)
         let partial = AnalyticsDay(date: "2026-10-01", tokens: sample, models: official.models)
         precondition(periods(snapshot([partial]), sources: [source(logs)])[0].logEstimate != nil, "官方非零但少于已知本地用量时仍应兜底")
         let unknownPrice = periods(snapshot(), sources: [source([record("known"), record("future", model: "unknown-model")])])[0].logEstimate!

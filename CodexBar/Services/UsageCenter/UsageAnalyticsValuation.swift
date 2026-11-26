@@ -108,7 +108,7 @@ nonisolated enum UsageAnalyticsValuation {
         let contexts = periodWindows(snapshot.windows + sourceWindows, acrossSources: !sourceWindows.isEmpty)
         let days = indexedDays(snapshot.days)
         let estimates = days.mapValues { UsageModelAllocation.estimate(day: $0, prices: prices) }
-        let officialDays = days.filter { key, day in (day.tokens?.total ?? 0) > 0 && (estimates[key] ?? nil) != nil }.compactMapValues(\.tokens)
+        let officialDays = days.filter { key, day in (day.tokens?.total ?? 0) > 0 && (estimates[key] ?? nil) != nil }
         return contexts.compactMap { context -> UsageAnalyticsPeriod? in
             guard !Task<Never, Never>.isCancelled, context.start < now.timeIntervalSince1970, context.end > context.start,
                   context.end > (dayDate(snapshot.queryStart)?.timeIntervalSince1970 ?? 0) else { return nil }
@@ -178,7 +178,7 @@ nonisolated enum UsageAnalyticsValuation {
                 boundaryDays: boundaries, timeAllocatedDays: timeAllocated, missingDays: missing,
                 unknownModels: unknown.sorted(), unreliable: context.window.decreased
             )
-            period.logEstimate = UsageLogValuation.estimate(
+            period.deviceEstimate = UsageLogValuation.estimate(
                 context: context, officialDays: officialDays, needsFallback: hasUnpricedData || (dollars ?? 0) <= 0,
                 prices: prices, sources: tokenSources, expectedSources: expectedTokenSources, now: now, plans: plans
             )

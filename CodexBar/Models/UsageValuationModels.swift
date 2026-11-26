@@ -68,6 +68,16 @@ nonisolated struct UsagePlanHistory: Codable {
 }
 
 nonisolated struct UsagePriceBook: Decodable {
+    struct TokenRates: Decodable {
+        let input: Double
+        let cachedInput: Double
+        let output: Double
+
+        func dollars(for tokens: AnalyticsTokens) -> Double {
+            (Double(tokens.input) * input + Double(tokens.cached) * cachedInput + Double(tokens.output) * output) / 1000000
+        }
+    }
+
     struct APIPromotion: Decodable {
         let factor: Double
         let endExclusive: TimeInterval
@@ -81,6 +91,7 @@ nonisolated struct UsagePriceBook: Decodable {
         let cacheWrite12h: Double?
         let output: Double
         let longThreshold: Int64?
+        let longContext: TokenRates?
         let creditInput: Double?
         let creditCachedInput: Double?
         let creditOutput: Double?
@@ -89,6 +100,11 @@ nonisolated struct UsagePriceBook: Decodable {
         let ultrafastOnPro20x: Bool?
         let apiSpeed: [String: Double]?
         let apiUltrafastPromo: APIPromotion?
+        let shortOnlyAPISpeeds: [String]?
+
+        var shortContext: TokenRates {
+            TokenRates(input: input, cachedInput: cachedInput, output: output)
+        }
 
         func apiMultiplier(for speed: String, start: Date, end: Date) -> ClosedRange<Double>? {
             let tier = speed.lowercased()
@@ -103,12 +119,46 @@ nonisolated struct UsagePriceBook: Decodable {
 
         func unrecordedSpeedRange(at timestamp: TimeInterval, plan: UsageQuotaReference? = nil) -> ClosedRange<Double> {
             // 只用当时已知的订阅档位收窄未记录速度的范围
-            let fast = subscriptionMultiplier(for: "fast") ?? 1
-            if plan == .pro5x || (plan == .pro20x && ultrafastOnPro20x != true) {
-                return 1 ... fast
+            let modes = unrecordedSpeeds(at: timestamp, plan: plan)
+            return 1 ... (modes.compactMap { subscriptionMultiplier(for: $0) }.max() ?? 1)
+        }
+
+        private func unrecordedSpeeds(at timestamp: TimeInterval, plan: UsageQuotaReference?) -> [String] {
+            var modes = ["standard"]
+            if includedSpeed?["fast"] != nil {
+                modes.append("fast")
             }
-            let ultra = timestamp >= (ultrafastFrom ?? 0) ? subscriptionMultiplier(for: "ultrafast") : nil
-            return 1 ... max(fast, ultra ?? 1)
+            if includedSpeed?["ultrafast"] != nil, timestamp >= (ultrafastFrom ?? 0),
+               plan != .pro5x, plan != .pro20x || ultrafastOnPro20x == true {
+                modes.append("ultrafast")
+            }
+            return modes
+        }
+
+        func apiCost(for record: UsageTokenRecord, plan: UsageQuotaReference?) -> ClosedRange<Double>? {
+            let tokens = record.tokens
+            let short = shortContext.dollars(for: tokens)
+            let canBeLong = longThreshold.map { tokens.input + tokens.cached > $0 } ?? false
+            let date = Date(timeIntervalSince1970: record.at)
+            let modes = record.speed.map { [$0.lowercased()] } ?? unrecordedSpeeds(at: record.at, plan: plan)
+            var low = Double.infinity
+            var high = 0.0
+            for mode in modes {
+                guard let factors = apiMultiplier(for: mode, start: date, end: date) else { return nil }
+                var minimum = short
+                var maximum = short
+                if canBeLong {
+                    guard let longContext, shortOnlyAPISpeeds?.contains(mode == "priority" ? "fast" : mode) != true else { return nil }
+                    maximum = longContext.dollars(for: tokens)
+                    // 累计差值可跨多次请求, 无逐请求凭证时保留短价至长价的范围
+                    if record.requestInputTokens != nil {
+                        minimum = maximum
+                    }
+                }
+                low = min(low, minimum * factors.lowerBound)
+                high = max(high, maximum * factors.upperBound)
+            }
+            return low ... high
         }
 
         func subscriptionMultiplier(for speed: String) -> Double? {
@@ -268,7 +318,11 @@ nonisolated struct UsageAnalyticsPeriod: Identifiable {
     let missingDays: Int
     let unknownModels: [String]
     let unreliable: Bool
-    var logEstimate: UsageLogEstimate?
+    var deviceEstimate: UsageLogEstimate?
+    var logEstimate: UsageLogEstimate? {
+        deviceEstimate.flatMap { $0.replacesOfficial ? $0 : nil }
+    }
+
     var id: Double {
         scheduledEnd.timeIntervalSince1970
     }

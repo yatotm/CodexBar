@@ -3,6 +3,7 @@ import SwiftUI
 struct UsagePeriodCard<Content: View>: View {
     let period: UsageAnalyticsPeriod
     let estimate: String
+    let apiEstimate: String?
     let isReference: Bool
     let planTitle: String
     @ViewBuilder let content: () -> Content
@@ -62,10 +63,15 @@ struct UsagePeriodCard<Content: View>: View {
             ControlCenterStatusBadge(title: statusTitle, color: statusColor)
                 .frame(width: 78, alignment: .trailing)
             VStack(alignment: .trailing, spacing: 2) {
-                Text("预计周限 ≈ " + estimate)
+                Text((isReference ? "周限参考 ≈ " : "满周订阅折算 ≈ ") + estimate)
                     .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(.primary)
-                Text((planTitle.isEmpty ? "" : planTitle + " · ") + (isReference ? "额度参考" : period.logEstimate == nil ? "官方账本推算" : "设备日志估算"))
+                if let apiEstimate {
+                    Text("满周 API 等值 ≈ " + apiEstimate)
+                        .font(.system(size: 11.5, design: .rounded))
+                }
+                Text((planTitle.isEmpty ? "" : planTitle + " · ") + (isReference ? "额度参考" : period.logEstimate == nil ? "官方账本推算" : "设备日志估算")
+                    + (period.deviceEstimate?.dayComparisons.isEmpty == false ? " · 模型待核" : ""))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
             }

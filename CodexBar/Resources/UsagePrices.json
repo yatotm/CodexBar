@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "asOf": "2026-11-18",
+  "asOf": "2026-11-26",
   "apiSource": "https://developers.openai.com/api/docs/pricing",
   "creditSource": "https://learn.chatgpt.com/docs/pricing",
   "rates": [
@@ -12,6 +12,11 @@
       "cacheWrite": 10,
       "output": 40,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 16,
+        "cachedInput": 0.8,
+        "output": 60
+      },
       "creditInput": 200,
       "creditCachedInput": 10,
       "creditOutput": 1000,
@@ -37,6 +42,11 @@
       "cacheWrite": 2.5,
       "output": 10,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 4,
+        "cachedInput": 0.2,
+        "output": 15
+      },
       "creditInput": 50,
       "creditCachedInput": 2.5,
       "creditOutput": 250,
@@ -61,6 +71,11 @@
       "cacheWrite": 1.25,
       "output": 5,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 2,
+        "cachedInput": 0.1,
+        "output": 7.5
+      },
       "creditInput": 25,
       "creditCachedInput": 1.25,
       "creditOutput": 125,
@@ -80,6 +95,11 @@
       "cacheWrite": 12.5,
       "output": 50,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 20,
+        "cachedInput": 2,
+        "output": 75
+      },
       "creditInput": 250,
       "creditCachedInput": 25,
       "creditOutput": 1250,
@@ -102,6 +122,11 @@
       "cacheWrite": 2.5,
       "output": 10,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 4,
+        "cachedInput": 0.2,
+        "output": 15
+      },
       "creditInput": 50,
       "creditCachedInput": 2.5,
       "creditOutput": 250,
@@ -124,12 +149,21 @@
       "cacheWrite": 2.5,
       "output": 10,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 4,
+        "cachedInput": 0.4,
+        "output": 15
+      },
       "creditInput": 50,
       "creditCachedInput": 5,
       "creditOutput": 250,
       "includedSpeed": {
         "flex": 0.5,
         "fast": 2.5
+      },
+      "apiSpeed": {
+        "flex": 0.5,
+        "fast": 2
       }
     },
     {
@@ -139,12 +173,21 @@
       "cacheWrite": 0.125,
       "output": 0.5,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 0.2,
+        "cachedInput": 0.02,
+        "output": 0.75
+      },
       "creditInput": 2.5,
       "creditCachedInput": 0.25,
       "creditOutput": 12.5,
       "includedSpeed": {
         "flex": 0.5,
         "fast": 2.5
+      },
+      "apiSpeed": {
+        "flex": 0.5,
+        "fast": 2
       }
     },
     {
@@ -154,12 +197,21 @@
       "cacheWrite": 5,
       "output": 20,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 8,
+        "cachedInput": 0.8,
+        "output": 30
+      },
       "creditInput": 100,
       "creditCachedInput": 10,
       "creditOutput": 500,
       "includedSpeed": {
         "flex": 0.5,
         "fast": 2.5
+      },
+      "apiSpeed": {
+        "flex": 0.5,
+        "fast": 2
       }
     },
     {
@@ -169,12 +221,21 @@
       "cacheWrite": 2.5,
       "output": 12,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 4,
+        "cachedInput": 0.4,
+        "output": 18
+      },
       "creditInput": 50,
       "creditCachedInput": 5,
       "creditOutput": 300,
       "includedSpeed": {
         "flex": 0.5,
         "fast": 2.5
+      },
+      "apiSpeed": {
+        "flex": 0.5,
+        "fast": 2
       }
     },
     {
@@ -184,12 +245,21 @@
       "cacheWrite": 0.25,
       "output": 1.2,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 0.4,
+        "cachedInput": 0.04,
+        "output": 1.8
+      },
       "creditInput": 5,
       "creditCachedInput": 0.5,
       "creditOutput": 30,
       "includedSpeed": {
         "flex": 0.5,
         "fast": 2.5
+      },
+      "apiSpeed": {
+        "flex": 0.5,
+        "fast": 2
       }
     },
     {
@@ -199,13 +269,25 @@
       "cacheWrite": null,
       "output": 30,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 10,
+        "cachedInput": 1,
+        "output": 45
+      },
       "creditInput": 125,
       "creditCachedInput": 12.5,
       "creditOutput": 750,
       "includedSpeed": {
         "flex": 0.5,
         "fast": 2.5
-      }
+      },
+      "apiSpeed": {
+        "fast": 2.5,
+        "flex": 0.5
+      },
+      "shortOnlyAPISpeeds": [
+        "fast"
+      ]
     },
     {
       "model": "gpt-5.4",
@@ -214,13 +296,24 @@
       "cacheWrite": null,
       "output": 15,
       "longThreshold": 272000,
+      "longContext": {
+        "input": 5,
+        "cachedInput": 0.5,
+        "output": 22.5
+      },
       "creditInput": 62.5,
       "creditCachedInput": 6.25,
       "creditOutput": 375,
       "includedSpeed": {
         "flex": 0.5,
         "fast": 2
-      }
+      },
+      "apiSpeed": {
+        "fast": 2
+      },
+      "shortOnlyAPISpeeds": [
+        "fast"
+      ]
     },
     {
       "model": "gpt-5.4-mini",
@@ -233,6 +326,10 @@
       "creditCachedInput": 1.875,
       "creditOutput": 113,
       "includedSpeed": {
+        "flex": 0.5,
+        "fast": 2
+      },
+      "apiSpeed": {
         "flex": 0.5,
         "fast": 2
       }
@@ -263,6 +360,10 @@
       "creditOutput": null,
       "includedSpeed": {
         "flex": 0.5
+      },
+      "apiSpeed": {
+        "flex": 0.5,
+        "fast": 2
       }
     }
   ]

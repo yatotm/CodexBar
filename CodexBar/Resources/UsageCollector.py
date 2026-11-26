@@ -1057,13 +1057,18 @@ class ValuationLedger:
             self.connection.rollback()
             raise
 
+    @staticmethod
+    def file_key(path):
+        return digest(str(path))
+
     def scan_file(self, path):
         try:
             if path.is_symlink():
                 return
             stat = path.stat()
             inode = str(stat.st_dev) + ":" + str(stat.st_ino)
-            saved = self.connection.execute("SELECT inode,offset,state FROM files WHERE path=?", (digest(str(path)),)).fetchone()
+            key = self.file_key(path)
+            saved = self.connection.execute("SELECT inode,offset,state FROM files WHERE path=?", (key,)).fetchone()
             previous = json.loads(saved[2]) if saved else {}
             if saved and saved[0] == inode and saved[1] == stat.st_size and previous.get("mtime") == stat.st_mtime_ns and previous.get("prefix"):
                 return
@@ -1101,7 +1106,7 @@ class ValuationLedger:
                 state["mtime"] = stat.st_mtime_ns
                 stream.seek(0)
                 state["prefix"] = hashlib.sha256(stream.read(min(256, offset))).hexdigest()
-                self.connection.execute("INSERT OR REPLACE INTO files VALUES(?,?,?,?)", (digest(str(path)), inode, offset, encode(state)))
+                self.connection.execute("INSERT OR REPLACE INTO files VALUES(?,?,?,?)", (key, inode, offset, encode(state)))
         except OSError:
             self.complete = False
 
@@ -1250,10 +1255,19 @@ class TokenValueHistory(ValuationLedger):
                     auth TEXT,account TEXT);
                 CREATE INDEX IF NOT EXISTS usage_at ON usage(at);
                 CREATE TABLE IF NOT EXISTS token_state(key TEXT PRIMARY KEY,value TEXT);
+                CREATE TABLE IF NOT EXISTS request_inputs(id TEXT PRIMARY KEY, input_tokens INTEGER NOT NULL) WITHOUT ROWID;
             """)
         metadata = dict(self.connection.execute("SELECT key,value FROM token_state"))
-        self.complete = metadata.get("complete") == "true"
-        self.scanned_at = float(metadata.get("scannedAt", 0))
+        self.context_scanned = "contextScannedAt" in metadata
+        self.complete = metadata.get("contextComplete", metadata.get("complete")) == "true"
+        self.scanned_at = float(metadata.get("contextScannedAt", metadata.get("scannedAt", 0)))
+        self.has_request_inputs = not read_only or self.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='request_inputs'").fetchone() is not None
+
+    @staticmethod
+    def file_key(path):
+        # 旧采集器也可能续写账本, 独立游标从原始请求补证且不会覆盖旧游标
+        return digest("token-value-request-input", str(path))
 
     def scan_file(self, path):
         try:
@@ -1309,6 +1323,9 @@ class TokenValueHistory(ValuationLedger):
             state["exactUsage"] = True
             identity = digest("codex-value-response", payload["response_id"])
             if self.record_usage(identity, payload["usage"], state, at):
+                supplied = payload["usage"].get("input_tokens")
+                if type(supplied) is int:
+                    self.connection.execute("INSERT OR IGNORE INTO request_inputs VALUES(?,?)", (identity, supplied))
                 state["pending"] = (state.get("pending", []) + [identity])[-128:]
         elif typ == "event_msg" and sub == "token_count":
             limits = payload.get("rate_limits")
@@ -1354,12 +1371,16 @@ class TokenValueHistory(ValuationLedger):
         super().scan()
         self.scanned_at = time.time()
         self.connection.execute("DELETE FROM usage WHERE at<?", (self.cutoff,))
+        self.connection.execute("DELETE FROM request_inputs WHERE id NOT IN (SELECT id FROM usage)")
         self.connection.executemany("INSERT OR REPLACE INTO token_state VALUES(?,?)",
-                                    [("complete", encode(self.complete)), ("scannedAt", str(self.scanned_at))])
+                                    [("complete", encode(self.complete)), ("scannedAt", str(self.scanned_at)),
+                                     ("contextComplete", encode(self.complete)), ("contextScannedAt", str(self.scanned_at))])
         self.connection.commit()
+        self.context_scanned = True
 
     def export(self, account_key):
-        rows = self.connection.execute("""SELECT id,at,model,speed,input,cached,output FROM usage
+        request_input = "(SELECT input_tokens FROM request_inputs WHERE id=usage.id)" if self.has_request_inputs else "NULL"
+        rows = self.connection.execute(f"""SELECT id,at,model,speed,input,cached,output,{request_input} FROM usage
             WHERE auth='oauth' AND (account IS NULL OR account=?) AND at>=? ORDER BY at DESC,id LIMIT ?""",
             (account_key, self.cutoff, self.max_records + 1)).fetchall()
         unknown_days = dict(self.connection.execute("""SELECT CAST(CAST(at/86400 AS INTEGER) AS TEXT),COUNT(*) FROM usage
@@ -1367,9 +1388,11 @@ class TokenValueHistory(ValuationLedger):
             (self.cutoff, account_key)))
         return {"schema": 1, "ready": True, "complete": self.complete, "generatedAt": time.time(),
                 "scannedAt": self.scanned_at, "accountKey": codex_account_key(self.home),
+                "requestContextVersion": 1 if self.context_scanned else None,
                 "truncated": len(rows) > self.max_records, "unattributedCount": sum(unknown_days.values()), "unattributedDays": unknown_days,
                 "records": [{"id": row[0], "at": row[1], "model": row[2], "speed": row[3],
-                             "tokens": dict(zip(("input", "cached", "output"), row[4:]))}
+                             "tokens": dict(zip(("input", "cached", "output"), row[4:7])),
+                             **({"requestInputTokens": row[7]} if row[7] == row[4] + row[5] else {})}
                             for row in rows[:self.max_records]]}
 
 

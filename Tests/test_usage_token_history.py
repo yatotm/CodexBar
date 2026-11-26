@@ -52,6 +52,7 @@ class TokenHistoryTests(unittest.TestCase):
         self.assertEqual(self.records(), [])
         self.receipt()
         self.assertEqual(self.records()[0]["tokens"], {"input": 20, "cached": 80, "output": 10})
+        self.assertEqual(self.records()[0]["requestInputTokens"], 100)
         self.assertIsNone(self.records()[0]["speed"])
         self.assertNotIn("NEVER_EXPORT_THIS", json.dumps(self.ledger.export(self.key)))
         self.assertNotIn("test-account", json.dumps(self.ledger.export(self.key)))
@@ -111,6 +112,40 @@ class TokenHistoryTests(unittest.TestCase):
         rows = sorted(self.records(), key=lambda r: r["at"])
         self.assertEqual([r["tokens"]["input"] for r in rows], [100, 60])
         self.assertEqual(rows[1]["model"], "gpt-6.1-sol")
+        self.assertTrue(all("requestInputTokens" not in r for r in rows))
+
+    def test_upgrade_replays_exact_requests_without_losing_legacy_rows_or_cursors(self):
+        path = self.home / "sessions/old.jsonl"
+        rows = [self.row("session_meta", {"id": "session", "model_provider": "openai", "auth_mode": "chatgpt"}),
+                self.usage(input_tokens=272001, cached_input_tokens=272000)]
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        db = self.ledger.connection
+        with mock.patch.object(collector.TokenValueHistory, "file_key", staticmethod(collector.ValuationLedger.file_key)):
+            self.ledger.scan()
+        db.execute("DROP TABLE request_inputs")
+        db.execute("DELETE FROM token_state WHERE key LIKE 'context%'")
+        db.execute("INSERT INTO usage VALUES(?,?,?,?,?,?,?,?,?)", ("unverifiable", self.now.timestamp(), "gpt-6.2-astra",
+                   "standard", 2000, 300000, 50, "oauth", self.key))
+        db.commit()
+        old_key = collector.ValuationLedger.file_key(path)
+        original = db.execute("SELECT offset,state FROM files WHERE path=?", (old_key,)).fetchone()
+        directory = self.root / "state"
+        reader = collector.TokenValueHistory(directory, self.home, 2, read_only=True)
+        try:
+            old = reader.export(self.key)
+            self.assertIsNone(old["requestContextVersion"])
+            self.assertTrue(all("requestInputTokens" not in r for r in old["records"]))
+        finally:
+            reader.connection.close()
+        self.ledger.connection.close()
+        self.ledger = collector.TokenValueHistory(directory, self.home, 10)
+        for _ in range(2):
+            self.ledger.scan()
+            values = self.ledger.export(self.key)
+            self.assertEqual(values["requestContextVersion"], 1)
+            records = {r["id"]: r.get("requestInputTokens") for r in values["records"]}
+            self.assertEqual(records, {collector.digest("codex-value-response", "response-1"): 272001, "unverifiable": None})
+        self.assertEqual(self.ledger.connection.execute("SELECT offset,state FROM files WHERE path=?", (old_key,)).fetchone(), original)
 
     def test_invalid_usage_is_not_filled_with_zero(self):
         for index, changes in enumerate(({"input_tokens": -1}, {"cached_input_tokens": 101}, {"output_tokens": True})):

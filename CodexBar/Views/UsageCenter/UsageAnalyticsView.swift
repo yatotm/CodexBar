@@ -25,6 +25,7 @@ struct UsageAnalyticsView: View {
                         UsagePeriodCard(
                             period: period,
                             estimate: weeklyEstimate(period),
+                            apiEstimate: period.logEstimate.flatMap { apiProjection(period, estimate: $0) }.map { "$" + rangeText($0) },
                             isReference: (model.projection(for: period)?.upperBound ?? 0) <= 0 && model.reference(for: period) != .disabled,
                             planTitle: model.planTitle(for: period)
                         ) {
@@ -115,7 +116,7 @@ struct UsageAnalyticsView: View {
 
     private var footerCaption: some View {
         HStack {
-            Text("订阅价值按标准 API 单价与订阅内加速倍率估算; 官方明细缺失时自动回退至同账号设备日志")
+            Text("订阅折算按公开费率与实测周限推算, 设备日志另按请求长度和速度计算 API 等值")
             Spacer()
             if let snapshot = model.snapshot {
                 Text("账本 \(snapshot.fetchedAt.formatted(date: .abbreviated, time: .shortened)) · 单价 \(model.prices?.asOf ?? "--")")
@@ -136,6 +137,11 @@ struct UsageAnalyticsView: View {
         return "待补齐"
     }
 
+    private func apiProjection(_ period: UsageAnalyticsPeriod, estimate: UsageLogEstimate) -> ClosedRange<Double>? {
+        guard model.planEntries(for: period).count <= 1 else { return nil }
+        return estimate.projectedAPI
+    }
+
     @ViewBuilder
     private func periodDetails(_ period: UsageAnalyticsPeriod) -> some View {
         if let estimate = period.logEstimate {
@@ -150,9 +156,19 @@ struct UsageAnalyticsView: View {
             Text("设备日志估算 · " + estimate.sources.joined(separator: " / "))
                 .fontWeight(.medium).foregroundStyle(.secondary)
             HStack(spacing: 12) {
-                value("已记录折合价值", "≈ $" + rangeText(estimate.dollars))
-                value("预计周限总额", "≈ " + weeklyEstimate(period))
-                value("估算 credits", estimate.credits.map { "≈ " + rangeText($0) } ?? "待补齐")
+                value("已用订阅折算", "≈ $" + rangeText(estimate.dollars))
+                let projected = model.planEntries(for: period).count <= 1 ? estimate.projected : nil
+                value("满周订阅折算", projected.map { "≈ $" + rangeText($0) } ?? "—")
+                value("已用 credits 估算", estimate.credits.map { "≈ " + rangeText($0) } ?? "待补齐")
+                if projected != nil, let credits = estimate.credits {
+                    let scale = 100 / estimate.usedPercent
+                    value("满周 credits 估算", "≈ " + rangeText(credits.lowerBound * scale ... credits.upperBound * scale))
+                }
+            }
+            HStack(spacing: 12) {
+                value("已用 API 等值", estimate.apiDollars.map { "≈ $" + rangeText($0) } ?? "暂无完整报价")
+                value("满周 API 等值", apiProjection(period, estimate: estimate).map { "≈ $" + rangeText($0) } ?? "—")
+                value("已确认长上下文请求", estimate.models.reduce(0) { $0 + $1.longRequestCount }.formatted())
             }
             HStack(spacing: 12) {
                 value("未缓存输入", tokens(estimate.tokens.input))
@@ -165,6 +181,12 @@ struct UsageAnalyticsView: View {
                 Text("\(estimate.unknownSpeedCount) 条记录缺少速度设置, 金额按标准至该模型当时可用的最高加速档估算")
                     .foregroundStyle(.secondary)
             }
+            let uncertain = estimate.models.reduce(0) { $0 + $1.uncertainContextCount }
+            if uncertain > 0 {
+                Text("\(uncertain) 条记录缺少单次请求长度, API 等值按短价至长价显示范围")
+                    .foregroundStyle(.secondary)
+            }
+            dayComparisonDetails(estimate.dayComparisons)
             if estimate.incomplete {
                 Text("部分设备或历史记录尚未补齐, 当前估值可能偏低").foregroundStyle(.orange)
             }
@@ -184,19 +206,42 @@ struct UsageAnalyticsView: View {
                                 value("模型输出", tokens(row.tokens.output))
                                 value("缓存读取", tokens(row.tokens.cached))
                             }
-                            apiUnitPrices(for: row.model, speed: row.speed, start: period.start, end: estimate.valuedThrough)
+                            apiUnitPrices(
+                                for: row.model,
+                                speed: row.speed,
+                                start: period.start,
+                                end: estimate.valuedThrough,
+                                showLong: row.longRequestCount + row.uncertainContextCount > 0
+                            )
                         }
                     }
                 }
             }
-            Text("按已记录的模型和速度比例外推; 纯云端任务可能未包含, 官方明细补齐后自动替换本估算且不重复累计")
+            Text("账户周限返回已用百分比, 满周 credits 为设备样本推算值")
                 .foregroundStyle(.tertiary)
         }
         .font(.system(size: 11.5))
     }
 
     @ViewBuilder
-    private func apiUnitPrices(for name: String, speed: String?, start: Date, end: Date) -> some View {
+    private func dayComparisonDetails(_ days: [UsageModelDayComparison]) -> some View {
+        if !days.isEmpty {
+            UsageDisclosure(title: "模型归属有差异 · 查看同日对账") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(days) { day in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(day.day + " UTC").fontWeight(.medium)
+                            Text("设备 · " + day.deviceModels.joined(separator: ", ") + " · " + tokens(day.deviceTokens) + " Token · $" + rangeText(day.deviceDollars))
+                            Text("官方分组 · " + day.reportedModels.joined(separator: ", ") + " · " + tokens(day.officialTokens) + " Token · " + dollars(day.officialDollars))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func apiUnitPrices(for name: String, speed: String?, start: Date, end: Date, showLong: Bool = false) -> some View {
         if let rate = model.prices?.rate(for: name) {
             let tier = speed?.lowercased() ?? "standard"
             let multiplier = rate.apiMultiplier(for: tier, start: start, end: end)
@@ -205,6 +250,12 @@ struct UsageAnalyticsView: View {
             Text("短上下文 API \(label) / 百万 Token · 输入 \(unitPrice(rate.input, factors)) · 缓存读取 \(unitPrice(rate.cachedInput, factors)) · 输出 \(unitPrice(rate.output, factors))")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
+            if showLong, let long = rate.longContext, let threshold = rate.longThreshold, multiplier != nil,
+               rate.shortOnlyAPISpeeds?.contains(tier == "priority" ? "fast" : tier) != true {
+                Text("单次输入超过 \(threshold.formatted()) 时的 API \(label) 单价 · 输入 \(unitPrice(long.input, factors)) · 缓存读取 \(unitPrice(long.cachedInput, factors)) · 输出 \(unitPrice(long.output, factors))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
             if let short = rate.cacheWrite, let extended = rate.cacheWrite12h {
                 Text("缓存写入 / 百万 Token · 30 分钟 \(unitPrice(short, factors)) · 12 小时 \(unitPrice(extended, factors))")
                     .font(.system(size: 11))
@@ -233,8 +284,8 @@ struct UsageAnalyticsView: View {
     private func officialDetails(_ period: UsageAnalyticsPeriod) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                value(period.missingDays > 0 || !period.unknownModels.isEmpty ? "已记录部分价值" : "区间折合价值", dollars(period.dollars))
-                value("预计周限总额", "≈ " + weeklyEstimate(period))
+                value(period.missingDays > 0 || !period.unknownModels.isEmpty ? "已记录部分价值" : "已用订阅折算", dollars(period.dollars))
+                value("满周订阅折算", "≈ " + weeklyEstimate(period))
                 value("估算 credits", period.credits.map { "≈ " + $0.formatted(.number.precision(.fractionLength(1))) } ?? "待补齐")
             }
             if (model.projection(for: period)?.upperBound ?? 0) <= 0, model.reference(for: period) != .disabled {
@@ -250,6 +301,11 @@ struct UsageAnalyticsView: View {
             Text("估值对齐至 \(period.valuedThrough.formatted(date: .abbreviated, time: .shortened)), 对应已用 \(period.valuedPercent.formatted(.number.precision(.fractionLength(1))))% 周限")
                 .foregroundStyle(.secondary)
             officialWarnings(period)
+            if let device = period.deviceEstimate {
+                UsageDisclosure(title: "对照所选设备的订阅折算与 API 等值") {
+                    logDetails(period, estimate: device)
+                }
+            }
             Divider().opacity(0.5)
             UsageDisclosure(title: "按模型查看估算明细 (\(period.models.count))") {
                 VStack(alignment: .leading, spacing: 10) {
