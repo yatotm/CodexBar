@@ -6,6 +6,7 @@ struct UsageCenterView: View {
     @State private var editingSource: UsageSource?
     @State private var deletingSource: UsageSource?
     @State private var showAddProbeSheet = false
+    @State private var isQuotaExpanded = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -476,91 +477,54 @@ struct UsageCenterView: View {
     // MARK: - 额度快照与最近任务
 
     private var quotaSectionCard: some View {
-        let entries = visibleQuotas
-        return VStack(alignment: .leading, spacing: 12) {
-            ControlCenterSectionHeader(
-                title: "实时额度快照",
-                subtitle: "优先采用最新带重置时间的记录, 跨机器同账号额度不相加",
-                symbol: "gauge.with.dots.needle.33percent",
-                tint: .teal
-            )
-            if entries.isEmpty {
-                Text("当前筛选范围内暂无额度观测记录")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 6)
-            } else {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                    ForEach(entries) { entry in
-                        let isPrimary = entries.first(where: { $0.quota.provider == entry.quota.provider })?.id == entry.id
-                        quotaTile(entry: entry, isPrimary: isPrimary)
-                    }
+        VStack(alignment: .leading, spacing: 0) {
+            Button { isQuotaExpanded.toggle() } label: {
+                ControlCenterSectionHeader(
+                    title: "实时额度快照",
+                    subtitle: "优先采用最新带重置时间的记录, 跨机器同账号额度不相加",
+                    symbol: "gauge.with.dots.needle.33percent",
+                    tint: .teal
+                ) {
+                    Image(systemName: isQuotaExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12)
                 }
+                .padding(16)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("实时额度快照")
+            .accessibilityValue(isQuotaExpanded ? "已展开" : "已收起")
+            if isQuotaExpanded {
+                quotaGrid
+                    .padding([.horizontal, .bottom], 16)
+                    .transition(.identity)
             }
         }
-        .padding(16)
+        .clipped()
+        .animation(.codexStatus, value: isQuotaExpanded)
         .usageCenterCard()
     }
 
-    private func quotaTile(entry: QuotaEntry, isPrimary: Bool) -> some View {
-        let accent = ControlCenterPalette.providerAccent(entry.quota.provider)
-        return VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                HStack(spacing: 6) {
-                    Circle().fill(accent).frame(width: 7, height: 7)
-                    Text(groupName(entry.quota.provider))
-                        .font(.system(size: 12.5, weight: .semibold))
-                    Text("· " + entry.source.name)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if isPrimary {
-                    ControlCenterStatusBadge(title: "当前采用", color: accent)
-                }
-            }
-            ForEach(entry.quota.windows, id: \.name) { win in
-                quotaWindowRow(win, accent: accent)
-            }
-        }
-        .padding(12)
-        .opacity(isPrimary ? 1.0 : 0.65)
-        .usageCenterInset(cornerRadius: 10)
-        .help("观测时间: " + Date(timeIntervalSince1970: entry.quota.observedAt).formatted())
-    }
-
-    private func quotaWindowRow(_ window: UsageQuotaObservation.Window, accent: Color) -> some View {
-        let now = Date().timeIntervalSince1970
-        let expired = window.resetsAt.map { $0 <= now } ?? false
-        let remaining = max(0, min(100, Int((100.0 - window.usedPercent).rounded())))
-        let resetLabel = window.resetsAt.map {
-            Date(timeIntervalSince1970: $0).formatted(.dateTime.month(.twoDigits).day(.twoDigits).hour().minute())
-        } ?? ""
-        return HStack(spacing: 8) {
-            Text(window.name.uppercased())
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+    @ViewBuilder private var quotaGrid: some View {
+        let entries = visibleQuotas
+        if entries.isEmpty {
+            Text("当前筛选范围内暂无额度观测记录")
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
-                .frame(width: 26, alignment: .leading)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.08))
-                    if !expired {
-                        Capsule()
-                            .fill(remaining <= 15 ? Color.red : remaining <= 35 ? Color.orange : accent)
-                            .frame(width: geo.size.width * (Double(remaining) / 100.0))
-                    }
+        } else {
+            let names = UsageQuotaTile.windowNames(for: entries.map(\.quota))
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 10) {
+                ForEach(entries) { entry in
+                    UsageQuotaTile(
+                        providerTitle: groupName(entry.quota.provider),
+                        sourceName: entry.source.name,
+                        quota: entry.quota,
+                        windowNames: names,
+                        isPrimary: entries.first { $0.quota.provider == entry.quota.provider }?.id == entry.id
+                    )
                 }
-            }
-            .frame(height: 5)
-            Text(expired ? "待刷新" : "剩 \(remaining)%")
-                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(expired ? .secondary : .primary)
-                .frame(width: 54, alignment: .trailing)
-            if !resetLabel.isEmpty {
-                Text(resetLabel)
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 78, alignment: .trailing)
             }
         }
     }
@@ -670,6 +634,88 @@ struct UsageCenterView: View {
         case "unknown", "": "未知"
         default: name
         }
+    }
+}
+
+struct UsageQuotaTile: View {
+    let providerTitle: String
+    let sourceName: String
+    let quota: UsageQuotaObservation
+    let windowNames: [String]
+    let isPrimary: Bool
+
+    static func windowNames(for quotas: [UsageQuotaObservation]) -> [String] {
+        let standard = ["5h", "7d"]
+        let observed = Set(quotas.flatMap { $0.windows.map(\.name) })
+        return standard + observed.subtracting(standard).sorted()
+    }
+
+    private var accent: Color {
+        ControlCenterPalette.providerAccent(quota.provider)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Circle().fill(accent).frame(width: 6, height: 6)
+                Text(providerTitle)
+                    .font(.system(size: 12.5, weight: .semibold))
+                Text("· " + sourceName)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                if isPrimary {
+                    ControlCenterStatusBadge(title: "当前采用", color: accent)
+                }
+            }
+            .frame(minHeight: 20)
+            ForEach(windowNames, id: \.self) { name in
+                windowRow(name: name, window: quota.windows.first { $0.name == name })
+            }
+        }
+        .lineLimit(1)
+        .padding(12)
+        .opacity(isPrimary ? 1.0 : 0.65)
+        .usageCenterInset(cornerRadius: 10)
+        .help(sourceName + " · 观测时间: " + Date(timeIntervalSince1970: quota.observedAt).formatted())
+    }
+
+    private func windowRow(name: String, window: UsageQuotaObservation.Window?) -> some View {
+        HStack(spacing: 8) {
+            Text(name.uppercased())
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 26, alignment: .leading)
+            if let window {
+                let expired = window.resetsAt.map { $0 <= Date().timeIntervalSince1970 } ?? false
+                let remaining = max(0, min(100, Int((100 - window.usedPercent).rounded())))
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.08))
+                        if !expired {
+                            Capsule()
+                                .fill(remaining <= 15 ? Color.red : remaining <= 35 ? Color.orange : accent)
+                                .frame(width: geo.size.width * Double(remaining) / 100)
+                        }
+                    }
+                }
+                .frame(height: 5)
+                Text(expired ? "待刷新" : "剩 \(remaining)%")
+                    .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(expired ? .secondary : .primary)
+                    .frame(width: 54, alignment: .trailing)
+            } else {
+                Spacer(minLength: 0)
+                Text("—")
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("暂无额度数据")
+            }
+            Text(window?.resetsAt.map { Date(timeIntervalSince1970: $0).formatted(.dateTime.month(.twoDigits).day(.twoDigits).hour().minute()) } ?? "")
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .frame(width: 86, alignment: .trailing)
+        }
+        .frame(minHeight: 16)
     }
 }
 

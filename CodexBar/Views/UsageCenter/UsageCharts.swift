@@ -14,7 +14,6 @@ struct UsageDailyChart: View {
     var accentColor: Color = ControlCenterPalette.codex
     @State private var hovered: String?
     @State private var pinned: String?
-    @Environment(\.colorScheme) private var colorScheme
 
     init(days: [UsageDay], accentColor: Color = ControlCenterPalette.codex) {
         self.accentColor = accentColor
@@ -30,42 +29,12 @@ struct UsageDailyChart: View {
     var body: some View {
         let selection = selected
         VStack(alignment: .leading, spacing: 14) {
-            headerRow(selection: selection)
+            UsageDailyChartHeader(day: selection?.day, accentColor: accentColor)
             if points.isEmpty {
                 ContentUnavailableView("所选时间范围内暂无统计", systemImage: "chart.bar.xaxis")
                     .frame(height: 165)
             } else {
                 chartContent(selection: selection)
-            }
-        }
-    }
-
-    private func headerRow(selection: Point?) -> some View {
-        ControlCenterSectionHeader(
-            title: "每日 Token 趋势",
-            subtitle: selection == nil ? "悬浮柱体查看单日组成, 点击固定对比" : nil,
-            symbol: "chart.bar.fill",
-            tint: accentColor
-        ) {
-            if let point = selection {
-                HStack(spacing: 10) {
-                    Text(point.id)
-                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(accentColor)
-                    Text(point.day.tokens.formatted(.number.notation(.compactName)) + " Token")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                    if let metrics = point.day.metrics {
-                        let input = max(0, metrics.tokens - metrics.output - metrics.cacheRead - metrics.cacheWrite)
-                        Text("入 \(input.formatted(.number.notation(.compactName))) · 出 \(metrics.output.formatted(.number.notation(.compactName))) · 缓存 \((metrics.cacheRead + metrics.cacheWrite).formatted(.number.notation(.compactName)))")
-                            .font(.system(size: 11).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(ControlCenterPalette.pillTrack(colorScheme), in: Capsule(style: .continuous))
             }
         }
     }
@@ -136,6 +105,42 @@ struct UsageDailyChart: View {
         let frame = geometry[anchor]
         guard frame.contains(point), let date = proxy.value(atX: point.x - frame.minX, as: Date.self) else { return nil }
         return CodexDateFormat.dayString(from: date)
+    }
+}
+
+struct UsageDailyChartHeader: View {
+    let day: UsageDay?
+    let accentColor: Color
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ControlCenterSectionHeader(
+            title: "每日 Token 趋势",
+            subtitle: "悬停查看单日用量, 点击固定或取消",
+            symbol: "chart.bar.fill",
+            tint: accentColor
+        ) {
+            if let day {
+                HStack(spacing: 8) {
+                    Text(day.day)
+                        .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(accentColor)
+                    Text(day.tokens.formatted(.number.notation(.compactName)) + " Token")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                    if let metrics = day.metrics {
+                        let input = max(0, metrics.tokens - metrics.output - metrics.cacheRead - metrics.cacheWrite)
+                        Text("入 \(input.formatted(.number.notation(.compactName))) · 出 \(metrics.output.formatted(.number.notation(.compactName))) · 缓存 \((metrics.cacheRead + metrics.cacheWrite).formatted(.number.notation(.compactName)))")
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(ControlCenterPalette.pillTrack(colorScheme), in: Capsule(style: .continuous))
+            }
+        }
+        .lineLimit(1)
     }
 }
 

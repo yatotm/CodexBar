@@ -523,7 +523,7 @@ private struct NodeConsoleRowView: View {
     }
 
     private var channelPillBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Text("监控渠道")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -577,16 +577,17 @@ private struct ChannelToggleChip: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(isOn ? tint : .secondary.opacity(0.5))
                 Text(label)
-                    .font(.system(size: 11.5, weight: isOn ? .semibold : .regular))
+                    .font(.system(size: 11.5, weight: isOn ? .medium : .regular))
                     .foregroundStyle(isOn ? .primary : .secondary)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
             .background(
                 isOn ? tint.opacity(0.12) : Color.primary.opacity(0.03),
                 in: Capsule(style: .continuous)
@@ -595,7 +596,8 @@ private struct ChannelToggleChip: View {
                 Capsule(style: .continuous)
                     .strokeBorder(isOn ? tint.opacity(0.45) : Color.primary.opacity(0.09), lineWidth: 0.8)
             }
-            .contentShape(Capsule())
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)

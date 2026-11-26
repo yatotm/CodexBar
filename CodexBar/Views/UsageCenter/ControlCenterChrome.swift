@@ -73,15 +73,15 @@ struct ControlCenterPillPicker<Value: Hashable>: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 1) {
             ForEach(options) { option in
                 pillButton(option)
             }
         }
-        .padding(3)
-        .background(ControlCenterPalette.pillTrack(colorScheme), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .padding(2)
+        .background(ControlCenterPalette.pillTrack(colorScheme), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(ControlCenterPalette.subtleBorder(colorScheme), lineWidth: 0.7)
         }
     }
@@ -93,23 +93,23 @@ struct ControlCenterPillPicker<Value: Hashable>: View {
                 selection = option.value
             }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 if let dot = option.dotColor {
                     Circle()
                         .fill(dot)
-                        .frame(width: 6, height: 6)
+                        .frame(width: 5, height: 5)
                         .opacity(isSelected ? 1.0 : 0.65)
                 }
                 Text(option.title)
-                    .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                    .font(.system(size: 12, weight: isSelected ? .medium : .regular))
                     .foregroundStyle(isSelected ? .primary : .secondary)
                     .lineLimit(1)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .frame(minHeight: 21)
             .background {
                 if isSelected {
-                    RoundedRectangle(cornerRadius: 6.5, style: .continuous)
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .fill(ControlCenterPalette.pillActiveFill(colorScheme))
                         .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.07), radius: 2, y: 1)
                 }
@@ -117,6 +117,7 @@ struct ControlCenterPillPicker<Value: Hashable>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -125,17 +126,17 @@ struct ControlCenterStatusBadge: View {
     let color: Color
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             Circle()
                 .fill(color)
-                .frame(width: 6, height: 6)
+                .frame(width: 5, height: 5)
             Text(title)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(color)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
         .background(color.opacity(0.12), in: Capsule(style: .continuous))
     }
 }

@@ -1,8 +1,45 @@
 import Foundation
 import SQLite3
+import SwiftUI
 import Testing
 
 struct ControlCenterAndValuationTests {
+    @Test func dailyChartHeaderKeepsItsHeightWhenInspectingADay() {
+        let metrics = UsageMetrics(tokens: 987654321, output: 12345678, cacheRead: 456789012, cacheWrite: 98765)
+        let day = UsageDay(day: "2026-11-26", tokens: metrics.tokens, metrics: metrics)
+        let dayWithoutBreakdown = UsageDay(day: day.day, tokens: 0)
+        for width: CGFloat in [660, 820] {
+            func height(_ selected: UsageDay?) -> CGFloat {
+                NSHostingView(rootView: UsageDailyChartHeader(day: selected, accentColor: .blue).frame(width: width)).fittingSize.height
+            }
+            let idle = height(nil)
+            #expect(idle > 26)
+            #expect(height(day) == idle)
+            #expect(height(dayWithoutBreakdown) == idle)
+        }
+    }
+
+    @Test func quotaTilesStayAlignedWithPartialOrAdditionalWindows() {
+        let now = Date().timeIntervalSince1970
+        let weekly = UsageQuotaObservation.Window(name: "7d", usedPercent: 47, resetsAt: nil)
+        let partial = UsageQuotaObservation(provider: "gemini", observedAt: now, windows: [weekly])
+        let complete = UsageQuotaObservation(provider: "codex", observedAt: now, windows: [
+            weekly, .init(name: "5h", usedPercent: 100, resetsAt: now - 1), .init(name: "30d", usedPercent: 0, resetsAt: now + 3600)
+        ])
+        let names = UsageQuotaTile.windowNames(for: [partial, complete])
+        #expect(names == ["5h", "7d", "30d"])
+        for width: CGFloat in [320, 400] {
+            func height(_ quota: UsageQuotaObservation, primary: Bool) -> CGFloat {
+                let tile = UsageQuotaTile(providerTitle: quota.provider, sourceName: String(repeating: "远程开发机", count: 5), quota: quota, windowNames: names, isPrimary: primary)
+                return NSHostingView(rootView: tile.frame(width: width)).fittingSize.height
+            }
+            let fullHeight = height(complete, primary: true)
+            #expect(fullHeight > 60)
+            #expect(height(partial, primary: false) == fullHeight)
+            #expect(height(partial, primary: true) == fullHeight)
+        }
+    }
+
     @Test func localClaudeSnapshotUsesTaskTimeAcrossPolls() async throws {
         let temp = try TestDirectory()
         defer { try? temp.remove() }
