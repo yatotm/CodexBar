@@ -109,81 +109,271 @@ nonisolated enum UsageAnalyticsValuation {
         let days = indexedDays(snapshot.days)
         let estimates = days.mapValues { UsageModelAllocation.estimate(day: $0, prices: prices) }
         let officialDays = days.filter { key, day in (day.tokens?.total ?? 0) > 0 && (estimates[key] ?? nil) != nil }
-        return contexts.compactMap { context -> UsageAnalyticsPeriod? in
+        let valued = contexts.compactMap { context -> UsageAnalyticsPeriod? in
             guard !Task<Never, Never>.isCancelled, context.start < now.timeIntervalSince1970, context.end > context.start,
                   context.end > (dayDate(snapshot.queryStart)?.timeIntervalSince1970 ?? 0) else { return nil }
-            var models: [String: UsageModelEstimate] = [:]
-            var tokens = AnalyticsTokens.zero
-            var missing = 0
-            var boundaries = 0
-            var timeAllocated = 0
-            var unknown: Set<String> = []
-            var totalWeight = 0.0
-            var dayStart = floor(context.start / 86400) * 86400
-            while dayStart < min(context.end, cutoff) {
-                let dayEnd = min(dayStart + 86400, cutoff)
-                let key = Int(dayStart / 86400)
-                let allocation = dayShare(context, among: contexts, start: dayStart, end: dayEnd)
-                if allocation.boundary {
-                    boundaries += 1
-                }
-                if allocation.usedTime {
-                    timeAllocated += 1
-                }
-                let dayWeight = (days[key]?.models.reduce(0) { $0 + max(0, $1.weight) } ?? 0) * allocation.share
-                totalWeight += dayWeight
-                if let day = days[key], let total = day.tokens,
-                   total.total > 0 || !day.models.contains(where: { $0.weight > 0 }) {
-                    tokens += UsageModelAllocation.scaled(total, by: allocation.share)
-                    if let rows = estimates[key] ?? nil {
-                        for row in rows {
-                            var item = models[row.id] ?? UsageModelEstimate(
-                                model: row.model, speed: row.speed, tokens: .zero, dollars: 0, credits: row.credits == nil ? nil : 0, weight: 0
-                            )
-                            item.tokens += UsageModelAllocation.scaled(row.tokens, by: allocation.share)
-                            item.dollars += row.dollars * allocation.share
-                            item.weight += row.weight * allocation.share
-                            if let credits = row.credits {
-                                item.credits = (item.credits ?? 0) + credits * allocation.share
-                            }
-                            models[row.id] = item
-                        }
-                    } else if total.total > 0 {
-                        for model in day.models where UsageModelAllocation.multiplier(model: model, prices: prices) == nil {
-                            unknown.insert(model.model + (model.speed == "standard" ? "" : " · " + model.speed))
-                        }
-                        if !day.models.contains(where: { $0.weight > 0 }) {
-                            unknown.insert("未提供有效模型")
-                        }
-                    }
-                } else if dayWeight > 0 {
-                    missing += 1
-                }
-                dayStart += 86400
-            }
-            let rows = models.values.sorted { $0.dollars > $1.dollars }
-            let hasUnpricedData = missing > 0 || !unknown.isEmpty
-            let used = consumption(context, at: min(context.end, cutoff))
-            let dollars = rows.isEmpty && (hasUnpricedData || used > 0 || context.window.lastUsed > 0) ? nil : rows.reduce(0) { $0 + $1.dollars }
-            let credits = !rows.isEmpty && rows.allSatisfy { $0.credits != nil } ? rows.reduce(0) { $0 + ($1.credits ?? 0) } : nil
-            let pricedWeight = rows.reduce(0) { $0 + $1.weight }
-            let coverage = hasUnpricedData && totalWeight > 0 ? min(1, pricedWeight / totalWeight) : 1
-            let samplePercent = used * coverage
-            var period = UsageAnalyticsPeriod(
-                start: Date(timeIntervalSince1970: context.start), end: Date(timeIntervalSince1970: context.end),
-                scheduledEnd: Date(timeIntervalSince1970: context.window.resetsAt), usedPercent: context.window.lastUsed,
-                valuedPercent: used, samplePercent: samplePercent, valuedThrough: Date(timeIntervalSince1970: min(context.end, cutoff)),
-                tokens: tokens, dollars: dollars, projected: !context.window.decreased && samplePercent > 0 ? dollars.map { $0 * 100 / samplePercent } : nil,
-                credits: credits, models: rows,
-                boundaryDays: boundaries, timeAllocatedDays: timeAllocated, missingDays: missing,
-                unknownModels: unknown.sorted(), unreliable: context.window.decreased
-            )
+            var period = modelBasedPeriod(context, contexts: contexts, days: days, estimates: estimates, prices: prices, cutoff: cutoff)
             period.deviceEstimate = UsageLogValuation.estimate(
-                context: context, officialDays: officialDays, needsFallback: hasUnpricedData || (dollars ?? 0) <= 0,
+                context: context, officialDays: officialDays, needsFallback: period.missingDays > 0 || !period.unknownModels.isEmpty || (period.dollars ?? 0) <= 0,
                 prices: prices, sources: tokenSources, expectedSources: expectedTokenSources, now: now, plans: plans
             )
             return period
-        }.reversed()
+        }
+        var deviceTotals: [Int: UsageCreditPart] = [:]
+        var conflicts = Set<Int>()
+        for period in valued {
+            guard let device = period.deviceEstimate else { continue }
+            conflicts.formUnion(device.conflictingDays)
+            for (day, part) in device.days {
+                deviceTotals[day, default: UsageCreditPart()].add(part)
+            }
+        }
+        let credits = CreditLedger(
+            days: days,
+            estimates: estimates,
+            contexts: contexts,
+            deviceTotals: deviceTotals,
+            conflicts: conflicts,
+            fetchedAt: cutoff,
+            now: now.timeIntervalSince1970
+        )
+        let byReset = Dictionary(contexts.map { ($0.window.resetsAt, $0) }, uniquingKeysWith: { first, _ in first })
+        return valued.reversed().map { value in
+            var period = value
+            if let context = byReset[period.id] {
+                period.creditEstimate = credits.estimate(context, device: period.deviceEstimate)
+            }
+            return period
+        }
+    }
+
+    private static func modelBasedPeriod(
+        _ context: PeriodWindow,
+        contexts: [PeriodWindow],
+        days: [Int: AnalyticsDay],
+        estimates: [Int: [UsageModelEstimate]?],
+        prices: UsagePriceBook,
+        cutoff: Double
+    ) -> UsageAnalyticsPeriod {
+        var models: [String: UsageModelEstimate] = [:]
+        var tokens = AnalyticsTokens.zero
+        var missing = 0
+        var boundaries = 0
+        var timeAllocated = 0
+        var unknown: Set<String> = []
+        var totalWeight = 0.0
+        var dayStart = floor(context.start / 86400) * 86400
+        while dayStart < min(context.end, cutoff) {
+            let dayEnd = min(dayStart + 86400, cutoff)
+            let key = Int(dayStart / 86400)
+            let allocation = dayShare(context, among: contexts, start: dayStart, end: dayEnd)
+            if allocation.boundary {
+                boundaries += 1
+            }
+            if allocation.usedTime {
+                timeAllocated += 1
+            }
+            let dayWeight = (days[key]?.models.reduce(0) { $0 + max(0, $1.weight) } ?? 0) * allocation.share
+            totalWeight += dayWeight
+            if let day = days[key], let total = day.tokens,
+               total.total > 0 || !day.models.contains(where: { $0.weight > 0 }) {
+                tokens += UsageModelAllocation.scaled(total, by: allocation.share)
+                if let rows = estimates[key] ?? nil {
+                    for row in rows {
+                        var item = models[row.id] ?? UsageModelEstimate(
+                            model: row.model, speed: row.speed, tokens: .zero, dollars: 0, credits: row.credits == nil ? nil : 0, weight: 0
+                        )
+                        item.tokens += UsageModelAllocation.scaled(row.tokens, by: allocation.share)
+                        item.dollars += row.dollars * allocation.share
+                        item.weight += row.weight * allocation.share
+                        if let credits = row.credits {
+                            item.credits = (item.credits ?? 0) + credits * allocation.share
+                        }
+                        models[row.id] = item
+                    }
+                } else if total.total > 0 {
+                    for model in day.models where UsageModelAllocation.multiplier(model: model, prices: prices) == nil {
+                        unknown.insert(model.model + (model.speed == "standard" ? "" : " · " + model.speed))
+                    }
+                    if !day.models.contains(where: { $0.weight > 0 }) {
+                        unknown.insert("未提供有效模型")
+                    }
+                }
+            } else if dayWeight > 0 {
+                missing += 1
+            }
+            dayStart += 86400
+        }
+        let rows = models.values.sorted { $0.dollars > $1.dollars }
+        let hasUnpricedData = missing > 0 || !unknown.isEmpty
+        let used = consumption(context, at: min(context.end, cutoff))
+        let dollars = rows.isEmpty && (hasUnpricedData || used > 0 || context.window.lastUsed > 0) ? nil : rows.reduce(0) { $0 + $1.dollars }
+        let credits = !rows.isEmpty && rows.allSatisfy { $0.credits != nil } ? rows.reduce(0) { $0 + ($1.credits ?? 0) } : nil
+        let pricedWeight = rows.reduce(0) { $0 + $1.weight }
+        let coverage = hasUnpricedData && totalWeight > 0 ? min(1, pricedWeight / totalWeight) : 1
+        let samplePercent = used * coverage
+        return UsageAnalyticsPeriod(
+            start: Date(timeIntervalSince1970: context.start), end: Date(timeIntervalSince1970: context.end),
+            scheduledEnd: Date(timeIntervalSince1970: context.window.resetsAt), usedPercent: context.window.lastUsed,
+            valuedPercent: used, samplePercent: samplePercent, valuedThrough: Date(timeIntervalSince1970: min(context.end, cutoff)),
+            tokens: tokens, dollars: dollars, projected: !context.window.decreased && samplePercent > 0 ? dollars.map { $0 * 100 / samplePercent } : nil,
+            credits: credits, models: rows,
+            boundaryDays: boundaries, timeAllocatedDays: timeAllocated, missingDays: missing,
+            unknownModels: unknown.sorted(), unreliable: context.window.decreased
+        )
+    }
+
+    private struct CreditSpan {
+        let start: Double
+        var end: Double
+        var low: Double
+        var high: Double
+    }
+
+    private struct CreditLedger {
+        let days: [Int: AnalyticsDay]
+        let estimates: [Int: [UsageModelEstimate]?]
+        let contexts: [PeriodWindow]
+        let deviceTotals: [Int: UsageCreditPart]
+        let conflicts: Set<Int>
+        let fetchedAt: Double
+        let now: Double
+
+        func estimate(_ context: PeriodWindow, device: UsageLogEstimate?) -> UsageCreditEstimate? {
+            let limit = min(context.end, now)
+            var recorded = UsageCreditPart(tokens: nil)
+            var spans: [CreditSpan] = []
+            var officialSpans: [CreditSpan] = []
+            var hasDevice = false
+            var dayStart = floor(context.start / 86400) * 86400
+            while dayStart < limit {
+                defer { dayStart += 86400 }
+                let key = Int(dayStart / 86400)
+                let lower = max(context.start, dayStart)
+                let upper = min(limit, dayStart + 86400)
+                let part: UsageCreditPart
+                let through: Double
+                if let official = officialPart(key, context: context, devicePart: device?.days[key]) {
+                    part = official
+                    through = upper
+                    append(official.credits, from: lower, to: through, into: &officialSpans)
+                } else if let device, let local = device.days[key], !device.conflictingDays.contains(key) {
+                    part = local
+                    through = min(upper, device.valuedThrough.timeIntervalSince1970)
+                    hasDevice = true
+                } else {
+                    continue
+                }
+                guard through > lower else { continue }
+                recorded.add(part)
+                append(part.credits, from: lower, to: through, into: &spans)
+            }
+            guard !spans.isEmpty else { return nil }
+            // 日报对齐的实测周限变化须超过一个显示刻度, 才单独用于外推
+            let projected = forecast(officialSpans, context: context, minimumChange: 1)
+                ?? forecast(spans, context: context, minimumChange: 0)
+            return UsageCreditEstimate(recorded: recorded, projected: projected, hasOfficial: !officialSpans.isEmpty, hasDevice: hasDevice)
+        }
+
+        private func append(_ amount: ClosedRange<Double>, from start: Double, to end: Double, into spans: inout [CreditSpan]) {
+            if spans.last?.end == start {
+                spans[spans.count - 1].end = end
+                spans[spans.count - 1].low += amount.lowerBound
+                spans[spans.count - 1].high += amount.upperBound
+            } else {
+                spans.append(CreditSpan(start: start, end: end, low: amount.lowerBound, high: amount.upperBound))
+            }
+        }
+
+        private func forecast(_ spans: [CreditSpan], context: PeriodWindow, minimumChange: Double) -> ClosedRange<Double>? {
+            guard !context.window.decreased else { return nil }
+            var low = 0.0
+            var high = 0.0
+            var used = 0.0
+            for span in spans {
+                guard let first = alignedPercent(context, at: span.start), let last = alignedPercent(context, at: span.end),
+                      last > first, span.high > 0 else { continue }
+                low += span.low
+                high += span.high
+                used += last - first
+            }
+            guard used > minimumChange else { return nil }
+            let factor = 100 / used
+            return UsageCreditEstimate.dollars(low * factor ... high * factor)
+        }
+
+        private func officialPart(_ key: Int, context: PeriodWindow, devicePart: UsageCreditPart?) -> UsageCreditPart? {
+            let start = Double(key) * 86400
+            let end = start + 86400
+            guard end <= fetchedAt, let day = days[key], let reported = day.reportedCredits,
+                  reported.isFinite, reported >= 0 else { return nil }
+            let emptyReport = reported == 0 && (day.tokens?.total ?? 0) == 0
+            if emptyReport, (deviceTotals[key]?.credits.upperBound ?? 0) > 0 || day.models.contains(where: { $0.weight > 0 }) {
+                return nil
+            }
+            // 最近一个已结束的 UTC 日可能还在入账, 三类计数共同落后时整段暂用设备
+            if fetchedAt - end < 86400, !conflicts.contains(key), let local = deviceTotals[key]?.tokens, let official = day.tokens,
+               local.input > official.input, local.cached > official.cached, local.output > official.output {
+                return nil
+            }
+            let share: Double
+            if start >= context.start, end <= context.end {
+                share = 1
+            } else if !conflicts.contains(key), let whole = deviceTotals[key], let tokens = day.tokens, tokens == whole.tokens,
+                      whole.credits.lowerBound > 0, whole.credits.lowerBound == whole.credits.upperBound {
+                // 全日三类 Token 都对齐时, 用重置两侧的请求权重分摊同一笔官方日总额
+                share = min(1, (devicePart?.credits.lowerBound ?? 0) / whole.credits.lowerBound)
+            } else {
+                let adjacent = contexts.filter { $0.start < end && $0.end > start }
+                let coverage = adjacent.reduce(0.0) { $0 + min(end, $1.end) - max(start, $1.start) }
+                guard coverage >= 86400 - 1 else { return nil }
+                var delta = 0.0
+                var totalDelta = 0.0
+                for window in adjacent {
+                    guard !window.window.decreased, let a = alignedPercent(window, at: max(start, window.start)),
+                          let b = alignedPercent(window, at: min(end, window.end)), b >= a else { return nil }
+                    totalDelta += b - a
+                    if window.window.resetsAt == context.window.resetsAt {
+                        delta = b - a
+                    }
+                }
+                guard totalDelta > 0 else { return nil }
+                share = delta / totalDelta
+            }
+            let sliceStart = max(context.start, start)
+            let sliceEnd = min(context.end, end)
+            if emptyReport, let a = alignedPercent(context, at: sliceStart), let b = alignedPercent(context, at: sliceEnd), b > a {
+                return nil
+            }
+            let amount = reported * share
+            var part = UsageCreditPart(credits: amount ... amount, tokens: day.tokens.map { UsageModelAllocation.scaled($0, by: share) })
+            let weight = day.models.reduce(0) { $0 + $1.weight }
+            for model in day.models where model.weight > 0 && weight > 0 {
+                let modelAmount = amount * model.weight / weight
+                part.addModelCredits(modelAmount ... modelAmount, for: model.model)
+            }
+            for row in (estimates[key] ?? nil) ?? [] {
+                part.modelTokens[row.model, default: .zero] += UsageModelAllocation.scaled(row.tokens, by: share)
+            }
+            return part
+        }
+
+        private func alignedPercent(_ context: PeriodWindow, at time: Double) -> Double? {
+            if time == context.start {
+                return 0
+            }
+            let points = context.window.observations
+            guard let before = points.last(where: { $0.at <= time && $0.at >= context.start }) else {
+                return points.first(where: { $0.at >= context.start })?.used == 0 ? 0 : nil
+            }
+            guard before.at < time, let after = points.first(where: { $0.at >= time && $0.at <= context.end }) else { return before.used }
+            if before.used == after.used {
+                return before.used
+            }
+            // 缺报段边缘只在同一读数或一次正常刷新间隔内对齐, 不跨长空档摊百分比
+            guard after.at - before.at <= 900 else { return nil }
+            return consumption(context, at: time)
+        }
     }
 
     private static func indexedDays(_ source: [AnalyticsDay]) -> [Int: AnalyticsDay] {

@@ -113,11 +113,15 @@ nonisolated enum UsageLogValuationSmoke {
         apiSample.requestInputTokens = sample.input + sample.cached
         let oneDay = AnalyticsDay(date: "2026-10-01", tokens: sample, models: official.models)
         let reported = periods(snapshot([oneDay]), sources: [source([apiSample])])[0]
-        let comparison = reported.deviceEstimate!.dayComparisons[0]
-        precondition(reported.logEstimate == nil && reported.dollars == 17 && comparison.officialDollars == 17)
-        precondition(comparison.deviceDollars == 12.8 ... 12.8 && comparison.deviceTokens == comparison.officialTokens)
-        precondition(comparison.deviceModels == ["gpt-6.2-astra"] && comparison.reportedModels == ["gpt-6-astra"])
-        precondition(reported.deviceEstimate?.apiDollars == 23.6 ... 23.6)
+        precondition(reported.dollars == 17 && reported.deviceEstimate?.apiDollars == 23.6 ... 23.6)
+        var absolute = oneDay
+        absolute.reportedCredits = 320
+        let withOfficial = periods(snapshot([absolute]), sources: [source([apiSample])])[0].creditEstimate!
+        precondition(withOfficial.recorded.credits == 320 ... 320 && withOfficial.hasOfficial && !withOfficial.hasDevice)
+        precondition(withOfficial.recorded.modelCredits["gpt-6-astra"] == 320 ... 320, "百分比只分配已记录日总额")
+        let late = AnalyticsDay(date: absolute.date, tokens: nil, models: [], reportedCredits: 0)
+        let withLog = periods(snapshot([late]), sources: [source([apiSample])])[0].creditEstimate!
+        precondition(withLog.hasDevice && !withLog.hasOfficial && withLog.recorded.credits == 320 ... 320)
         let partial = AnalyticsDay(date: "2026-10-01", tokens: sample, models: official.models)
         precondition(periods(snapshot([partial]), sources: [source(logs)])[0].logEstimate != nil, "官方非零但少于已知本地用量时仍应兜底")
         let unknownPrice = periods(snapshot(), sources: [source([record("known"), record("future", model: "unknown-model")])])[0].logEstimate!

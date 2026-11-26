@@ -7,6 +7,7 @@ struct UsageAnalyticsSmoke {
         let currentPrices = try decoder.decode(UsagePriceBook.self, from: Data(contentsOf: URL(fileURLWithPath: "CodexBar/Resources/UsagePrices.json")))
         UsageLogValuationSmoke.run(prices: currentPrices)
         verifyCurrentCodexPricing(currentPrices)
+        verifyReportedCredits(currentPrices)
         let sol61 = currentPrices.rate(for: "gpt-6.1-sol")!
         precondition(sol61.input == 2 && sol61.cachedInput == 0.1 && sol61.cacheWrite == 2.5 && sol61.output == 10)
         precondition(sol61.creditInput == 50 && sol61.creditCachedInput == 2.5 && sol61.creditOutput == 250)
@@ -82,18 +83,42 @@ struct UsageAnalyticsSmoke {
             preconditionFailure("应拒绝串账号")
         } catch {}
         let badUnits = Data(String(decoding: weights, as: UTF8.self).replacingOccurrences(of: "percent", with: "unknown").utf8)
-        do {
-            _ = try UsageAnalyticsParser.parse(
-                usage: usage,
-                breakdown: badUnits,
-                counts: counts,
-                accountID: "account-1",
-                start: "",
-                end: "",
-                now: now
-            )
-            preconditionFailure("应拒绝未知单位")
-        } catch {}
+        let unweighted = try UsageAnalyticsParser.parse(usage: usage, breakdown: badUnits, counts: counts, accountID: "account-1", start: "", end: "", now: now)
+        precondition(unweighted.days.first?.models.isEmpty == true && unweighted.days.first?.tokens != nil, "未知单位不能污染独立的日总量")
+        let daily = Data("""
+        {"group_by":"day","balance_unit":"credit","data":[
+          {"date":"2026-08-01","totals":{"credits":513.69344,"uncached_text_input_tokens":"changed"}},
+          {"date":"2026-08-02","totals":{"credits":0}},{"date":"2026-08-03","totals":{"credits":-1}},
+          {"date":"2026-08-04","totals":{}},{"unexpected":true}]}
+        """.utf8)
+        let verified = try UsageAnalyticsParser.parse(
+            usage: usage,
+            breakdown: nil,
+            counts: daily,
+            accountID: "account-1",
+            start: "2026-08-01",
+            end: "2026-08-05",
+            now: now
+        )
+        precondition(verified.days.map(\.reportedCredits) == [513.69344, 0, nil, nil] && verified.days.first?.tokens == nil)
+        let money = Data(String(decoding: daily, as: UTF8.self).replacingOccurrences(of: "\"credit\"", with: "\"usd\"").utf8)
+        let unknownUnit = try UsageAnalyticsParser.parse(
+            usage: usage,
+            breakdown: weights,
+            counts: money,
+            accountID: "account-1",
+            start: "2026-08-01",
+            end: "2026-08-05",
+            now: now
+        )
+        precondition(unknownUnit.days.allSatisfy { $0.reportedCredits == nil })
+        var cached = unknownUnit
+        cached.retainSettledCredits(from: verified)
+        precondition(cached.days.map(\.reportedCredits) == [513.69344, 0, nil, nil])
+        var corrected = cached
+        corrected.days[0].reportedCredits = 0
+        corrected.retainSettledCredits(from: verified)
+        precondition(corrected.days[0].reportedCredits == 0, "官方的明确更正优先于缓存")
         let prices = try decoder.decode(UsagePriceBook.self, from: Data("""
         {"schema":1,"asOf":"2026-09-09","apiSource":"https://developers.openai.com/api/docs/pricing",
         "creditSource":"https://learn.chatgpt.com/docs/pricing","rates":[
@@ -283,6 +308,94 @@ struct UsageAnalyticsSmoke {
         )
         precondition(evidence.isValid && !evidence.matches(UsageAnalyticsIdentity.hash("codex-account", "two")), "不得把不同账号的来源合并")
         print("Analytics parsing, account isolation, missing data, early reset and valuation tests passed")
+    }
+
+    private static func verifyReportedCredits(_ prices: UsagePriceBook) {
+        let start = ISO8601DateFormatter().date(from: "2026-11-01T00:00:00Z")!.timeIntervalSince1970
+        let day = 86400.0
+        let mode = AnalyticsModel(model: "gpt-6-astra", speed: "standard", weight: 100)
+        func daily(_ index: Int, _ credits: Double?, _ n: Int64 = 1000000) -> AnalyticsDay {
+            AnalyticsDay(date: "2026-11-0" + String(index + 1), tokens: .init(input: n, cached: 0, output: 0), models: [mode], reportedCredits: credits)
+        }
+        func window(_ cycleStart: Double, _ observations: [(Double, Double)]) -> UsageObservedWindow {
+            let points = observations.map { UsageQuotaPoint(at: start + $0.0, used: $0.1) }
+            return .init(
+                resetsAt: start + cycleStart + 7 * day,
+                firstAt: points.first!.at,
+                firstUsed: points.first!.used,
+                lastAt: points.last!.at,
+                lastUsed: points.last!.used,
+                maxUsed: points.last!.used,
+                decreased: false,
+                observations: points
+            )
+        }
+        func periods(_ rows: [AnalyticsDay], _ windows: [UsageObservedWindow], logs: [(Double, Int64)], fetched: Double) -> [UsageAnalyticsPeriod] {
+            let now = Date(timeIntervalSince1970: start + fetched)
+            let snapshot = UsageAnalyticsSnapshot(
+                schema: 1,
+                accountKey: "a",
+                emailKey: "e",
+                fetchedAt: now,
+                queryStart: "2026-11-01",
+                queryEnd: "2026-11-08",
+                days: rows,
+                windows: windows,
+                importedHistory: false,
+                readCreditReports: true
+            )
+            let records = logs.enumerated().map { index, item in
+                UsageTokenRecord(
+                    id: String(index),
+                    at: start + item.0,
+                    model: "gpt-6.2-astra",
+                    speed: "standard",
+                    tokens: .init(input: item.1, cached: 0, output: 0)
+                )
+            }
+            let source = UsageTokenSource(name: "Mac", evidence: .init(
+                schema: 1,
+                ready: true,
+                complete: true,
+                generatedAt: now.timeIntervalSince1970,
+                scannedAt: now.timeIntervalSince1970,
+                accountKey: nil,
+                truncated: false,
+                unattributedCount: 0,
+                records: records
+            ))
+            return UsageAnalyticsValuation.periods(snapshot: snapshot, prices: prices, now: now, tokenSources: logs.isEmpty ? [] : [source])
+        }
+        let quota = window(0, [(0, 0), (day, 10), (2 * day, 20), (2.5 * day, 30), (3 * day, 40)])
+        let records: [(Double, Int64)] = [(100, 1000000), (day + 100, 1000000), (2 * day + 100, 1000000)]
+        let mixed = periods([daily(0, 150), daily(1, nil), daily(2, 9999)], [quota], logs: records, fetched: 2.5 * day)[0].creditEstimate!
+        precondition(mixed.hasDevice && mixed.hasOfficial && mixed.recorded.credits == 550 ... 550)
+        precondition(abs(mixed.projected!.lowerBound - 150 / 0.10 / 25) < 1e-8)
+        let settled = periods([daily(0, 150), daily(1, 300), daily(2, 9999)], [quota], logs: records, fetched: 2.5 * day)[0].creditEstimate!
+        precondition(settled.recorded.credits == 650 ... 650, "日报只替换对应自然日, 当前日临时数不叠加")
+        precondition(settled.projected == 90 ... 90)
+        let sparse = window(0, [(0, 0), (day, 1), (2 * day, 20)])
+        let tooLittle = periods([daily(0, 150)], [sparse], logs: Array(records.prefix(2)), fetched: 2 * day)[0].creditEstimate!
+        precondition(tooLittle.projected == 70 ... 70, "只有一个百分点的日报样本时才纳入设备样本外推")
+        let missing = periods([daily(0, 100), daily(2, 300)], [quota], logs: [], fetched: 3 * day)[0].creditEstimate!
+        precondition(
+            missing.recorded.credits == 400 ... 400 && abs(missing.projected!.lowerBound - 400 / 0.30 / 25) < 1e-8,
+            "中间缺报日的周限增量不进入分母"
+        )
+        let creditsOnly = AnalyticsDay(date: "2026-11-02", tokens: nil, models: [], reportedCredits: 25)
+        let available = periods([daily(0, 150), creditsOnly], [quota], logs: [], fetched: 2 * day)[0].creditEstimate!
+        precondition(available.recorded.tokens?.input == 1000000 && available.recorded.credits == 175 ... 175)
+        precondition(periods([creditsOnly], [quota], logs: [], fetched: 2 * day)[0].creditEstimate!.recorded.tokens == nil)
+        let fallback = periods([], [quota], logs: records, fetched: 2.5 * day)[0].creditEstimate!
+        precondition(!fallback.hasOfficial && fallback.recorded.credits == 600 ... 600)
+        let early = window(0, [(0, 0), (day / 2 - 1, 40)])
+        let restarted = window(day / 2, [(day / 2, 0), (day - 1, 10)])
+        let split = periods([daily(0, 500)], [early, restarted], logs: [], fetched: day)
+        precondition(split.map { $0.creditEstimate!.recorded.credits.lowerBound } == [100, 400], "同一 UTC 日按实际重置和周限增量分摊")
+        let aligned = periods([daily(0, 500, 4000000)], [early, restarted], logs: [(100, 1000000), (day / 2, 3000000)], fetched: day)
+        precondition(aligned.map { $0.creditEstimate!.recorded.credits.lowerBound } == [375, 125], "三类 Token 对齐时按重置两侧的逐请求份额分摊")
+        let noSplit = periods([daily(0, 500, 4000000)], [restarted], logs: [(day / 2, 1000000)], fetched: day)[0].creditEstimate!
+        precondition(noSplit.recorded.credits == 200 ... 200 && !noSplit.hasOfficial, "不能用整个报告日给半天的周期计费")
     }
 
     private static func verifyCurrentCodexPricing(_ prices: UsagePriceBook) {

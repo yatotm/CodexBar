@@ -67,9 +67,9 @@ Mac 后台任务单轮分页和回填有上限，取消与超时会终止本轮�
 
 - `/backend-api/wham/usage`：当前主额度窗口和账号核对
 - `/backend-api/wham/usage/daily-token-usage-breakdown`：按日模型额度权重，`units=percent`
-- `/backend-api/wham/analytics/daily-workspace-usage-counts`：按日未缓存输入、缓存读取和输出总量
+- `/backend-api/wham/analytics/daily-workspace-usage-counts`：按日未缓存输入、缓存读取和输出总量，以及单位为 `credit` 的 `totals.credits`
 
-日查询固定 UTC、`group_by=day`，请求最近 70 天；每 15 分钟更新。它们是官网内部接口，不是稳定的公开 API。`UsageAnalyticsParser` 集中管理字段和单位校验，拒绝未知单位和不匹配的账号；两个响应日期取并集，缺少 Token 保持缺失。整份成功响应替换缓存，不跨查询累加归一化模型权重。
+日查询使用 UTC 和 `group_by=day`，每 15 分钟刷新最近 70 天。只有 `balance_unit=credit` 的 `totals.credits` 可以作为绝对数；另一接口 `units=percent` 的同名模型字段是相对权重。两份日报独立解析，未知单位、坏字段或缺报保持未知，确认账号后可沿用同账号已结算日的历史 credits。明确的官方更正替换旧值。
 
 `UsagePrices.json` 保存带日期和来源的官方价格快照。官方日明细和设备日志共用每个模型的标准单价与订阅内速度倍率。日期后缀只匹配已知型号，未知型号保留为未计价。
 
@@ -77,7 +77,7 @@ Mac 后台任务单轮分页和回填有上限，取消与超时会终止本轮�
 
 `UsageModelAllocation` 使用 Quota Compass 的混合单价反推：在同日各模型输入输出结构相同的假设下，以额度权重除以混合单价，归一化后分配各类 Token。整数分配使用最大余数法，保证日总数守恒；未知价格不套用平均单价。模型 Token 与 credits 均明确标为估算。
 
-`UsageAnalyticsValuation` 用实际截止时间划分周期。跨周期边界日按已观察周限增量分配，覆盖不全或无增量依据时退回时长分配，并显示该限制。相邻周期对同一天的分配不会重复计量。外推使用与官方统计读取时间对齐的额度比例，末次观察较早不阻断计算。没有 Token 和模型额度权重的空白日跳过；有权重但缺 Token 的日子，按已计价权重占比匹配额度比例并外推，保留缺失提示。原始缓存结构不变，估算结果只存在内存中。
+`UsageAnalyticsValuation` 按实际重置时刻划分周期。完整 UTC 日直接取官方总额；跨期日只有在设备三类 Token 与官方整日一致时才按请求权重拆分，否则使用可验证的周限增量，再回退到对应时段的设备记录。当前 UTC 日和缺报日只计设备数据。累计消耗与满周外推独立。外推优先取官方日报的连续已结算段，分别累加对应额度增量，超过一个百分点才独立采用。无法对齐或样本不足时，改用包括设备记录的有效时段。美元折算采用公开费率共同对应的 25 credits／美元。
 
 零用量时五分钟内的截止时间漂移仅在展示层合并，原始窗口仍保留。
 
@@ -97,7 +97,7 @@ Mac 后台任务单轮分页和回填有上限，取消与超时会终止本轮�
 
 逐请求记录优先使用 `token_usage_record`，旧格式按累计量求差，缓存输入从输入总数中扣出。估值库用独立文件游标回读原日志，在附表 `request_inputs` 保存已验证的单次输入长度。导出中的 `requestInputTokens` 为可选字段，缺失时只影响 API 价格范围。旧采集器仍可读写原用量表。`thread_settings_applied.thread_settings.service_tier` 记录速度切换，`priority` 对应 Fast，`default` 和明确的空值对应标准模式，缺失值保持未知。API 模式和提供商切换清除旧身份；无显式登录模式的请求需要对应订阅额度回执，账号不符的记录不导出。只传输哈希请求标识、时间、模型、速度和 Token 数，不传输鉴权或会话内容。
 
-`UsageLogValuation` 在后台对同周期请求去重并计价。官方日明细缺失、无法计价或少于明确的设备用量时，整段使用日志估算；官方补齐后整段切回，禁止两份金额相加。估值时间与额度观察对齐，未记录速度的部分按标准至 Fast 计算范围。身份不明、回填未完成、设备过旧和截断证据会标记不完整；单源最多导出最近 20,000 条，不能把截断当作完整历史。请求证据冲突或周期内额度回落时停止外推。
+`UsageLogValuation` 对同周期请求去重，按 UTC 日保留设备估算，供缺报和重置边界使用。活动周期取设备共同扫描时间与最近额度观察时间中的较早值；冲突或无法计价的日子不用于设备补算。单台设备最多导出最近 20,000 条。官方日报和设备记录不会重复计入同一段。
 
 Apple 对弹窗尺寸动画的说明见 [NSPopover.contentSize](https://developer.apple.com/documentation/appkit/nspopover/contentsize)
 

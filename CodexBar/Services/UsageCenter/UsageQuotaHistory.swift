@@ -74,7 +74,7 @@ final class UsageQuotaHistoryController {
         refresh()
     }
 
-    func setAccount(_ key: String, localEnabled: Bool) {
+    func setAccount(_ key: String?, localEnabled: Bool) {
         if accountKey != key {
             stop()
             accountKey = key
@@ -82,7 +82,7 @@ final class UsageQuotaHistoryController {
             tokenEvidence = [:]
             quotaErrors = [:]
             tokenErrors = [:]
-            selected = Set(UserDefaults.standard.stringArray(forKey: "UsageAnalytics.historySources." + key) ?? [])
+            selected = Set(key.flatMap { UserDefaults.standard.stringArray(forKey: "UsageAnalytics.historySources." + $0) } ?? [])
         }
         if self.localEnabled != localEnabled {
             stop()

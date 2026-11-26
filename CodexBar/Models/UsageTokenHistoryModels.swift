@@ -61,20 +61,6 @@ nonisolated struct UsageLogModelEstimate: Identifiable {
     }
 }
 
-nonisolated struct UsageModelDayComparison: Identifiable {
-    let day: String
-    let deviceModels: [String]
-    let reportedModels: [String]
-    let deviceTokens: Int64
-    let officialTokens: Int64
-    let deviceDollars: ClosedRange<Double>
-    let officialDollars: Double
-
-    var id: String {
-        day
-    }
-}
-
 nonisolated struct UsageLogEstimate {
     let replacesOfficial: Bool
     let valuedThrough: Date
@@ -89,7 +75,8 @@ nonisolated struct UsageLogEstimate {
     let unknownModels: [String]
     let unknownSpeedCount: Int
     let apiDollars: ClosedRange<Double>?
-    let dayComparisons: [UsageModelDayComparison]
+    let days: [Int: UsageCreditPart]
+    let conflictingDays: Set<Int>
 
     var projectedAPI: ClosedRange<Double>? {
         guard projected != nil, let apiDollars, usedPercent > 0 else { return nil }

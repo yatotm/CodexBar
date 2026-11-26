@@ -21,8 +21,8 @@ nonisolated enum UsageQuotaReference: String, CaseIterable, Identifiable {
     var dollarRange: ClosedRange<Double>? {
         switch self {
         case .disabled: nil
-        case .pro5x: (12500.0 / 25) ... (15000.0 / 25)
-        case .pro20x: (50000.0 / 25) ... (60000.0 / 25)
+        case .pro5x: UsageCreditEstimate.dollars(12500 ... 15000)
+        case .pro20x: UsageCreditEstimate.dollars(50000 ... 60000)
         }
     }
 }
@@ -271,6 +271,7 @@ nonisolated struct AnalyticsDay: Codable, Identifiable, Equatable {
     let date: String
     let tokens: AnalyticsTokens?
     let models: [AnalyticsModel]
+    var reportedCredits: Double?
     var id: String {
         date
     }
@@ -283,9 +284,24 @@ nonisolated struct UsageAnalyticsSnapshot: Codable {
     let fetchedAt: Date
     let queryStart: String
     let queryEnd: String
-    let days: [AnalyticsDay]
+    var days: [AnalyticsDay]
     var windows: [UsageObservedWindow]
     var importedHistory: Bool
+    var readCreditReports: Bool?
+
+    mutating func retainSettledCredits(from previous: Self) {
+        guard accountKey == previous.accountKey else { return }
+        let closedBefore = min(previous.fetchedAt, fetchedAt)
+        let firstOpenDay = String(ISO8601DateFormatter().string(from: closedBefore).prefix(10))
+        let saved = previous.days.filter { $0.reportedCredits != nil && $0.date >= queryStart && $0.date <= queryEnd && $0.date < firstOpenDay }
+        guard !saved.isEmpty else { return }
+        var indexed = Dictionary(days.map { ($0.date, $0) }, uniquingKeysWith: { _, last in last })
+        for day in saved where indexed[day.date]?.reportedCredits == nil {
+            let current = indexed[day.date]
+            indexed[day.date] = AnalyticsDay(date: day.date, tokens: current?.tokens ?? day.tokens, models: current?.models ?? [], reportedCredits: day.reportedCredits)
+        }
+        days = indexed.values.sorted { $0.date < $1.date }
+    }
 }
 
 nonisolated struct UsageModelEstimate: Identifiable {
@@ -297,6 +313,49 @@ nonisolated struct UsageModelEstimate: Identifiable {
     var weight: Double
     var id: String {
         model + ":" + speed
+    }
+}
+
+nonisolated struct UsageCreditPart {
+    var credits = 0.0 ... 0.0
+    var tokens: AnalyticsTokens? = .zero
+    var modelTokens: [String: AnalyticsTokens] = [:]
+    var modelCredits: [String: ClosedRange<Double>] = [:]
+
+    mutating func record(_ amount: ClosedRange<Double>, tokens count: AnalyticsTokens, model: String) {
+        credits = (credits.lowerBound + amount.lowerBound) ... (credits.upperBound + amount.upperBound)
+        tokens = (tokens ?? .zero) + count
+        modelTokens[model, default: .zero] += count
+        addModelCredits(amount, for: model)
+    }
+
+    mutating func add(_ part: Self) {
+        credits = (credits.lowerBound + part.credits.lowerBound) ... (credits.upperBound + part.credits.upperBound)
+        if let count = part.tokens {
+            tokens = (tokens ?? .zero) + count
+        }
+        for (model, count) in part.modelTokens {
+            modelTokens[model, default: .zero] += count
+        }
+        for (model, amount) in part.modelCredits {
+            addModelCredits(amount, for: model)
+        }
+    }
+
+    mutating func addModelCredits(_ amount: ClosedRange<Double>, for model: String) {
+        let previous = modelCredits[model] ?? 0 ... 0
+        modelCredits[model] = (previous.lowerBound + amount.lowerBound) ... (previous.upperBound + amount.upperBound)
+    }
+}
+
+nonisolated struct UsageCreditEstimate {
+    let recorded: UsageCreditPart
+    let projected: ClosedRange<Double>?
+    let hasOfficial: Bool
+    let hasDevice: Bool
+
+    static func dollars(_ credits: ClosedRange<Double>) -> ClosedRange<Double> {
+        (credits.lowerBound / 25) ... (credits.upperBound / 25)
     }
 }
 
@@ -319,6 +378,7 @@ nonisolated struct UsageAnalyticsPeriod: Identifiable {
     let unknownModels: [String]
     let unreliable: Bool
     var deviceEstimate: UsageLogEstimate?
+    var creditEstimate: UsageCreditEstimate?
     var logEstimate: UsageLogEstimate? {
         deviceEstimate.flatMap { $0.replacesOfficial ? $0 : nil }
     }

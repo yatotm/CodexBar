@@ -105,14 +105,15 @@ final class UsageAnalyticsViewModel: ObservableObject {
                     periods = []
                 }
                 prices = try await client.prices()
-                if !force, let snapshot, Date().timeIntervalSince(snapshot.fetchedAt) < 900 {
+                if !force, let snapshot, snapshot.readCreditReports == true, Date().timeIntervalSince(snapshot.fetchedAt) < 900 {
                     recalculate()
                 } else {
                     var latest = try await client.fetch()
                     try Task.checkCancellation()
-                    if snapshot?.accountKey == latest.accountKey {
-                        latest.windows = UsageAnalyticsValuation.merge((snapshot?.windows ?? []) + latest.windows)
-                        latest.importedHistory = snapshot?.importedHistory ?? false
+                    if let snapshot, snapshot.accountKey == latest.accountKey {
+                        latest.windows = UsageAnalyticsValuation.merge(snapshot.windows + latest.windows)
+                        latest.importedHistory = snapshot.importedHistory
+                        latest.retainSettledCredits(from: snapshot)
                     }
                     snapshot = latest
                     try await client.save(latest)
@@ -124,14 +125,19 @@ final class UsageAnalyticsViewModel: ObservableObject {
             } catch {
                 if !Task.isCancelled {
                     let currentKey = try? await client.accountKey()
-                    if currentKey != snapshot?.accountKey {
+                    if currentKey == nil || currentKey != activeAccountKey {
+                        activeAccountKey = nil
                         snapshot = nil
+                        calculation?.cancel()
                         periods = []
+                        history.setAccount(nil, localEnabled: false)
+                    } else {
+                        recalculate()
                     }
                     self.error = (error as? UsageCenterError)?.message ?? "官方分析暂不可用或响应格式已变化, 保留上次有效数据"
                 }
             }
-            if !Task.isCancelled, snapshot?.accountKey == activeAccountKey {
+            if !Task.isCancelled, let activeAccountKey, history.accountKey == activeAccountKey {
                 history.refresh(force: force)
             }
         }
@@ -190,6 +196,12 @@ final class UsageAnalyticsViewModel: ObservableObject {
     func projection(for period: UsageAnalyticsPeriod) -> ClosedRange<Double>? {
         let plans = Set(planEntries(for: period).map(\.plan))
         guard plans.count <= 1 else { return nil }
+        if let credits = period.creditEstimate {
+            return credits.projected
+        }
+        if snapshot?.readCreditReports == true {
+            return nil
+        }
         if let estimate = period.logEstimate {
             return estimate.projected
         }
@@ -208,9 +220,23 @@ final class UsageAnalyticsViewModel: ObservableObject {
 
     private func recalculate() {
         calculation?.cancel()
-        guard let snapshot, let prices else { return }
-        let sourceWindows = history.accountKey == snapshot.accountKey ? history.windows : []
-        let tokenSources = history.accountKey == snapshot.accountKey ? history.tokenSources : []
+        guard let activeAccountKey, let prices else { return }
+        let sourceWindows = history.accountKey == activeAccountKey ? history.windows : []
+        let tokenSources = history.accountKey == activeAccountKey ? history.tokenSources : []
+        guard self.snapshot != nil || !sourceWindows.isEmpty else { return }
+        // 首次联网失败时只采用已选账号的设备窗口, 临时快照不写入官方缓存
+        let snapshot = snapshot ?? UsageAnalyticsSnapshot(
+            schema: 1,
+            accountKey: activeAccountKey,
+            emailKey: "",
+            fetchedAt: Date(),
+            queryStart: "",
+            queryEnd: "",
+            days: [],
+            windows: [],
+            importedHistory: false,
+            readCreditReports: true
+        )
         let expectedSources = history.selectedSourceCount
         let plans = planHistory.observations + (history.accountKey == snapshot.accountKey ? history.plans : [])
         calculation = Task { [weak self] in

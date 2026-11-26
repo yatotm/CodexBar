@@ -6,20 +6,23 @@ nonisolated enum UsageLogValuation {
         prices: UsagePriceBook, sources: [UsageTokenSource], expectedSources: Int, now: Date, plans: [UsagePlanObservation] = []
     ) -> UsageLogEstimate? {
         let available = sources.filter { $0.evidence.ready && $0.evidence.scannedAt > context.start }
-        guard let scannedAt = available.map(\.evidence.scannedAt).max() else { return nil }
-        let cutoff = min(context.end, now.timeIntervalSince1970, scannedAt)
+        guard let scannedAt = available.map(\.evidence.scannedAt).min() else { return nil }
+        let quotaCutoff = context.end > now.timeIntervalSince1970 ? context.window.lastAt : context.end
+        let cutoff = min(context.end, now.timeIntervalSince1970, scannedAt, quotaCutoff)
         var records: [String: UsageTokenRecord] = [:]
-        var conflict = false
+        var conflicts = Set<Int>()
         for source in available {
             for record in source.evidence.records where record.at >= context.start && record.at < context.end && record.at <= cutoff {
                 if let previous = records[record.id] {
                     // 复制日志只计一次, 相同请求的模型或计数冲突不能伪装成完整证据
                     if previous.model != record.model || previous.tokens != record.tokens {
-                        conflict = true
+                        conflicts.insert(Int(record.at / 86400))
+                        conflicts.insert(Int(previous.at / 86400))
                         continue
                     }
                     if let speed = previous.speed, let other = record.speed, speed != other {
-                        conflict = true
+                        conflicts.insert(Int(record.at / 86400))
+                        conflicts.insert(Int(previous.at / 86400))
                     }
                     var merged = previous.speed == nil && record.speed != nil ? record : previous
                     merged.requestInputTokens = previous.requestInputTokens ?? record.requestInputTokens
@@ -45,15 +48,15 @@ nonisolated enum UsageLogValuation {
             ? rows.reduce(0.0 ... 0.0) { sum($0, $1.apiDollars!) } : nil
         let credits = rows.allSatisfy { $0.credits != nil } ? rows.reduce(0.0 ... 0.0) { sum($0, $1.credits!) } : nil
         let used = UsageAnalyticsValuation.consumption(context, at: cutoff)
-        let projected = used > 0 && !context.window.decreased && !conflict
+        let projected = used > 0 && !context.window.decreased && conflicts.isEmpty
             ? dollars.lowerBound * 100 / used ... dollars.upperBound * 100 / used : nil
-        let incomplete = conflict || !aggregate.unknown.isEmpty || available.count < expectedSources || available.contains { source in
+        let incomplete = !conflicts.isEmpty || !aggregate.unknown.isEmpty || available.count < expectedSources || available.contains { source in
             let evidence = source.evidence
             let unattributed = evidence.unattributedDays?.contains { day, count in
                 let start = (Double(day) ?? 0) * 86400
                 return count > 0 && start < cutoff && start + 86400 > context.start
             } ?? (evidence.unattributedCount > 0)
-            return !evidence.complete || unattributed || cutoff - evidence.scannedAt > 900
+            return !evidence.complete || unattributed || min(context.end, now.timeIntervalSince1970) - evidence.scannedAt > 900
                 || (evidence.truncated && (evidence.records.map(\.at).min() ?? cutoff) > context.start)
         }
         return UsageLogEstimate(
@@ -61,42 +64,16 @@ nonisolated enum UsageLogValuation {
             tokens: rows.reduce(.zero) { $0 + $1.tokens }, dollars: dollars, credits: credits, projected: projected,
             models: rows, sources: available.map(\.name), incomplete: incomplete,
             unknownModels: aggregate.unknown, unknownSpeedCount: aggregate.unknownSpeedCount,
-            apiDollars: apiDollars, dayComparisons: aggregate.unknown.isEmpty
-                ? compareDays(daily, official: officialDays, amounts: aggregate.dailyDollars, interval: context.start ..< cutoff, prices: prices) : []
+            apiDollars: apiDollars, days: aggregate.dailyCredits, conflictingDays: conflicts.union(aggregate.unpricedDays)
         )
-    }
-
-    private static func compareDays(
-        _ daily: [Int: [UsageTokenRecord]],
-        official: [Int: AnalyticsDay],
-        amounts: [Int: ClosedRange<Double>],
-        interval: Range<Double>,
-        prices: UsagePriceBook
-    ) -> [UsageModelDayComparison] {
-        daily.compactMap { key, logs in
-            let start = Double(key) * 86400
-            guard start >= interval.lowerBound, start + 86400 <= interval.upperBound, let day = official[key],
-                  let tokens = day.tokens, let amount = amounts[key] else { return nil }
-            let logged = Set(Set(logs.map(\.model)).map { prices.rate(for: $0)?.model ?? $0 })
-            let reported = Set(day.models.filter { $0.weight > 0 }.map { prices.rate(for: $0.model)?.model ?? $0.model })
-            guard !logged.isSubset(of: reported), let rows = UsageModelAllocation.estimate(day: day, prices: prices) else { return nil }
-            return UsageModelDayComparison(
-                day: day.date,
-                deviceModels: logged.sorted(),
-                reportedModels: reported.sorted(),
-                deviceTokens: logs.reduce(0) { $0 + $1.tokens.total },
-                officialTokens: tokens.total,
-                deviceDollars: amount,
-                officialDollars: rows.reduce(0) { $0 + $1.dollars }
-            )
-        }.sorted { $0.day > $1.day }
     }
 
     private struct ModelTotals {
         let rows: [UsageLogModelEstimate]
         let unknown: [String]
         let unknownSpeedCount: Int
-        let dailyDollars: [Int: ClosedRange<Double>]
+        let dailyCredits: [Int: UsageCreditPart]
+        let unpricedDays: Set<Int>
     }
 
     private static func aggregate(
@@ -105,10 +82,13 @@ nonisolated enum UsageLogValuation {
         var models: [String: UsageLogModelEstimate] = [:]
         var unknown = Set<String>()
         var unknownSpeedCount = 0
-        var dailyDollars: [Int: ClosedRange<Double>] = [:]
+        var dailyCredits: [Int: UsageCreditPart] = [:]
+        var unpricedDays = Set<Int>()
         for record in records {
+            let day = Int(record.at / 86400)
             guard let rate = prices.rate(for: record.model) else {
                 unknown.insert(record.model)
+                unpricedDays.insert(day)
                 continue
             }
             let factors: ClosedRange<Double>
@@ -116,6 +96,7 @@ nonisolated enum UsageLogValuation {
             if let speed = record.speed {
                 guard let value = UsageModelAllocation.multiplier(model: .init(model: record.model, speed: speed, weight: 1), prices: prices) else {
                     unknown.insert(record.model + " · " + speed)
+                    unpricedDays.insert(day)
                     continue
                 }
                 factors = value ... value
@@ -126,14 +107,17 @@ nonisolated enum UsageLogValuation {
             let tokens = record.tokens
             let shortCost = rate.shortContext.dollars(for: tokens)
             let dollars = shortCost * factors.lowerBound ... shortCost * factors.upperBound
-            let day = Int(record.at / 86400)
-            dailyDollars[day] = sum(dailyDollars[day] ?? 0 ... 0, dollars)
             let credits: ClosedRange<Double>?
             if let input = rate.creditInput, let cached = rate.creditCachedInput, let output = rate.creditOutput {
                 let amount = (Double(tokens.input) * input + Double(tokens.cached) * cached + Double(tokens.output) * output) / 1000000
                 credits = amount * factors.lowerBound ... amount * factors.upperBound
             } else {
                 credits = nil
+            }
+            if let credits {
+                dailyCredits[day, default: UsageCreditPart()].record(credits, tokens: tokens, model: record.model)
+            } else {
+                unpricedDays.insert(day)
             }
             let key = record.model + ":" + (record.speed ?? "unknown")
             var row = models[key] ?? UsageLogModelEstimate(model: record.model, speed: record.speed, tokens: .zero, dollars: 0 ... 0, credits: credits == nil ? nil : 0 ... 0)
@@ -153,7 +137,7 @@ nonisolated enum UsageLogValuation {
             models[key] = row
         }
         let rows = models.values.sorted { $0.dollars.upperBound > $1.dollars.upperBound }
-        return ModelTotals(rows: rows, unknown: unknown.sorted(), unknownSpeedCount: unknownSpeedCount, dailyDollars: dailyDollars)
+        return ModelTotals(rows: rows, unknown: unknown.sorted(), unknownSpeedCount: unknownSpeedCount, dailyCredits: dailyCredits, unpricedDays: unpricedDays)
     }
 
     private static func sum(_ lhs: ClosedRange<Double>, _ rhs: ClosedRange<Double>) -> ClosedRange<Double> {

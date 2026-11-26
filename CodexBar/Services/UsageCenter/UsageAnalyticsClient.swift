@@ -50,6 +50,9 @@ actor UsageAnalyticsClient {
             let windows = UsageAnalyticsValuation.merge(old.windows + snapshot.windows)
             if old.fetchedAt > snapshot.fetchedAt {
                 snapshot = old
+                snapshot.retainSettledCredits(from: supplied)
+            } else {
+                snapshot.retainSettledCredits(from: old)
             }
             snapshot.windows = windows
             snapshot.importedHistory = snapshot.importedHistory || old.importedHistory
@@ -80,8 +83,8 @@ actor UsageAnalyticsClient {
             URLQueryItem(name: "timezone_offset_min", value: "0")
         ]
         async let usage = get("/backend-api/wham/usage", query: [], auth: auth)
-        async let weights = get("/backend-api/wham/usage/daily-token-usage-breakdown", query: query, auth: auth)
-        async let totals = get(
+        async let weights = try? get("/backend-api/wham/usage/daily-token-usage-breakdown", query: query, auth: auth)
+        async let totals = try? get(
             "/backend-api/wham/analytics/daily-workspace-usage-counts",
             query: query + [URLQueryItem(name: "workspace_user", value: "true")],
             auth: auth
