@@ -72,6 +72,50 @@ class TokenHistoryTests(unittest.TestCase):
             self.receipt()
         self.assertEqual(self.records(), [])
 
+    def test_thread_model_change_does_not_reprice_an_active_or_delayed_turn(self):
+        def response(identity, turn, seconds):
+            row = self.usage(identity, seconds)
+            row["payload"]["turn_id"] = turn
+            self.ledger.observe(row, self.state)
+
+        old, new = "gpt-6-astra", "gpt-6.2-astra"
+        self.feed("turn_context", {"turn_id": "a", "model": old, "auth_mode": "chatgpt"})
+        response("first", "a", 1)
+        self.feed("event_msg", {"type": "thread_settings_applied",
+                                "thread_settings": {"model": new, "service_tier": "priority"}}, 2)
+        response("inflight", "a", 3)
+        self.feed("turn_context", {"turn_id": "b", "model": new}, 4)
+        response("late", "a", 5)
+        response("next", "b", 6)
+        response("untagged", None, 7)
+        ordered = sorted(self.records(), key=lambda r: r["at"])
+        self.assertEqual([r["model"] for r in ordered], [old, old, old, new, new])
+        self.assertEqual(ordered[1]["speed"], "fast")
+
+    def test_turn_replay_repairs_only_the_old_default_with_matching_request_counts(self):
+        old, new = "gpt-6-astra", "gpt-6.2-astra"
+        usage = [self.usage(label, index + 3) for index, label in enumerate(["repaired", "conflicting", "unrelated"])]
+        for row in usage:
+            row["payload"]["turn_id"] = "t"
+        rows = [self.row("session_meta", {"id": "s", "model_provider": "openai", "auth_mode": "chatgpt"}),
+                self.row("turn_context", {"turn_id": "t", "model": old}, 1),
+                self.row("event_msg", {"type": "thread_settings_applied", "thread_settings": {"model": new}}, 2), *usage]
+        path = self.home / "sessions/reprice.jsonl"
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        db = self.ledger.connection
+        old_cursor = lambda p: collector.digest("token-value-request-input", str(p))
+        with mock.patch.object(collector.TokenValueHistory, "file_key", staticmethod(old_cursor)):
+            self.ledger.scan()
+        db.execute("UPDATE usage SET model=?", (new,))
+        db.execute("UPDATE usage SET input=0 WHERE id=?", (collector.digest("codex-value-response", "conflicting"),))
+        db.execute("UPDATE usage SET model='other-model' WHERE id=?", (collector.digest("codex-value-response", "unrelated"),))
+        db.commit()
+        for _ in range(2):
+            self.ledger.scan()
+            found = sorted(self.records(), key=lambda r: r["at"])
+            self.assertEqual([(r["model"], r["tokens"]["input"]) for r in found], [(old, 20), (new, 0), ("other-model", 20)])
+        self.assertIsNotNone(db.execute("SELECT offset FROM files WHERE path=?", (old_cursor(path),)).fetchone())
+
     def test_provider_switch_clears_old_oauth_and_pending_receipt(self):
         self.feed("turn_context", {"auth_mode": "chatgpt"})
         self.feed("event_msg", {"type": "thread_settings_applied", "thread_settings": {

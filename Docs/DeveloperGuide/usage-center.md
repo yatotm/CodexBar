@@ -95,7 +95,7 @@ Mac 后台任务单轮分页和回填有上限，取消与超时会终止本轮�
 
 `token-history` 使用独立的 `token-value-v1.sqlite`，保留最近 70 天的逐请求计价证据。Mac 经既有本机或 SSH 通道每十五分钟按需增量扫描，不新增常驻进程。缓存位于 `UsageTokenHistory`，账号和来源配置参与隔离；取消、睡眠和来源停用沿用历史采集控制器。
 
-逐请求记录优先使用 `token_usage_record`，旧格式按累计量求差，缓存输入从输入总数中扣出。估值库用独立文件游标回读原日志，在附表 `request_inputs` 保存已验证的单次输入长度。导出中的 `requestInputTokens` 为可选字段，缺失时只影响 API 价格范围。旧采集器仍可读写原用量表。`thread_settings_applied.thread_settings.service_tier` 记录速度切换，`priority` 对应 Fast，`default` 和明确的空值对应标准模式，缺失值保持未知。API 模式和提供商切换清除旧身份；无显式登录模式的请求需要对应订阅额度回执，账号不符的记录不导出。只传输哈希请求标识、时间、模型、速度和 Token 数，不传输鉴权或会话内容。
+逐请求记录优先使用 `token_usage_record`，旧格式按累计量求差，缓存输入从输入总数中扣出。请求带有 `turn_id` 时，优先采用同一会话、同一轮次在请求前记录的 `turn_context.model`。仅修改线程默认模型不会改写进行中的轮次。回放时只有请求标识、三类 Token 和被替换的默认模型均匹配，才纠正已知模型。估值库用独立文件游标回读原日志，在附表 `request_inputs` 保存已验证的单次输入长度。导出中的 `requestInputTokens` 为可选字段，缺失时只影响 API 价格范围。旧采集器仍可读写原用量表。`thread_settings_applied.thread_settings.service_tier` 记录速度切换，`priority` 对应 Fast，`default` 和明确的空值对应标准模式，缺失值保持未知。API 模式和提供商切换清除旧身份；无显式登录模式的请求需要对应订阅额度回执，账号不符的记录不导出。只传输哈希请求标识、时间、模型、速度和 Token 数，不传输鉴权或会话内容。
 
 `UsageLogValuation` 对同周期请求去重，按 UTC 日保留设备估算，供缺报和重置边界使用。活动周期取设备共同扫描时间与最近额度观察时间中的较早值；冲突或无法计价的日子不用于设备补算。单台设备最多导出最近 20,000 条。官方日报和设备记录不会重复计入同一段。
 

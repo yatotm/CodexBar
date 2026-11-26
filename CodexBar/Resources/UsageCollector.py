@@ -1267,7 +1267,7 @@ class TokenValueHistory(ValuationLedger):
     @staticmethod
     def file_key(path):
         # 旧采集器也可能续写账本, 独立游标从原始请求补证且不会覆盖旧游标
-        return digest("token-value-request-input", str(path))
+        return digest("token-value-turn-model", str(path))
 
     def scan_file(self, path):
         try:
@@ -1294,11 +1294,16 @@ class TokenValueHistory(ValuationLedger):
         at = date.timestamp()
         if typ == "session_meta":
             state["session"] = digest("codex-session", payload.get("id", payload.get("session_id", state["session"])))
-        if typ == "turn_context" and payload.get("turn_id"):
+        if typ == "turn_context" and isinstance(payload.get("turn_id"), str) and payload["turn_id"]:
             turn = digest("codex-value-turn", payload["turn_id"])
             if state.get("turn") != turn:
                 state.pop("pending", None)
             state["turn"] = turn
+            model = text(payload.get("model"), 120)
+            if model and model not in ("unknown", "未知"):
+                # 回执可能在下一轮开始后才落盘, 保留同一会话近期已生效的轮次模型
+                evidence = [state["session"], turn, at, model]
+                state["turnModels"] = (state.get("turnModels", []) + [evidence])[-128:]
         settings = payload.get("thread_settings", {}) if typ == "event_msg" and sub == "thread_settings_applied" else payload
         if isinstance(settings, dict) and (typ in ("session_meta", "turn_context") or sub == "thread_settings_applied"):
             provider = settings.get("model_provider_id", settings.get("model_provider"))
@@ -1322,7 +1327,13 @@ class TokenValueHistory(ValuationLedger):
         if typ == "token_usage_record" and isinstance(payload.get("usage"), dict) and payload.get("response_id"):
             state["exactUsage"] = True
             identity = digest("codex-value-response", payload["response_id"])
-            if self.record_usage(identity, payload["usage"], state, at):
+            turn_id = payload.get("turn_id")
+            turn_model = None
+            if isinstance(turn_id, str) and turn_id:
+                turn = digest("codex-value-turn", turn_id)
+                turn_model = next((model for session, key, observed, model in reversed(state.get("turnModels", []))
+                                   if key == turn and session == state["session"] and observed <= at), None)
+            if self.record_usage(identity, payload["usage"], state, at, turn_model):
                 supplied = payload["usage"].get("input_tokens")
                 if type(supplied) is int:
                     self.connection.execute("INSERT OR IGNORE INTO request_inputs VALUES(?,?)", (identity, supplied))
@@ -1350,7 +1361,7 @@ class TokenValueHistory(ValuationLedger):
                     self.record_usage(digest("codex-value-cumulative", state["session"], total), delta, context, at)
                 state["total"] = {key: max(number(value), previous.get(key, 0)) for key, value in total.items()}
 
-    def record_usage(self, identity, usage, state, at):
+    def record_usage(self, identity, usage, state, at, turn_model=None):
         values = [usage.get(key, 0) for key in ("input_tokens", "cached_input_tokens", "output_tokens")]
         if at < self.cutoff or not all(type(value) is int and 0 <= value <= 10**15 for value in values):
             return False
@@ -1358,12 +1369,13 @@ class TokenValueHistory(ValuationLedger):
         if cached > supplied or supplied + output == 0:
             return False
         self.connection.execute("""INSERT INTO usage VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
-            model=CASE WHEN usage.model='unknown' THEN excluded.model ELSE usage.model END,
+            model=CASE WHEN usage.model='unknown' OR (usage.model=? AND usage.input=excluded.input
+                       AND usage.cached=excluded.cached AND usage.output=excluded.output) THEN excluded.model ELSE usage.model END,
             speed=COALESCE(usage.speed,excluded.speed),
             auth=CASE WHEN excluded.auth!='unknown' THEN excluded.auth ELSE usage.auth END,
             account=COALESCE(excluded.account,usage.account)
-            """, (identity, at, state.get("model", "unknown"), state.get("speed"), supplied - cached, cached, output,
-                  self.authentication(state), state.get("account")))
+            """, (identity, at, turn_model or state.get("model", "unknown"), state.get("speed"), supplied - cached, cached, output,
+                  self.authentication(state), state.get("account"), state.get("model") if turn_model else None))
         return True
 
     def scan(self):
